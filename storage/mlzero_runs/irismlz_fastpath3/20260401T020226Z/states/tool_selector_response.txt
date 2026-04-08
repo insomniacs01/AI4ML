@@ -1,0 +1,6 @@
+EXPLANATION: Local heuristic selected tools based on task description and data type.
+
+RANKED_LIBRARIES:
+1. autogluon.tabular
+2. machine learning
+3. autogluon.multimodal

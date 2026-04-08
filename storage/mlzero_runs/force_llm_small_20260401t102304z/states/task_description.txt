@@ -1,0 +1,37 @@
+### Problem Type
+Audio classification/image regression/seq-to-seq generation
+
+### Input Format
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/force_llm_small_input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt
+Content:
+
+Decompressed Content:
+Binary classification task.
+Use tiny.csv to predict the label column from the numeric feature columns.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+Content:
+Unsupported file type.
+
+----------
+
+
+### Prediction Output Format
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_output/predictions.txt
+Content:
+
+Predicted labels for each input audio file.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_output/validation_score.txt
+Content:
+Validation score for the predictions.

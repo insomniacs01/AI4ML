@@ -1,0 +1,60 @@
+```python
+import os
+
+def read_and_analyze_file(file_path):
+    try:
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            print("File does not exist.")
+            return
+        
+        # Open the file in binary mode
+        with open(file_path, 'rb') as file:
+            # Read the entire content of the file
+            content = file.read()
+            
+            # Check if the content is a CSV or text file
+            if content.startswith(b'[') and content.endswith(b']'):
+                # Convert to CSV format
+                import pandas as pd
+                df = pd.read_csv(content)
+                
+                # Display column names
+                print("Column Names:")
+                for col in df.columns:
+                    print(col)
+                    
+                # Show first 2-3 rows with truncated cell content
+                print("\nFirst 2-3 Rows:")
+                print(df.head(2))
+                
+                # Do not show additional index column if it's not in the original table
+                print("\nIndex Column (if present):")
+                if 'index' in df.columns:
+                    print(df['index'].head())
+                    
+            elif content.startswith(b'text'):
+                # Display first few lines (up to 160 characters)
+                print("First Few Lines:")
+                print(content[:160])
+                
+            else:
+                # Print the decompressed content
+                print("Decompressed Content:")
+                print(content.decode('utf-8'))
+        
+        return True
+    
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return False
+
+# Example usage
+file_path = "/Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv"
+if read_and_analyze_file(file_path):
+    print("File analysis completed successfully.")
+else:
+    print("Failed to analyze file.")
+```
+
+This code reads a CSV or text file and performs the specified operations. It handles binary files by decoding them, providing basic information about the file's content.

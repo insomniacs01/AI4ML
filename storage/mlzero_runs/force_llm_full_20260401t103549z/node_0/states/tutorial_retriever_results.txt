@@ -1,0 +1,11 @@
+Search Query: ```sql
+==================================================
+Retrieved 1 Tutorial Results:
+
+1. File: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/tabular-quick-start.md
+   Score: 0.5657
+   Title: Condensed: ```python
+   Content Preview: # Condensed: ```python
+
+Summary: "Summary: "Tabular: "Tabular: "Tabular Hypersc 'Hypersc 'Hypertuning 1.Hat 'Hypertuning 'Hypertuning 'Hyperturf: "Hypertuning 'Hyperparred 'Hyperparcel: "Hypertuner: "...
+------------------------------

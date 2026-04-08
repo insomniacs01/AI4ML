@@ -1,0 +1,90 @@
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /cli/app.py:123 in main                                                      │
+│                                                                              │
+│   120 │   │   if not provider_config_path.exists():                          │
+│   121 │   │   │   provider_config_path = DEFAULT_CONFIG_PATH                 │
+│   122 │                                                                      │
+│ ❱ 123 │   run_agent(                                                         │
+│   124 │   │   input_data_folder=input_data_folder,                           │
+│   125 │   │   output_folder=output_dir,                                      │
+│   126 │   │   config_path=str(provider_config_path),                         │
+│                                                                              │
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /coding_agent.py:151 in run_agent                                            │
+│                                                                              │
+│   148 │   │   logger.brief(f"Starting MCTS iteration {iteration + 1}/{max_it │
+│   149 │   │                                                                  │
+│   150 │   │   # Perform one step of the Monte Carlo Tree Search              │
+│ ❱ 151 │   │   success = manager.step()                                       │
+│   152 │   │                                                                  │
+│   153 │   │   if success:                                                    │
+│   154 │   │   │   # Create a best run copy when we find a successful solutio │
+│                                                                              │
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /managers/node_manager.py:923 in step                                        │
+│                                                                              │
+│    920 │   │                                                                 │
+│    921 │   │   # Expansion: create a new child node                          │
+│    922 │   │   # Note: time_step is now incremented in the creation methods  │
+│ ❱  923 │   │   self.expand()                                                 │
+│    924 │   │                                                                 │
+│    925 │   │   # Simulation: execute the code and get results                │
+│    926 │   │   simulation_result = self.simulate()                           │
+│                                                                              │
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /managers/node_manager.py:604 in expand                                      │
+│                                                                              │
+│    601 │   │   │   The newly created child node                              │
+│    602 │   │   """                                                           │
+│    603 │   │   if self.current_node.stage == "root":                         │
+│ ❱  604 │   │   │   return self._create_evolve_node()                         │
+│    605 │   │   elif self.current_node.is_successful:                         │
+│    606 │   │   │   return self._create_evolve_node()                         │
+│    607 │   │   else:                                                         │
+│                                                                              │
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /managers/node_manager.py:690 in _create_evolve_node                         │
+│                                                                              │
+│    687 │   │   )                                                             │
+│    688 │   │                                                                 │
+│    689 │   │   # Generate code for the node                                  │
+│ ❱  690 │   │   self._generate_code()                                         │
+│    691 │                                                                     │
+│    692 │   def _update_tutorials(self=None):                                 │
+│    693 │   │   """                                                           │
+│                                                                              │
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /managers/node_manager.py:749 in _generate_code                              │
+│                                                                              │
+│    746 │   │                                                                 │
+│    747 │   │   # Get tutorials specific to this node                         │
+│    748 │   │   logger.debug("  Starting tutorial retrieval and reranking (th │
+│ ❱  749 │   │   self._update_tutorials()                                      │
+│    750 │   │   logger.debug("  Finished tutorial retrieval and reranking")   │
+│    751 │   │                                                                 │
+│    752 │   │   # Generate Python code                                        │
+│                                                                              │
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /managers/node_manager.py:703 in _update_tutorials                           │
+│                                                                              │
+│    700 │   │   self.current_node.tutorial_retrieval = self.retriever()       │
+│    701 │   │                                                                 │
+│    702 │   │   # Rerank the retrieved tutorials                              │
+│ ❱  703 │   │   self.current_node.tutorial_prompt = self.reranker()           │
+│    704 │   │                                                                 │
+│    705 │   │   # Save to node's folder                                       │
+│    706 │   │   self.save_and_log_states(                                     │
+│                                                                              │
+│ /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant │
+│ /agents/reranker_agent.py:39 in __call__                                     │
+│                                                                              │
+│    36 │   def __call__(self):                                                │
+│    37 │   │   """Select and rerank relevant tutorials from retrieved candida │
+│    38 │   │   self.manager.log_agent_start("RerankerAgent: reranking and sel │
+│ ❱  39 │   │   selected_tutorials = self._select_top_by_score(self.reranker_p │
+│    40 │   │   logger.info("Using retrieval scores directly for tutorial rera │
+│    41 │   │                                                                  │
+│    42 │   │   # Generate tutorial prompt using selected tutorials            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+AttributeError: 'RerankerPrompt' object has no attribute 'tutorials'

@@ -1,0 +1,60 @@
+import os
+
+# Function to read and analyze the file
+def analyze_file(file_path):
+    try:
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            print("File does not exist.")
+            return
+        
+        # Open the file in binary mode
+        with open(file_path, 'rb') as file:
+            # Read the entire content of the file
+            content = file.read()
+            
+            # Check if the content is a tabular file (CSV, Excel, Parquet)
+            if content.startswith(b'\xef\xbb\xbf'):
+                # Display column names
+                columns = content.split(b'\t')[1:]
+                print("Column Names:")
+                for col in columns:
+                    print(col.decode('utf-8'))
+                
+                # Show first 2-3 rows with truncated cell content (50 chars)
+                start_index = min(0, len(content) - 50)
+                end_index = min(start_index + 10, len(content))
+                print("\nFirst 2-3 Rows:")
+                for row in range(start_index, end_index):
+                    print(row.decode('utf-8', errors='ignore'))
+                
+                # Show index column if it's not in the original table
+                if 'Index' in columns:
+                    print("\nIndex Column:")
+                    print(columns[columns.index('Index')])
+                    
+            elif content.startswith(b'\x1a\x02'):
+                # Display first few lines (up to 160 characters)
+                start_index = min(0, len(content) - 160)
+                end_index = min(start_index + 160, len(content))
+                print("\nFirst Few Lines:")
+                for line in range(start_index, end_index):
+                    print(line.decode('utf-8', errors='ignore'))
+                
+            else:
+                # Display the decompressed content
+                print("Decompressed Content:")
+                print(content.decode('utf-8'))
+        
+        return True
+    
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return False
+
+# Example usage
+file_path = "/Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt"
+if analyze_file(file_path):
+    print("File analysis completed successfully.")
+else:
+    print("Failed to analyze the file.")

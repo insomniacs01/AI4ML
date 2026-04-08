@@ -1,0 +1,107 @@
+### Condensed: ```python
+# Condensed: ```python
+
+Summary: This tutorial demonstrates AutoGluon's MultilabelPredictor implementation for predicting multiple target columns simultaneously. It covers creating a custom class that manages multiple TabularPredictors, with methods for training, prediction, evaluation, and model persistence. Key features include handling different problem types (regression, classification) for each target, optional correlation consideration between labels during prediction, and customizable evaluation metrics. The code helps with multi-target machine learning tasks, offering flexibility in how predictions are generated and evaluated. The implementation provides a clean API for training multiple models with a single interface while maintaining individual model access.
+
+*This is a condensed version that preserves essential implementation details and context.*
+
+# MultilabelPredictor for AutoGluon
+
+## Installation
+```python
+!pip install autogluon.tabular[all]
+```
+
+## Implementation
+
+```python
+from autogluon.tabular import TabularDataset, TabularPredictor
+from autogluon.common.utils.utils import setup_outputdir
+from autogluon.core.utils.loaders import load_pkl
+from autogluon.core.utils.savers import save_pkl
+import os.path
+
+class MultilabelPredictor:
+    """Tabular Predictor for predicting multiple columns in table."""
+    
+    multi_predictor_file = 'multilabel_predictor.pkl'
+    
+    def __init__(self, labels, path=None, problem_types=None, eval_metrics=None, consider_labels_correlation=True, **kwargs):
+        if len(labels) < 2:
+            raise ValueError("MultilabelPredictor is only intended for predicting MULTIPLE labels")
+        if (problem_types is not None) and (len(problem_types) != len(labels)):
+            raise ValueError("If provided, `problem_types` must have same length as `labels`")
+        if (eval_metrics is not None) and (len(eval_metrics) != len(labels)):
+            raise ValueError("If provided, `eval_metrics` must have same length as `labels`")
+            
+        self.path = setup_outputd
+...(truncated)
+
+
+### Condensed: ```python
+# Condensed: ```python
+
+Summary: This tutorial demonstrates how to create and use custom evaluation metrics in AutoGluon, focusing on what makes them better for model optimization. It covers the implementation of custom metrics for classification, regression, and probability-based tasks, with examples of accuracy, ROC AUC, and MSE. The metrics are defined using make_scorer and can be used for model evaluation and comparison.
+
+*This is a condensed version that preserves essential implementation details and context.*
+
+# Custom Metrics in AutoGluon
+
+## Setup
+```python
+!pip install autogluon.tabular[all]
+import numpy as np
+from autogluon.core.metrics import make_scorer
+import sklearn.metrics
+```
+
+## Important: Ensuring Metric is Serializable
+Custom metrics must be defined in a separate Python file and imported to be pickled properly. If not serializable, you'll get `_pickle.PicklingError: Can't pickle` errors when using parallel training.
+
+**Best Practice:** Create a file like `my_metrics.py` with your metric definitions, then import with `from my_metrics import ag_accuracy_scorer`.
+
+## Creating Custom Metrics
+
+### Custom Accuracy Metric
+```python
+ag_accuracy_scorer = make_scorer(
+    name='accuracy',
+    score_func=sklearn.metrics.accuracy_score,
+    optimum=1,
+    greater_is_better=True,
+    needs_class=True
+)
+```
+
+### Custom Mean Squared Error Metric
+```python
+ag_mean_squared_error_scorer = make_scorer(
+    name='mean_squared_error',
+    score_func=sklearn.metrics.mean_squared_error,
+    optimum=0,
+    greater_is_better=False
+)
+```
+
+### Custom Function Example
+```python
+def mse_func(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    return ((y_true - y_pred) ** 2).mean()
+
+ag_mean_squared_error_custom_scorer = make_scorer(
+    name='mean_squared_error',
+    score_func=mse_func,
+    optimum=0,
+    greater_is_better=False
+)
+```
+
+### Custom ROC AUC Metric
+```python
+ag_roc_auc_scorer = make_scorer(
+    name='roc_auc',
+    score_func=sklearn.metrics.roc_auc_score,
+    optimum=1,
+    greater_is_better=True,
+    needs_
+...(truncated)

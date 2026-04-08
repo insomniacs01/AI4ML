@@ -1,0 +1,81 @@
+
+You are an expert at generating search queries to find relevant machine learning tutorials. Given the context below, generate a concise and effective search query that will help find the most relevant tutorials for this task.
+
+### Task Description
+### Problem Type
+Audio classification/image regression/seq-to-seq generation
+
+### Input Format
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/force_llm_small_input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt
+Content:
+
+Decompressed Content:
+Binary classification task.
+Use tiny.csv to predict the label column from the numeric feature columns.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+Content:
+Unsupported file type.
+
+----------
+
+
+### Prediction Output Format
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_output/predictions.txt
+Content:
+
+Predicted labels for each input audio file.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_output/validation_score.txt
+Content:
+Validation score for the predictions.
+
+### Data Structures
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/force_llm_small_input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt
+Content:
+
+Decompressed Content:
+Binary classification task.
+Use tiny.csv to predict the label column from the numeric feature columns.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+Content:
+Unsupported file type.
+
+----------
+
+
+### User Instruction
+Use tiny.csv to do binary classification and report validation score.
+
+### Previous Error Analysis
+
+
+### Selected Tool/Library
+autogluon.timeseries
+
+
+Based on the above context, generate a search query that will help find tutorials most relevant to this task. The query should:
+1. Include key technical terms and concepts
+2. Focus on the main task/problem to solve
+3. Be concise but specific
+
+IMPORTANT: Respond ONLY with the search query text. Do not include explanations, quotes, or any other formatting.

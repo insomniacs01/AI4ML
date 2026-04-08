@@ -1,0 +1,51 @@
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loading indices from disk
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded machine learning tutorials index with 1 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded machine learning condensed_tutorials index with 1 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.tabular tutorials index with 13 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.tabular condensed_tutorials index with 13 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.timeseries tutorials index with 4 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.timeseries condensed_tutorials index with 4 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded qwen3 tutorials index with 1 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded qwen3 condensed_tutorials index with 1 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded wav2vec2 tutorials index with 1 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded wav2vec2 condensed_tutorials index with 1 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded FlagEmbedding tutorials index with 31 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded FlagEmbedding condensed_tutorials index with 31 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.multimodal tutorials index with 38 vectors
+2026-04-01 18:18:16 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.multimodal condensed_tutorials index with 38 vectors
+2026-04-01 18:18:17 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-04-01 18:18:17 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: multi_turn_python_coder_20260401181816
+2026-04-01 18:18:18 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-04-01 18:18:18 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: multi_turn_bash_coder_20260401181818
+2026-04-01 18:18:18 INFO     [autogluon.assistant.managers.node_manager] DataPerceptionAgent: beginning to scan data folder and group similar files.
+2026-04-01 18:18:18 BRIEF    [autogluon.assistant.agents.data_perception_agent] Analyzing folder: /Users/macbookpro/AI4ML/data/samples
+2026-04-01 18:18:18 BRIEF    [autogluon.assistant.agents.data_perception_agent] Found 1 files
+2026-04-01 18:18:18 BRIEF    [autogluon.assistant.agents.data_perception_agent] Grouped into 1 patterns
+2026-04-01 18:18:18 INFO     [autogluon.assistant.agents.data_perception_agent] Processing pattern: /Users/macbookpro/AI4ML/data/samples/*.csv (1 files)
+2026-04-01 18:18:18 BRIEF    [autogluon.assistant.agents.data_perception_agent] Reading file: /Users/macbookpro/AI4ML/data/samples/iris.csv
+2026-04-01 18:18:18 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-04-01 18:18:18 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: single_turn_python_reader_20260401181818
+2026-04-01 18:18:18 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/python_reader_prompt_50ca.txt...
+2026-04-01 18:19:40 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-01 18:19:40 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/python_reader_response_dc3b.txt...
+2026-04-01 18:19:40 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/python_reader_code_ed15.py...
+2026-04-01 18:19:40 INFO     [autogluon.assistant.managers.node_manager] ExecuterAgent: forcing LLM evaluation of execution output.
+2026-04-01 18:19:41 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-04-01 18:19:41 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: single_turn_python_executer_20260401181941
+2026-04-01 18:19:41 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/stdout_4037.txt...
+2026-04-01 18:19:41 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/stderr_76f5.txt...
+2026-04-01 18:19:41 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/stdout.orig_07fb.txt...
+2026-04-01 18:19:41 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/stderr.orig_0890.txt...
+2026-04-01 18:19:41 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_20260401t101816z/node_init/states/executer_prompt_11de.txt...
+2026-04-01 18:19:41 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 18:19:41 ERROR    [autogluon.assistant.llm.base_chat] Attempt 1 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 6612 tokens (6612 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 18:20:14 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 18:20:14 ERROR    [autogluon.assistant.llm.base_chat] Attempt 2 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 13216 tokens (13216 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 18:21:18 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 18:21:18 ERROR    [autogluon.assistant.llm.base_chat] Attempt 3 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 19820 tokens (19820 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 18:23:41 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 18:23:41 ERROR    [autogluon.assistant.llm.base_chat] Attempt 4 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 26424 tokens (26424 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 18:26:36 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 18:26:36 ERROR    [autogluon.assistant.llm.base_chat] Attempt 5 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 33028 tokens (33028 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 18:29:20 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 18:29:20 ERROR    [autogluon.assistant.llm.base_chat] Attempt 6 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 39632 tokens (39632 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}

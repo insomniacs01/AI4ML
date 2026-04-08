@@ -1,0 +1,11 @@
+Search Query: SELECT "model_name", "task_type", "dataset_size", "features_count", "label_column
+==================================================
+Retrieved 1 Tutorial Results:
+
+1. File: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/tabular-feature-engineering.md
+   Score: 0.6703
+   Title: Condensed: ```
+   Content Preview: # Condensed: ```
+
+Summary: This tutorial explains AutoGluon's automatic feature engineering capabilities for tabular data. It covers type-specific processing: numerical columns remain unchanged, categ...
+------------------------------

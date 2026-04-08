@@ -1,0 +1,16 @@
+2026-03-31 22:09:25 WARNING  [autogluon.assistant.tools_registry.indexing] No index exists at /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/indices/BAAI_bge-base-en-v1.5
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] AutoGluon Assistant - Chat Mode
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] Input data: /Users/macbookpro/AI4ML/data/samples
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] Loaded 1 file(s):
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent]   - iris.csv
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] Session ID: chat_20260331_220916
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] Output folder: /Users/macbookpro/AI4ML/storage/mlzero_chat_smoketest_offline
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] 
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] Type your questions below. Type 'exit', 'quit', or 'bye' to end the session.
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:13:04 BRIEF    [autogluon.assistant.chatting_agent] 
+2026-03-31 22:14:49 WARNING  [autogluon.assistant.managers.chatting_manager] Failed to identify tool: Missing key initial_root_children
+    full_key: initial_root_children
+    object_type=dict

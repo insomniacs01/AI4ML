@@ -1,0 +1,185 @@
+2026-04-01 10:16:47 DEBUG    [faiss.loader] Environment variable FAISS_OPT_LEVEL is not set, so let's pick the instruction set according to the current CPU
+2026-04-01 10:16:47 INFO     [faiss.loader] Loading faiss.
+2026-04-01 10:16:47 INFO     [faiss.loader] Successfully loaded faiss.
+2026-04-01 10:16:51 DEBUG    [datasets] PyTorch version 2.2.2 available.
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loading indices from disk
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded machine learning tutorials index with 1 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded machine learning condensed_tutorials index with 1 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.tabular tutorials index with 13 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.tabular condensed_tutorials index with 13 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.timeseries tutorials index with 4 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.timeseries condensed_tutorials index with 4 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded qwen3 tutorials index with 1 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded qwen3 condensed_tutorials index with 1 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded wav2vec2 tutorials index with 1 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded wav2vec2 condensed_tutorials index with 1 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded FlagEmbedding tutorials index with 31 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded FlagEmbedding condensed_tutorials index with 31 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.multimodal tutorials index with 38 vectors
+2026-04-01 10:16:52 INFO     [autogluon.assistant.tools_registry.indexing] Loaded autogluon.multimodal condensed_tutorials index with 38 vectors
+2026-04-01 10:16:53 DEBUG    [openai._base_client] Request options: {'method': 'get', 'url': '/models', 'post_parser': <function SyncAPIClient._request_api_list.<locals>._parser at 0x1114f11c0>, 'json_data': None}
+2026-04-01 10:16:53 DEBUG    [openai._base_client] Sending HTTP Request: GET http://127.0.0.1:8001/v1/models
+2026-04-01 10:16:53 DEBUG    [httpcore.connection] connect_tcp.started host='127.0.0.1' port=8001 local_address=None timeout=5.0 socket_options=None
+2026-04-01 10:16:53 DEBUG    [httpcore.connection] connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x1ae0b4550>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_headers.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_headers.complete
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_body.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_body.complete
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_headers.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 01 Apr 2026 02:16:53 GMT'), (b'server', b'uvicorn'), (b'content-length', b'97'), (b'content-type', b'application/json'), (b'openai-processing-ms', b'1'), (b'x-request-id', b'883db8693ecb47fd946c8d0f8cf64181')])
+2026-04-01 10:16:53 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_body.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_body.complete
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] response_closed.started
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] response_closed.complete
+2026-04-01 10:16:53 DEBUG    [openai._base_client] HTTP Response: GET http://127.0.0.1:8001/v1/models "200 OK" Headers({'date': 'Wed, 01 Apr 2026 02:16:53 GMT', 'server': 'uvicorn', 'content-length': '97', 'content-type': 'application/json', 'openai-processing-ms': '1', 'x-request-id': '883db8693ecb47fd946c8d0f8cf64181'})
+2026-04-01 10:16:53 DEBUG    [openai._base_client] request_id: 883db8693ecb47fd946c8d0f8cf64181
+2026-04-01 10:16:53 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: multi_turn_python_coder_20260401101652
+2026-04-01 10:16:53 DEBUG    [openai._base_client] Request options: {'method': 'get', 'url': '/models', 'post_parser': <function SyncAPIClient._request_api_list.<locals>._parser at 0x1ae0b14e0>, 'json_data': None}
+2026-04-01 10:16:53 DEBUG    [openai._base_client] Sending HTTP Request: GET http://127.0.0.1:8001/v1/models
+2026-04-01 10:16:53 DEBUG    [httpcore.connection] connect_tcp.started host='127.0.0.1' port=8001 local_address=None timeout=5.0 socket_options=None
+2026-04-01 10:16:53 DEBUG    [httpcore.connection] connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x1ae0c2cd0>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_headers.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_headers.complete
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_body.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] send_request_body.complete
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_headers.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 01 Apr 2026 02:16:53 GMT'), (b'server', b'uvicorn'), (b'content-length', b'97'), (b'content-type', b'application/json'), (b'openai-processing-ms', b'0'), (b'x-request-id', b'e67e55f3c377413d8073eb2ec79179e4')])
+2026-04-01 10:16:53 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_body.started request=<Request [b'GET']>
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] receive_response_body.complete
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] response_closed.started
+2026-04-01 10:16:53 DEBUG    [httpcore.http11] response_closed.complete
+2026-04-01 10:16:53 DEBUG    [openai._base_client] HTTP Response: GET http://127.0.0.1:8001/v1/models "200 OK" Headers({'date': 'Wed, 01 Apr 2026 02:16:53 GMT', 'server': 'uvicorn', 'content-length': '97', 'content-type': 'application/json', 'openai-processing-ms': '0', 'x-request-id': 'e67e55f3c377413d8073eb2ec79179e4'})
+2026-04-01 10:16:53 DEBUG    [openai._base_client] request_id: e67e55f3c377413d8073eb2ec79179e4
+2026-04-01 10:16:53 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: multi_turn_bash_coder_20260401101653
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] DataPerceptionAgent: beginning to scan data folder and group similar files.
+2026-04-01 10:16:53 BRIEF    [autogluon.assistant.agents.data_perception_agent] Analyzing folder: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/input
+2026-04-01 10:16:53 BRIEF    [autogluon.assistant.agents.data_perception_agent] Found 2 files
+2026-04-01 10:16:53 BRIEF    [autogluon.assistant.agents.data_perception_agent] Grouped into 2 patterns
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.data_perception_agent] Processing pattern: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/input/*.csv (1 files)
+2026-04-01 10:16:53 BRIEF    [autogluon.assistant.agents.data_perception_agent] Reading file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/input/train.csv
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.data_perception_agent] Using local deterministic reader for file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/input/train.csv
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.data_perception_agent] Processing pattern: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/input/*.txt (1 files)
+2026-04-01 10:16:53 BRIEF    [autogluon.assistant.agents.data_perception_agent] Reading file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/input/descriptions.txt
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.data_perception_agent] Using local deterministic reader for file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/input/descriptions.txt
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] DataPerceptionAgent: completed folder scan and assembled data prompt.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] DescriptionFileRetrieverAgent: identifying description files from data prompt.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.description_file_retriever_agent] Using local heuristic description file detection.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/states/description_file_retriever_response.txt...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/states/description_files.txt...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] DescriptionFileRetrieverAgent: description file list extracted.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] TaskDescriptorAgent: generating a concise task description from source materials.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.task_descriptor_agent] Using description file contents directly as task description.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/states/task_descriptor_response.txt...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/states/task_description.txt...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] TaskDescriptorAgent: task description generated.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] ToolSelectorAgent: choosing and ranking ML libraries for the task.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.tool_selector_agent] Using local heuristic tool ranking: machine learning, autogluon.tabular, autogluon.multimodal
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/states/tool_selector_response.txt...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/states/selected_tool.txt...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/states/tool_selector_explanation.txt...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] ToolSelectorAgent: selected tools in priority order: machine learning, autogluon.tabular, autogluon.multimodal
+2026-04-01 10:16:53 BRIEF    [autogluon.assistant.coding_agent] Starting MCTS iteration 1/1
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] Found unused tool machine learning, creating evolve node from root using this tool
+2026-04-01 10:16:53 DETAIL   [autogluon.assistant.managers.node_manager] Node 0 is added to children of Node -1.
+2026-04-01 10:16:53 DEBUG    [autogluon.assistant.managers.node_manager] Starting code generation for Node 0
+2026-04-01 10:16:53 DEBUG    [autogluon.assistant.managers.node_manager]   Tool being used: machine learning
+2026-04-01 10:16:53 DEBUG    [autogluon.assistant.managers.node_manager]   Getting user input for step 0
+2026-04-01 10:16:53 DEBUG    [autogluon.assistant.managers.node_manager]   Retrieving tool info from registry
+2026-04-01 10:16:53 DEBUG    [autogluon.assistant.managers.node_manager]   Starting tutorial retrieval and reranking (this may take time)...
+2026-04-01 10:16:53 INFO     [autogluon.assistant.managers.node_manager] RetrieverAgent: generating search query and retrieving tutorials.
+2026-04-01 10:16:53 INFO     [autogluon.assistant.agents.retriever_agent] Using local heuristic tutorial query: Task name: Iris classification
+Task description: Predict the iris label from four numeric features.
+Problem type: classification
+Label column: label
+Preferred validation metric: accuracy
+Use the provided train.csv as the primary dataset.
+Create a reproduci
+2026-04-01 10:16:53 INFO     [autogluon.assistant.tools_registry.indexing] Loading embedding model: BAAI/bge-base-en-v1.5
+2026-04-01 10:16:54 DEBUG    [httpcore.connection] close.started
+2026-04-01 10:16:54 DEBUG    [httpcore.connection] close.complete
+2026-04-01 10:16:54 INFO     [autogluon.assistant.tools_registry.indexing] Embedding model loaded successfully
+2026-04-01 10:17:00 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 results for query: Task name: Iris classification
+Task description: Predict the iris label from four numeric features.
+Problem type: classification
+Label column: label
+Preferred validation metric: accuracy
+Use the provided train.csv as the primary dataset.
+Create a reproduci
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/tutorial_retriever_results.txt...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] RetrieverAgent: retrieved 1 tutorial candidates using query: 'Task name: Iris classification
+Task description: Predict the iris label from four numeric features.
+Problem type: classification
+Label column: label
+Preferred validation metric: accuracy
+Use the provided train.csv as the primary dataset.
+Create a reproduci'
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] RerankerAgent: reranking and selecting top tutorials from retrieved candidates.
+2026-04-01 10:17:00 INFO     [autogluon.assistant.agents.reranker_agent] Using retrieval scores directly for tutorial reranking.
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/tutorial_reranking_results.txt...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] RerankerAgent: selected 1 tutorials and formatted prompt.
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/tutorial_retrievals.txt...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/tutorial_prompt.txt...
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager]   Finished tutorial retrieval and reranking
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager]   Calling Python coder agent...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] CoderAgent: starting to build and send code-generation prompt to the LLM.
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/python_coder_prompt.txt...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/python_coder_response.txt...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/python_code.py...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] CoderAgent: local deterministic code generated without LLM.
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager]   Finished Python code generation
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager]   Writing Python code to: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/generated_code.py
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager]   Calling Bash coder agent...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] CoderAgent: starting to build and send code-generation prompt to the LLM.
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/bash_coder_prompt.txt...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/bash_coder_response.txt...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/extracted_bash_script.sh...
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] CoderAgent: local deterministic code generated without LLM.
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager]   Finished Bash script generation
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager]   Writing Bash script to: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/execution_script.sh
+2026-04-01 10:17:00 DEBUG    [autogluon.assistant.managers.node_manager] Completed code generation for Node 0
+2026-04-01 10:17:00 INFO     [autogluon.assistant.managers.node_manager] ExecuterAgent: executing code and collecting stdout/stderr for evaluation.
+2026-04-01 10:17:05 DETAIL   [autogluon.assistant.agents.executer_agent] validation_score=0.900000
+2026-04-01 10:17:05 DETAIL   [autogluon.assistant.agents.executer_agent] Validation score: 0.900000
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/stdout_d9bd.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/stderr_eacb.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/stdout.orig_1300.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/stderr.orig_3d9b.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/executer_prompt_9e35.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/executer_response_b2fc.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/decision_8883.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/error_summary_03db.txt...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/validation_score_9a4d.txt...
+2026-04-01 10:17:05 BRIEF    [autogluon.assistant.agents.executer_agent] Planner decision: SUCCESS
+2026-04-01 10:17:05 INFO     [autogluon.assistant.agents.executer_agent] Validation score: 0.9
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] ExecuterAgent: execution finished; planner decision logged.
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/stderr...
+2026-04-01 10:17:05 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/stdout...
+2026-04-01 10:17:06 INFO     [autogluon.assistant.managers.node_visualizer] Node tree visualization generated at: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_tree_iteration_0.pdf
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.managers.node_manager] Task completed successfully! Best node: 0 with validation score 0.9
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager] Starting copy of output folder contents from /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/output to /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager] Copying item: results.csv
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager]   Copying file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/output/results.csv -> /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/results.csv
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager] Copying item: model_1775009825
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager]   Copying directory: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/output/model_1775009825 -> /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/model_1775009825
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager] Finished copying output folder contents
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager] About to create symlink: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/best_run -> /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0
+2026-04-01 10:17:06 INFO     [autogluon.assistant.managers.node_manager] Creating best_run symlink to best solution folder (instant operation, saves disk space)
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.managers.node_manager] Successfully created best_run symlink
+2026-04-01 10:17:06 INFO     [autogluon.assistant.managers.node_manager] Created best_run symlink (linked to node 0 - best validation score (0.9000))
+2026-04-01 10:17:06 INFO     [autogluon.assistant.managers.node_manager] Saving /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_0/states/best_run_summary.txt...
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.coding_agent] Stopping search - solution found and continuous improvement is disabled
+2026-04-01 10:17:06 INFO     [autogluon.assistant.managers.node_visualizer] Node visualization generated at: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z/node_visualization.pdf
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.managers.node_manager] Total tokens — input: 0, output: 0, sum: 0
+2026-04-01 10:17:06 INFO     [autogluon.assistant.managers.node_manager] Full token usage detail:
+{'total': {'total_input_tokens': 0, 'total_output_tokens': 0, 'total_tokens': 0}, 'conversations': {}, 'sessions': {}}
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.coding_agent] MCTS search completed in 12.50 seconds
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.coding_agent] Total nodes explored: 1
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.coding_agent] Best validation score: 0.9
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.coding_agent] Tools used: machine learning
+2026-04-01 10:17:06 BRIEF    [autogluon.assistant.coding_agent] Output saved in /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.tools_registry.indexing] Error during model cleanup: AbsEmbedder.stop_multi_process_pool() missing 1 required positional argument: 'pool'
+2026-04-01 10:17:06 DEBUG    [httpcore.connection] close.started
+2026-04-01 10:17:06 DEBUG    [httpcore.connection] close.complete
+2026-04-01 10:17:06 DEBUG    [autogluon.assistant.coding_agent] Clean Up Successful.

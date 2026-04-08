@@ -1,0 +1,58 @@
+import os
+
+def read_and_analyze_file(file_path):
+    try:
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            print("File does not exist.")
+            return
+        
+        # Open the file in binary mode
+        with open(file_path, 'rb') as file:
+            # Read the entire content of the file
+            content = file.read()
+            
+            # Check if the content is a tabular format (CSV, Excel, Parquet)
+            if content.startswith(b'[') and content.endswith(b']'):
+                # Display column names
+                print("Column Names:")
+                columns = content.split('\n')[0].split(',')
+                for col in columns:
+                    print(col.strip())
+                
+                # Show first 2-3 rows with truncated cell content (50 chars)
+                print("\nFirst 2-3 Rows:")
+                for row in content.split('\n'):
+                    if len(row) > 50:
+                        print(row[:50])
+                    else:
+                        print(row)
+            
+            elif content.startswith(b'text'):
+                # Display first few lines
+                print("First Few Lines (up to 160 Characters):")
+                for line in content.split('\n')[:160]:
+                    print(line.strip())
+                
+            elif content.startswith(b'compressed'):
+                # Decompress the file
+                import zlib
+                decompressed_content = zlib.decompress(content)
+                print("Decompressed Content:")
+                print(decompressed_content.decode('utf-8'))
+            
+            else:
+                # Display basic information about the file type
+                print(f"File Type: {content.split(b' ')[0]}")
+                
+        return content
+    
+    except Exception as e:
+        print(f"An error occurred while reading or analyzing the file: {e}")
+        return None
+
+# Example usage
+file_path = "/Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt"
+result = read_and_analyze_file(file_path)
+if result is not None:
+    print(result)

@@ -1,0 +1,46 @@
+import os
+
+def read_and_analyze_file(file_path):
+    try:
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            print("File does not exist.")
+            return
+        
+        # Open the file in binary mode
+        with open(file_path, 'rb') as file:
+            # Read the entire content of the file
+            content = file.read()
+            
+            # Check if the content is a CSV or text file
+            if b'csv' in content:
+                print("File is a CSV.")
+                # Display column names
+                columns = content.decode('utf-8').split('\n')[0].strip().split(',')
+                print(f"Columns: {columns}")
+                
+                # Show first 2-3 rows with truncated cell content
+                start_index = min(1, len(columns) - 2)
+                end_index = min(len(columns), len(content) - 1)
+                truncated_content = content[start_index:end_index].strip()
+                print(f"First 2-3 rows: {truncated_content[:50]}")
+                
+                # Show index column if it's not in the original table
+                if 'index' in columns:
+                    print("Index column is present.")
+                    
+            elif b'text' in content:
+                print("File is a text file.")
+                # Display first few lines (up to 160 characters)
+                lines = content.decode('utf-8').split('\n')
+                for line in lines[:160]:
+                    print(line.strip())
+                
+            else:
+                print("Unsupported file type.")
+        
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+# Example usage
+read_and_analyze_file("/Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv")

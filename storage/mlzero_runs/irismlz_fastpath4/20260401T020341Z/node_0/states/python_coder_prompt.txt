@@ -1,0 +1,192 @@
+
+As an AutoML Agent, you will be given a folder containing data and description files. Please generate Python code using autogluon.tabular to train a predictor and make predictions on test data. Follow these specifications:
+
+ONLY save files to the working directory: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath4/20260401T020341Z/node_0/output.
+
+1. Data preprocessing:
+   - Remove training data samples without valid labels (drop NA values from training dataset ONLY, NOT from test dataset) unless explicitly instructed otherwise.
+   - Remove the unneccesary index column (if applicable)
+
+2. Model training:
+   - Use autogluon.tabular with appropriate parameters for the task
+   - If a model is trained, save it in a folder with random timestamp within /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath4/20260401T020341Z/node_0/output
+
+3. Prediction:
+   - Make predictions on the ENTIRE test set, preserving ORIGINAL INDICES to maintain exact row correspondence. NEVER drop any test rows for any reason (including missing values), and ensure the output has the exact same number of rows as the test set.
+   - Save the predicted results to /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath4/20260401T020341Z/node_0/output, result file name should be "results", the format and extension should be same as the test data file
+   - Output column names must exactly match those in the training or sample submission files without adding "predicted_" prefixes or creating any new columns.
+   - IMPORTANT: At the end, implement validation checks that assert the prediction file maintains exact test data indices, verify correct column names match requirements, confirm proper output format, verify the number of predictions equals the number of test samples, and if applicable, sanity check output predictions are valid and correct.
+
+4. Documentation:
+   - Add a brief docstring at the beginning of the script explaining its purpose
+   - Include additional installation steps with comments at the beginning of the script
+   - Include comments explaining any complex operations or design decisions
+
+5. Others:
+   - To avoid DDP errors, wrap the code in: if __name__ == "__main__":
+   - Ensure errors are propagated up and not silently caught - do not use try/except blocks unless you explicitly re-raise the exception.
+
+
+
+try to use presets="extreme"
+Do not manually split a validation set from the training data - AutoGluon Tabular automatically handles internal validation and reports validation scores, so simply pass the full training data to the fit() method.
+AutoGluon Tabular requires converting multiple label columns into either a single combined label for mutually exclusive cases or training separate predictors for each label in non-exclusive scenarios.
+
+
+
+Please provide the complete Python script that accomplishes these tasks, ensuring it's ready to run given the appropriate data inputs.
+
+### Task Description
+Task name: Iris classification
+Task description: Predict the iris label from four numeric features.
+Problem type: classification
+Label column: label
+Preferred validation metric: accuracy
+Use the provided train.csv as the primary dataset.
+Create a reproducible local baseline and print the final validation score clearly.
+Prefer lightweight libraries already installed in the environment, especially scikit-learn.
+
+### Data Structure
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath4/20260401T020341Z/input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath4/20260401T020341Z/input/train.csv
+Content:
+Columns: sepal length (cm), sepal width (cm), petal length (cm), petal width (cm), label
+Preview:
+row_1: 5.1 | 3.5 | 1.4 | 0.2 | 0
+row_2: 4.9 | 3.0 | 1.4 | 0.2 | 0
+row_3: 4.7 | 3.2 | 1.3 | 0.2 | 0
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath4/20260401T020341Z/input/descriptions.txt
+Content:
+Task name: Iris classification
+Task description: Predict the iris label from four numeric features.
+Problem type: classification
+Label column: label
+Preferred validation metric: accuracy
+Use the provided train.csv as the primary dataset.
+Create a reproducible local baseline and print the final validation score clearly.
+Prefer lightweight libraries already installed in the environment, especially scikit-learn.
+----------
+
+
+### User Instruction
+Solve the task 'Iris classification' using train.csv. The label column is 'label' and the problem type is classification. Use a simple, reliable local baseline that can run on CPU with installed packages. Report validation accuracy as a numeric score. Save useful outputs into the provided output folder.
+
+### Previous Errors
+These errors were encountered across different implementation approaches and may not be directly related to your current implementation. Use them as reference material to identify potential pitfalls and avoid similar mistakes in your implementation.
+
+
+### Tutorials for Reference
+### Condensed: ```python
+# Condensed: ```python
+
+Summary: This tutorial demonstrates AutoGluon's MultilabelPredictor implementation for predicting multiple target columns simultaneously. It covers creating a custom class that manages multiple TabularPredictors, with methods for training, prediction, evaluation, and model persistence. Key features include handling different problem types (regression, classification) for each target, optional correlation consideration between labels during prediction, and customizable evaluation metrics. The code helps with multi-target machine learning tasks, offering flexibility in how predictions are generated and evaluated. The implementation provides a clean API for training multiple models with a single interface while maintaining individual model access.
+
+*This is a condensed version that preserves essential implementation details and context.*
+
+# MultilabelPredictor for AutoGluon
+
+## Installation
+```python
+!pip install autogluon.tabular[all]
+```
+
+## Implementation
+
+```python
+from autogluon.tabular import TabularDataset, TabularPredictor
+from autogluon.common.utils.utils import setup_outputdir
+from autogluon.core.utils.loaders import load_pkl
+from autogluon.core.utils.savers import save_pkl
+import os.path
+
+class MultilabelPredictor:
+    """Tabular Predictor for predicting multiple columns in table."""
+    
+    multi_predictor_file = 'multilabel_predictor.pkl'
+    
+    def __init__(self, labels, path=None, problem_types=None, eval_metrics=None, consider_labels_correlation=True, **kwargs):
+        if len(labels) < 2:
+            raise ValueError("MultilabelPredictor is only intended for predicting MULTIPLE labels")
+        if (problem_types is not None) and (len(problem_types) != len(labels)):
+            raise ValueError("If provided, `problem_types` must have same length as `labels`")
+        if (eval_metrics is not None) and (len(eval_metrics) != len(labels)):
+            raise ValueError("If provided, `eval_metrics` must have same length as `labels`")
+            
+        self.path = setup_outputd
+...(truncated)
+
+
+### Condensed: ```python
+# Condensed: ```python
+
+Summary: This tutorial demonstrates how to create and use custom evaluation metrics in AutoGluon, focusing on what makes them better for model optimization. It covers the implementation of custom metrics for classification, regression, and probability-based tasks, with examples of accuracy, ROC AUC, and MSE. The metrics are defined using make_scorer and can be used for model evaluation and comparison.
+
+*This is a condensed version that preserves essential implementation details and context.*
+
+# Custom Metrics in AutoGluon
+
+## Setup
+```python
+!pip install autogluon.tabular[all]
+import numpy as np
+from autogluon.core.metrics import make_scorer
+import sklearn.metrics
+```
+
+## Important: Ensuring Metric is Serializable
+Custom metrics must be defined in a separate Python file and imported to be pickled properly. If not serializable, you'll get `_pickle.PicklingError: Can't pickle` errors when using parallel training.
+
+**Best Practice:** Create a file like `my_metrics.py` with your metric definitions, then import with `from my_metrics import ag_accuracy_scorer`.
+
+## Creating Custom Metrics
+
+### Custom Accuracy Metric
+```python
+ag_accuracy_scorer = make_scorer(
+    name='accuracy',
+    score_func=sklearn.metrics.accuracy_score,
+    optimum=1,
+    greater_is_better=True,
+    needs_class=True
+)
+```
+
+### Custom Mean Squared Error Metric
+```python
+ag_mean_squared_error_scorer = make_scorer(
+    name='mean_squared_error',
+    score_func=sklearn.metrics.mean_squared_error,
+    optimum=0,
+    greater_is_better=False
+)
+```
+
+### Custom Function Example
+```python
+def mse_func(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    return ((y_true - y_pred) ** 2).mean()
+
+ag_mean_squared_error_custom_scorer = make_scorer(
+    name='mean_squared_error',
+    score_func=mse_func,
+    optimum=0,
+    greater_is_better=False
+)
+```
+
+### Custom ROC AUC Metric
+```python
+ag_roc_auc_scorer = make_scorer(
+    name='roc_auc',
+    score_func=sklearn.metrics.roc_auc_score,
+    optimum=1,
+    greater_is_better=True,
+    needs_
+...(truncated)
+

@@ -1,0 +1,5 @@
+2026-04-01 09:54:38 BRIEF    [autogluon.assistant.agents.data_perception_agent] Analyzing folder: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath/20260401T015403Z/input
+2026-04-01 09:54:38 BRIEF    [autogluon.assistant.agents.data_perception_agent] Found 2 files
+2026-04-01 09:54:38 BRIEF    [autogluon.assistant.agents.data_perception_agent] Grouped into 2 patterns
+2026-04-01 09:54:38 BRIEF    [autogluon.assistant.agents.data_perception_agent] Reading file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath/20260401T015403Z/input/train.csv
+2026-04-01 09:54:38 BRIEF    [autogluon.assistant.agents.data_perception_agent] Reading file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath/20260401T015403Z/input/descriptions.txt

@@ -1,0 +1,5 @@
+### Condensed: ```
+# Condensed: ```
+
+Summary: This tutorial explains AutoGluon's automatic feature engineering capabilities for tabular data. It covers type-specific processing: numerical columns remain unchanged, categ
+...(truncated)

@@ -1,0 +1,87 @@
+You are an expert code evaluator. Analyze the execution results of the following Python code and determine if the execution was successful or if issues need to be fixed.
+
+### Task Descriptions
+
+Generate Python code to read and analyze the file: "/Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv"
+
+File Size: 0.00 MB
+
+Your code should:
+1. Import all modules used (e.g. import os).
+1. Use appropriate libraries based on file type (pandas for tabular data, etc.)
+2. For tabular files (csv, excel, parquet, etc.):
+    - Display column names. If there are more than 20 columns, only display the first and last 10.
+    - Show first 2-3 rows with truncated cell content (50 chars).
+    - Do not show additional index column if it's not in the original table
+    - If failed to open the file, treat it as text file
+3. For text files:
+    - Display first few lines (up to 160 characters)
+4. For compressed tabular or text files, show its decompressed content as described.
+5. For binary o
+
+### Data Structure
+file location: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+
+### Python Code
+import os
+
+def read_and_analyze_file(file_path):
+    try:
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            print("File does not exist.")
+            return
+        
+        # Open the file in binary mode
+        with open(file_path, 'rb') as file:
+            # Read the entire content of the file
+            content = file.read()
+            
+            # Check if the content is a CSV or text file
+            if b'csv' in content:
+                print("File is a CSV.")
+                # Display column names
+                columns = content.decode('utf-8').split('\n')[0].strip().split(',')
+                print(f"Columns: {columns}")
+                
+                # Show first 2-3 rows with truncated cell content
+                start_index = min(1, len(columns) - 2)
+                end_index = min(len(columns), len(content) - 1)
+                truncated_content = content[start_index:end_index].strip()
+                print(f"First 2-3 rows: {truncated_content[:50]}")
+                
+                # Show index column if it's not in the original table
+                if 'index' in columns:
+                    print("Index column is present.")
+                    
+            elif b'text' in content:
+                print("File is a text file.")
+                # Display first few lines (up to 160 characters)
+                lines =
+
+## Execution Results
+### Standard Output (stdout)
+
+Unsupported file type.
+
+
+### Standard Error (stderr)
+
+No standard error
+
+Evaluate the execution results and decide on one of the following actions:
+1. SUCCESS - If the execution was completely successful and met all requirements.
+2. FIX - If there were errors, issues, or performance problems that need to be addressed.
+
+Provide your decision in the following format:
+DECISION: [SUCCESS or FIX]
+ERROR_SUMMARY: [Brief summary of errors if any, or "None" if no errors]
+VALIDATION_SCORE: [If there is a validation score for the solution, provide it as a number, otherwise "None"]
+
+The error summary should be brief but informative enough for another agent to understand what needs to be fixed.
+Even if the code executed without throwing errors, it might still have issues with logic or not meet all requirements.
+
+For validation scores:
+- If there is a validation score present in the execution results, extract it (e.g. the last validation score reported in the training process).
+- Convert the score to ensure higher values indicate better performance (multiply "lower is better" metrics like RMSE, MAE, or loss by -1)
+- Return the converted score that follows the "higher is better" convention

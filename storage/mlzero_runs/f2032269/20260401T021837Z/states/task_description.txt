@@ -1,0 +1,8 @@
+Task name: Iris API Validation
+Task description: Predict the iris label from four numeric features.
+Problem type: classification
+Label column: label
+Preferred validation metric: accuracy
+Use the provided train.csv as the primary dataset.
+Create a reproducible local baseline and print the final validation score clearly.
+Prefer lightweight libraries already installed in the environment, especially scikit-learn.

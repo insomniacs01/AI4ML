@@ -1,0 +1,10 @@
+Selected Tutorials After Reranking:
+==================================================
+
+1. Title: Condensed: ```
+   Path: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/tabular-feature-engineering.md
+   Retrieval Score: 0.6703
+   Content Preview: # Condensed: ```
+
+Summary: This tutorial explains AutoGluon's automatic feature engineering capabilities for tabular data. It covers type-specific processing: numerical columns remain unchanged, categ...
+------------------------------

@@ -1,0 +1,39 @@
+
+Given the data structure, please identify any files that appear to contain project descriptions, requirements, or task definitions.
+Look for files like README, documentation files, or task description files.
+
+### Data Structure
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/force_llm_small_input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt
+Content:
+
+First Few Lines:
+b'Binary classification task'
+b'\nUse tiny'
+b'csv to predict the label column from the numeric feature columns'
+b'\nReturn a validation sco...
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+Content:
+Decompressed Content:
+feature_a,feature_b,label
+5.1,3.5,0
+4.9,3.0,0
+5.0,3.4,0
+5.4,3.9,0
+6.4,3.2,1
+6.9,3.1,1
+6.7,3.1,1
+6.0,2.9,1
+
+File analysis completed succ...
+----------
+
+
+Format your response as follows, do not give explanations:
+Description Files: [list ONLY the absolute path, one per line]

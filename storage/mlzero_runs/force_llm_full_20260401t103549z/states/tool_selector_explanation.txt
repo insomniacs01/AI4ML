@@ -1,0 +1,1 @@
+Binary classification on a small CSV with numeric features and label column. Autogluon.tabular, autogluon.multimodal

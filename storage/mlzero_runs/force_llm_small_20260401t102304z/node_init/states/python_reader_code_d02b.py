@@ -1,0 +1,43 @@
+import os
+
+def read_and_analyze_file(file_path):
+    # Check if the file exists
+    if not os.path.exists(file_path):
+        print("File does not exist.")
+        return
+    
+    try:
+        # Open the file in binary mode
+        with open(file_path, 'rb') as file:
+            # Read the entire content of the file
+            content = file.read()
+            
+            # Check if the content is a tabular format (CSV, Excel, Parquet)
+            if content.startswith(b'['):
+                # Display column names
+                print("Column Names:")
+                columns = content.split('\n')[0].split(',')
+                for col in columns:
+                    print(col.strip())
+                
+                # Show first 2-3 rows with truncated cell content (50 chars)
+                print("\nFirst 2-3 Rows:")
+                for row in range(2, min(len(content), 10)):
+                    print(row.split('\t')[0].strip()[:50])
+                    
+            elif content.startswith(b'{"'):
+                # Display first few lines
+                print("First Few Lines (JSON):")
+                print(json.loads(content).keys())
+                
+            else:
+                # Display the decompressed content as described
+                print("\nDecompressed Content:")
+                print(content.decode('utf-8'))
+    
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return
+
+# Example usage
+read_and_analyze_file("/Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt")

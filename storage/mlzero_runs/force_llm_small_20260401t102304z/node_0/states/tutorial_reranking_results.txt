@@ -1,0 +1,10 @@
+Selected Tutorials After Reranking:
+==================================================
+
+1. Title: Condensed: ```python
+   Path: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.timeseries/condensed_tutorials/forecasting-chronos.md
+   Retrieval Score: 0.7434
+   Content Preview: # Condensed: ```python
+
+Summary: This tutorial introduces Chronos and Chronos-Bolt models in AutoGluon for time series forecasting. It covers implementation of zero-shot forecasting that scales linear...
+------------------------------

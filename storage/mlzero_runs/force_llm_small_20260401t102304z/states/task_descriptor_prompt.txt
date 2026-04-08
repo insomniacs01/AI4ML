@@ -1,0 +1,34 @@
+
+Based ONLY on the information explicitly stated in the provided data structure and description files, provide a condensed and precise description of the data science task. Include only details that are directly mentioned in the source materials. Do not add assumptions or infer unstated information.
+
+Be very clear about the problem type (e.g. audio classification/image regression/seq-to-seq generation/etc.), input format, and prediction output format.
+
+### User Instruction
+
+
+### Data Structure:
+(IMPORTANT: The metadata of example files in Data Structure may not be representative - do not make assumptions about data statistics based on examples.)
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/force_llm_small_input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt
+Content:
+
+Decompressed Content:
+Binary classification task.
+Use tiny.csv to predict the label column from the numeric feature columns.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+Content:
+Unsupported file type.
+
+----------
+
+
+### Description File Contents:
+No description file contents could be read.

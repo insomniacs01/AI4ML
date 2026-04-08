@@ -1,0 +1,10 @@
+Selected Tutorials After Reranking:
+==================================================
+
+1. Title: Condensed: ```python
+   Path: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/advanced/tabular-multilabel.md
+   Retrieval Score: 0.5761
+   Content Preview: # Condensed: ```python
+
+Summary: This tutorial demonstrates AutoGluon's MultilabelPredictor implementation for predicting multiple target columns simultaneously. It covers creating a custom class that...
+------------------------------

@@ -1,0 +1,78 @@
+
+Given the following context and list of tutorials with their summaries, select the 1 most relevant tutorials for helping with this task. Consider how well each tutorial's title and summary match the task, data, user question, and any errors.
+
+### Task Description
+### Problem Type
+Audio classification/image regression/seq-to-seq generation
+
+### Input Format
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/force_llm_small_input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt
+Content:
+
+Decompressed Content:
+Binary classification task.
+Use tiny.csv to predict the label column from the numeric feature columns.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+Content:
+Unsupported file type.
+
+----------
+
+
+### Prediction Output Format
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_output/predictions.txt
+Content:
+
+Predicted labels for each input audio file.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_output/validation_score.txt
+Content:
+Validation score for the predictions.
+
+### Data Structures
+Absolute path to the folder: /Users/macbookpro/AI4ML/storage/force_llm_small_input
+
+Files structures:
+
+----------
+
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/task.txt
+Content:
+
+Decompressed Content:
+Binary classification task.
+Use tiny.csv to predict the label column from the numeric feature columns.
+Return a validation score.
+
+----------
+Absolute path: /Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv
+Content:
+Unsupported file type.
+
+----------
+
+
+### User Instruction
+Use tiny.csv to do binary classification and report validation score.
+
+### Previous Error Analysis
+
+
+Available Tutorials:
+1. Title: Condensed: ```python
+   Summary: This tutorial introduces Chronos and Chronos-Bolt models in AutoGluon for time series forecasting. It covers implementation of zero-shot forecasting that scales linearly with time series volume, model selection across different sizes (tiny to large), and practical code examples for prediction. Key functionalities include fine-tuning options with customizable learning rates and steps, incorporating covariates through regressors (particularly CatBoost), and hardware recommendations. The tutorial demonstrates how to load data, split into train/test sets, create predictors with various configurations, generate predictions, and evaluate model performance through leaderboards—particularly useful for implementing efficient time series forecasting with minimal training requirements.
+
+IMPORTANT: Respond ONLY with the numbers of the selected tutorials (up to 1) separated by commas. 
+For example: "1,3,4" or "2,5" or just "1" if only one is relevant.
+DO NOT include any other text, explanation, or formatting in your response.

@@ -1,0 +1,7 @@
+```sql
+SELECT "id", "label"
+FROM autogluon.tabular
+WHERE "features" = 'tiny.csv'
+  AND "target_column" = 'numeric_features'
+  AND "label_column" = 'label';
+```

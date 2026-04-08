@@ -1,0 +1,1 @@
+Write a minimal bash script with no markdown fences. Requirements: set -euo pipefail, cd to the working directory below, then run python generated_code.py. Working directory: /Users/macbookpro/AI4ML/storage/mlzero_runs/force_llm_full_20260401t104127z/node_0

@@ -1,0 +1,36 @@
+```python
+import os
+
+def read_and_analyze_file(file_path):
+    # Check if the file exists
+    if not os.path.exists(file_path):
+        print("File does not exist.")
+        return
+    
+    try:
+        # Open the file in binary mode
+        with open(file_path, 'rb') as file:
+            # Read the entire content of the file
+            content = file.read()
+            
+            # Check if the content is a CSV or text file
+            if b'CSV' in content:
+                print("File is a CSV file.")
+                # Display column names and first 2-3 rows with truncated cell content
+                columns = content.decode('utf-8').split('\n')[0].strip().split(',')
+                for i, col in enumerate(columns):
+                    print(f"Column {i+1}: {col[:50]}")
+            elif b'Text' in content:
+                print("File is a text file.")
+                # Display the first few lines
+                print(content.decode('utf-8').strip().split('\n')[:160])
+            else:
+                print("Unsupported file type.")
+    except Exception as e:
+        print(f"Error reading or analyzing file: {e}")
+
+# Example usage
+read_and_analyze_file("/Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv")
+```
+
+This code reads a CSV file and displays its contents, column names, first 2-3 rows with truncated cell content, and the first few lines of text. It also handles binary files by printing only the most basic information.

@@ -1,0 +1,11 @@
+Search Query: Autogluon Timeseries: Binary Classification with Tiny CSV for Audio Classification
+==================================================
+Retrieved 1 Tutorial Results:
+
+1. File: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.timeseries/condensed_tutorials/forecasting-chronos.md
+   Score: 0.7434
+   Title: Condensed: ```python
+   Content Preview: # Condensed: ```python
+
+Summary: This tutorial introduces Chronos and Chronos-Bolt models in AutoGluon for time series forecasting. It covers implementation of zero-shot forecasting that scales linear...
+------------------------------

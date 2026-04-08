@@ -1,0 +1,8 @@
+```sql
+SELECT "model_name", "task_type", "dataset_size", "features_count", "label_column"
+FROM autogluon.tabular
+WHERE "model_name" = 'binary_classification'
+  AND "task_type" = 'binary_classification'
+  AND "dataset_size" = 'tiny.csv'
+  AND "features_count" = 10;
+```

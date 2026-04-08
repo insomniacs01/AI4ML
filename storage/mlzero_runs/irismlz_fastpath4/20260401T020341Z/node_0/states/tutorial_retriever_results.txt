@@ -1,0 +1,38 @@
+Search Query: Task name: Iris classification
+Task description: Predict the iris label from four numeric features.
+Problem type: classification
+Label column: label
+Preferred validation metric: accuracy
+Use the provided train.csv as the primary dataset.
+Create a reproduci
+==================================================
+Retrieved 4 Tutorial Results:
+
+1. File: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/advanced/tabular-multilabel.md
+   Score: 0.6871
+   Title: Condensed: ```python
+   Content Preview: # Condensed: ```python
+
+Summary: This tutorial demonstrates AutoGluon's MultilabelPredictor implementation for predicting multiple target columns simultaneously. It covers creating a custom class that...
+------------------------------
+2. File: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/advanced/tabular-custom-metric.md
+   Score: 0.6469
+   Title: Condensed: ```python
+   Content Preview: # Condensed: ```python
+
+Summary: This tutorial demonstrates how to create and use custom evaluation metrics in AutoGluon, focusing on what makes them better for model optimization. It covers the imple...
+------------------------------
+3. File: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/tabular-essentials.md
+   Score: 0.6444
+   Title: Condensed: ```python
+   Content Preview: # Condensed: ```python
+
+Summary: This tutorial covers AutoGluon's TabularPredictor for automated machine learning on tabular data. It demonstrates implementation of quick model training with minimal c...
+------------------------------
+4. File: /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/autogluon.tabular/condensed_tutorials/tabular-indepth.md
+   Score: 0.6393
+   Title: Condensed: ```python
+   Content Preview: # Condensed: ```python
+
+Summary: This tutorial demonstrates AutoGluon TabularPredictor for machine learning tasks, covering hyperparameter tuning with search spaces for neural networks and gradient bo...
+------------------------------

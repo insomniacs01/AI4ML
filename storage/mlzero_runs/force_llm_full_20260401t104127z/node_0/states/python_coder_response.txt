@@ -1,0 +1,28 @@
+```python
+import pandas as pd
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.linear_model import LogisticRegression
+
+# Load the dataset
+df = pd.read_csv('/Users/macbookpro/AI4ML/storage/force_llm_small_input/tiny.csv')
+
+# Select target and numeric features
+X = df[['label']]
+y = df['numeric_features']
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+
+# Train a logistic regression classifier
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+# Make predictions on the test set
+predictions = model.predict(X_test)
+
+# Calculate and print the validation score
+validation_score = cross_val_score(model, X_test, y_test, cv=5)
+print(f'Validation Score: {validation_score.mean()}')
+```
+
+This script reads a CSV file containing labels and numeric features, splits it into training and testing sets, trains a logistic regression classifier, makes predictions on the test set, and prints the validation score.

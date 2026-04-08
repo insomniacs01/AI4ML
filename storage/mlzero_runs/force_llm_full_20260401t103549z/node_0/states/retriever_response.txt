@@ -1,0 +1,7 @@
+```sql
+SELECT "model_name", "best_score"
+FROM autogluon.tabular
+WHERE "task" = 'binary_classification'
+  AND "input_columns" = 'tiny.csv'
+  AND "output_column" = 'label';
+```

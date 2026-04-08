@@ -1,0 +1,1 @@
+Write one short tutorial search query for the tool autogluon.tabular. Task: binary classification on tiny.csv with numeric features and label column. Return query only.

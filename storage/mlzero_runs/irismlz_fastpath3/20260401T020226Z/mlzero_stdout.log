@@ -1,0 +1,6 @@
+BRIEF Analyzing folder: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath3/20260401T020226Z/input
+BRIEF Found 2 files
+BRIEF Grouped into 2 patterns
+BRIEF Reading file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath3/20260401T020226Z/input/train.csv
+BRIEF Reading file: /Users/macbookpro/AI4ML/storage/mlzero_runs/irismlz_fastpath3/20260401T020226Z/input/descriptions.txt
+BRIEF Starting MCTS iteration 1/1

@@ -1,0 +1,262 @@
+2026-03-31 22:05:21 INFO     [faiss.loader] Loading faiss.
+2026-03-31 22:05:21 INFO     [faiss.loader] Successfully loaded faiss.
+2026-03-31 22:05:29 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-03-31 22:05:29 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: multi_turn_chat_agent_20260331220528
+2026-03-31 22:05:29 INFO     [autogluon.assistant.tools_registry.indexing] Loading indices from disk
+2026-03-31 22:05:29 WARNING  [autogluon.assistant.tools_registry.indexing] No index exists at /Users/macbookpro/AI4ML/external/autogluon-assistant/src/autogluon/assistant/tools_registry/indices/BAAI_bge-base-en-v1.5
+2026-03-31 22:05:29 INFO     [autogluon.assistant.agents.retriever_agent] Building tutorial indices...
+2026-03-31 22:05:29 INFO     [autogluon.assistant.tools_registry.indexing] Building indices for tools: ['FlagEmbedding', 'machine learning', 'wav2vec2', 'qwen3', 'autogluon.tabular', 'autogluon.multimodal', 'autogluon.timeseries']
+2026-03-31 22:05:29 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: FlagEmbedding
+2026-03-31 22:05:29 INFO     [autogluon.assistant.tools_registry.indexing] Loading embedding model: BAAI/bge-base-en-v1.5
+2026-03-31 22:21:38 INFO     [autogluon.assistant.tools_registry.indexing] Embedding model loaded successfully
+2026-03-31 22:21:38 INFO     [autogluon.assistant.tools_registry.indexing] Found 31 summaries for FlagEmbedding tutorials
+2026-03-31 22:21:38 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for FlagEmbedding tutorials
+2026-03-31 22:23:30 INFO     [autogluon.assistant.tools_registry.indexing] Built index for FlagEmbedding tutorials with 31 vectors
+2026-03-31 22:23:30 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for FlagEmbedding
+2026-03-31 22:23:30 INFO     [autogluon.assistant.tools_registry.indexing] Found 31 summaries for FlagEmbedding condensed_tutorials
+2026-03-31 22:23:30 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for FlagEmbedding condensed_tutorials
+2026-03-31 22:24:52 INFO     [autogluon.assistant.tools_registry.indexing] Built index for FlagEmbedding condensed_tutorials with 31 vectors
+2026-03-31 22:24:52 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for FlagEmbedding
+2026-03-31 22:24:52 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: machine learning
+2026-03-31 22:24:52 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for machine learning tutorials
+2026-03-31 22:24:52 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for machine learning tutorials
+2026-03-31 22:24:56 INFO     [autogluon.assistant.tools_registry.indexing] Built index for machine learning tutorials with 1 vectors
+2026-03-31 22:24:56 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for machine learning
+2026-03-31 22:24:56 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for machine learning condensed_tutorials
+2026-03-31 22:24:56 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for machine learning condensed_tutorials
+2026-03-31 22:25:00 INFO     [autogluon.assistant.tools_registry.indexing] Built index for machine learning condensed_tutorials with 1 vectors
+2026-03-31 22:25:00 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for machine learning
+2026-03-31 22:25:00 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: wav2vec2
+2026-03-31 22:25:00 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for wav2vec2 tutorials
+2026-03-31 22:25:00 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for wav2vec2 tutorials
+2026-03-31 22:25:07 INFO     [autogluon.assistant.tools_registry.indexing] Built index for wav2vec2 tutorials with 1 vectors
+2026-03-31 22:25:07 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for wav2vec2
+2026-03-31 22:25:07 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for wav2vec2 condensed_tutorials
+2026-03-31 22:25:07 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for wav2vec2 condensed_tutorials
+2026-03-31 22:25:14 INFO     [autogluon.assistant.tools_registry.indexing] Built index for wav2vec2 condensed_tutorials with 1 vectors
+2026-03-31 22:25:14 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for wav2vec2
+2026-03-31 22:25:14 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: qwen3
+2026-03-31 22:25:14 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for qwen3 tutorials
+2026-03-31 22:25:14 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for qwen3 tutorials
+2026-03-31 22:25:19 INFO     [autogluon.assistant.tools_registry.indexing] Built index for qwen3 tutorials with 1 vectors
+2026-03-31 22:25:19 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for qwen3
+2026-03-31 22:25:19 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for qwen3 condensed_tutorials
+2026-03-31 22:25:19 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for qwen3 condensed_tutorials
+2026-03-31 22:25:21 INFO     [autogluon.assistant.tools_registry.indexing] Built index for qwen3 condensed_tutorials with 1 vectors
+2026-03-31 22:25:21 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for qwen3
+2026-03-31 22:25:21 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: autogluon.tabular
+2026-03-31 22:25:21 INFO     [autogluon.assistant.tools_registry.indexing] Found 13 summaries for autogluon.tabular tutorials
+2026-03-31 22:25:21 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.tabular tutorials
+2026-03-31 22:25:52 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.tabular tutorials with 13 vectors
+2026-03-31 22:25:52 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for autogluon.tabular
+2026-03-31 22:25:52 INFO     [autogluon.assistant.tools_registry.indexing] Found 13 summaries for autogluon.tabular condensed_tutorials
+2026-03-31 22:25:52 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.tabular condensed_tutorials
+2026-03-31 22:26:22 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.tabular condensed_tutorials with 13 vectors
+2026-03-31 22:26:22 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for autogluon.tabular
+2026-03-31 22:26:22 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: autogluon.multimodal
+2026-03-31 22:26:22 INFO     [autogluon.assistant.tools_registry.indexing] Found 38 summaries for autogluon.multimodal tutorials
+2026-03-31 22:26:22 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.multimodal tutorials
+2026-03-31 22:27:33 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.multimodal tutorials with 38 vectors
+2026-03-31 22:27:33 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for autogluon.multimodal
+2026-03-31 22:27:33 INFO     [autogluon.assistant.tools_registry.indexing] Found 38 summaries for autogluon.multimodal condensed_tutorials
+2026-03-31 22:27:33 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.multimodal condensed_tutorials
+2026-03-31 22:28:29 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.multimodal condensed_tutorials with 38 vectors
+2026-03-31 22:28:29 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for autogluon.multimodal
+2026-03-31 22:28:29 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: autogluon.timeseries
+2026-03-31 22:28:29 INFO     [autogluon.assistant.tools_registry.indexing] Found 4 summaries for autogluon.timeseries tutorials
+2026-03-31 22:28:29 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.timeseries tutorials
+2026-03-31 22:28:38 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.timeseries tutorials with 4 vectors
+2026-03-31 22:28:38 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for autogluon.timeseries
+2026-03-31 22:28:38 INFO     [autogluon.assistant.tools_registry.indexing] Found 4 summaries for autogluon.timeseries condensed_tutorials
+2026-03-31 22:28:38 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.timeseries condensed_tutorials
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.timeseries condensed_tutorials with 4 vectors
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for autogluon.timeseries
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saving indices to disk
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved FlagEmbedding tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved FlagEmbedding condensed_tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved machine learning tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved machine learning condensed_tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved wav2vec2 tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved wav2vec2 condensed_tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved qwen3 tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved qwen3 condensed_tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.tabular tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.tabular condensed_tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.multimodal tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.multimodal condensed_tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.timeseries tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.timeseries condensed_tutorials index and metadata
+2026-03-31 22:28:47 INFO     [autogluon.assistant.agents.retriever_agent] Tutorial indices built and saved successfully.
+2026-03-31 22:28:47 INFO     [autogluon.assistant.managers.chatting_manager] Reading input files...
+2026-03-31 22:28:47 INFO     [autogluon.assistant.managers.chatting_manager] Read 1 file(s)
+2026-03-31 22:28:47 INFO     [autogluon.assistant.managers.chatting_manager] Data context initialized.
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] AutoGluon Assistant - Chat Mode
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] Input data: /Users/macbookpro/AI4ML/data/samples
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] Loaded 1 file(s):
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent]   - iris.csv
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] Session ID: chat_20260331_220521
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] Output folder: /Users/macbookpro/AI4ML/storage/mlzero_chat_smoketest
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] 
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] Type your questions below. Type 'exit', 'quit', or 'bye' to end the session.
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:28:47 BRIEF    [autogluon.assistant.chatting_agent] 
+2026-03-31 22:28:47 INFO     [autogluon.assistant.managers.chatting_manager] ToolSelectorAgent: choosing and ranking ML libraries for the task.
+2026-04-01 06:37:54 INFO     [openai._base_client] Retrying request to /models in 0.379038 seconds
+2026-04-01 08:42:37 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-04-01 08:42:37 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: single_turn_tool_selector_20260331222847
+2026-04-01 08:43:21 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-01 08:43:21 WARNING  [autogluon.assistant.managers.chatting_manager] Failed to identify tool: Missing key initial_root_children
+    full_key: initial_root_children
+    object_type=dict
+2026-04-01 08:43:21 INFO     [autogluon.assistant.managers.chatting_manager] ChatAgent: generating response to user question.
+2026-04-01 09:49:19 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-01 09:49:19 INFO     [autogluon.assistant.managers.chatting_manager] ChatAgent: response generated successfully.
+2026-04-01 09:49:21 INFO     [autogluon.assistant.managers.chatting_manager] ChattingManager cleanup completed.
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 2026-03-31 22:05:19 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1ac5dcc90>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: f28a3470-b486-41e7-9ce2-802595162f5c)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json
+2026-03-31 22:05:19 WARNING  [huggingface_hub.utils._http] Retrying in 2s [Retry 2/5].
+2026-03-31 22:05:41 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1ac5dd950>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 2711fcb2-b13a-46a3-9182-8f2a682dd007)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json
+2026-03-31 22:05:41 WARNING  [huggingface_hub.utils._http] Retrying in 4s [Retry 3/5].
+2026-03-31 22:06:05 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1ac5df990>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 83b9e7f9-e6d8-4b0e-8303-8788a9a6ea11)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json
+2026-03-31 22:06:05 WARNING  [huggingface_hub.utils._http] Retrying in 8s [Retry 4/5].
+2026-03-31 22:06:33 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1ac584790>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: ac9e9be6-baf9-413e-b585-99f844c3bafe)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json
+2026-03-31 22:06:33 WARNING  [huggingface_hub.utils._http] Retrying in 8s [Retry 5/5].
+2026-03-31 22:07:01 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1ac5f4290>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 8c9ae95d-6035-410f-b672-a2dd6023debc)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/adapter_config.json
+2026-03-31 22:07:22 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af149710>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 7e148c49-42c4-4ed1-8876-8be99c45c400)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors
+2026-03-31 22:07:22 WARNING  [huggingface_hub.utils._http] Retrying in 1s [Retry 1/5].
+2026-03-31 22:07:43 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af13d2d0>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: caadf58a-ddb8-4f4a-8ce9-ea4fd835d182)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors
+2026-03-31 22:07:43 WARNING  [huggingface_hub.utils._http] Retrying in 2s [Retry 2/5].
+2026-03-31 22:08:05 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af13e690>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 0826ba87-7a1d-4c24-9cfb-8670a30c9a65)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors
+2026-03-31 22:08:05 WARNING  [huggingface_hub.utils._http] Retrying in 4s [Retry 3/5].
+2026-03-31 22:08:29 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af13fa50>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 08344352-ed26-4eac-a8a4-720450b8cb09)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors
+2026-03-31 22:08:29 WARNING  [huggingface_hub.utils._http] Retrying in 8s [Retry 4/5].
+2026-03-31 22:08:57 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af150e50>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: dc4e282f-c4d6-4379-b68d-7d6d122d0eac)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors
+2026-03-31 22:08:57 WARNING  [huggingface_hub.utils._http] Retrying in 8s [Retry 5/5].
+2026-03-31 22:09:25 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af13d8d0>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 344901b2-4303-4ed3-ac5d-6cd21327fe7b)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors
+2026-03-31 22:09:45 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af14b2d0>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 2b98b7b5-a005-482c-9153-08807e97a5f7)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json
+2026-03-31 22:09:45 WARNING  [huggingface_hub.utils._http] Retrying in 1s [Retry 1/5].
+2026-03-31 22:10:06 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af1519d0>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: e03c388f-1097-4b9e-86a8-3a6948f386e8)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json
+2026-03-31 22:10:06 WARNING  [huggingface_hub.utils._http] Retrying in 2s [Retry 2/5].
+2026-03-31 22:10:28 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af152990>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: cb47172f-a482-46a1-9b0a-89654ae57a80)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json
+2026-03-31 22:10:28 WARNING  [huggingface_hub.utils._http] Retrying in 4s [Retry 3/5].
+2026-03-31 22:10:52 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af153a10>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: 9946d815-5599-4be1-a9b9-254ab66ba047)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json
+2026-03-31 22:10:52 WARNING  [huggingface_hub.utils._http] Retrying in 8s [Retry 4/5].
+2026-03-31 22:11:20 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af158ad0>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: ac7b916c-6fc2-4430-986d-b89a022c38c2)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json
+2026-03-31 22:11:20 WARNING  [huggingface_hub.utils._http] Retrying in 8s [Retry 5/5].
+2026-03-31 22:11:48 WARNING  [huggingface_hub.utils._http] '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json (Caused by ConnectTimeoutError(<HTTPSConnection(host='huggingface.co', port=443) at 0x1af159b50>, 'Connection to huggingface.co timed out. (connect timeout=10)'))"), '(Request ID: b939729c-6f50-42b8-8954-9e9c5194cb17)')' thrown while requesting HEAD https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/model.safetensors.index.json
+2026-03-31 22:12:08 INFO     [autogluon.assistant.tools_registry.indexing] Embedding model loaded successfully
+2026-03-31 22:12:08 INFO     [autogluon.assistant.tools_registry.indexing] Found 31 summaries for FlagEmbedding tutorials
+2026-03-31 22:12:08 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for FlagEmbedding tutorials
+2026-03-31 22:13:08 INFO     [autogluon.assistant.tools_registry.indexing] Built index for FlagEmbedding tutorials with 31 vectors
+2026-03-31 22:13:08 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for FlagEmbedding
+2026-03-31 22:13:08 INFO     [autogluon.assistant.tools_registry.indexing] Found 31 summaries for FlagEmbedding condensed_tutorials
+2026-03-31 22:13:08 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for FlagEmbedding condensed_tutorials
+2026-03-31 22:13:59 INFO     [autogluon.assistant.tools_registry.indexing] Built index for FlagEmbedding condensed_tutorials with 31 vectors
+2026-03-31 22:13:59 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for FlagEmbedding
+2026-03-31 22:13:59 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: machine learning
+2026-03-31 22:13:59 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for machine learning tutorials
+2026-03-31 22:13:59 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for machine learning tutorials
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Built index for machine learning tutorials with 1 vectors
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for machine learning
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for machine learning condensed_tutorials
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for machine learning condensed_tutorials
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Built index for machine learning condensed_tutorials with 1 vectors
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for machine learning
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: wav2vec2
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for wav2vec2 tutorials
+2026-03-31 22:14:00 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for wav2vec2 tutorials
+2026-03-31 22:14:02 INFO     [autogluon.assistant.tools_registry.indexing] Built index for wav2vec2 tutorials with 1 vectors
+2026-03-31 22:14:02 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for wav2vec2
+2026-03-31 22:14:02 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for wav2vec2 condensed_tutorials
+2026-03-31 22:14:02 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for wav2vec2 condensed_tutorials
+2026-03-31 22:14:04 INFO     [autogluon.assistant.tools_registry.indexing] Built index for wav2vec2 condensed_tutorials with 1 vectors
+2026-03-31 22:14:04 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for wav2vec2
+2026-03-31 22:14:04 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: qwen3
+2026-03-31 22:14:04 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for qwen3 tutorials
+2026-03-31 22:14:04 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for qwen3 tutorials
+2026-03-31 22:14:05 INFO     [autogluon.assistant.tools_registry.indexing] Built index for qwen3 tutorials with 1 vectors
+2026-03-31 22:14:05 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for qwen3
+2026-03-31 22:14:05 INFO     [autogluon.assistant.tools_registry.indexing] Found 1 summaries for qwen3 condensed_tutorials
+2026-03-31 22:14:05 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for qwen3 condensed_tutorials
+2026-03-31 22:14:07 INFO     [autogluon.assistant.tools_registry.indexing] Built index for qwen3 condensed_tutorials with 1 vectors
+2026-03-31 22:14:07 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for qwen3
+2026-03-31 22:14:07 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: autogluon.tabular
+2026-03-31 22:14:07 INFO     [autogluon.assistant.tools_registry.indexing] Found 13 summaries for autogluon.tabular tutorials
+2026-03-31 22:14:07 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.tabular tutorials
+2026-03-31 22:14:24 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.tabular tutorials with 13 vectors
+2026-03-31 22:14:24 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for autogluon.tabular
+2026-03-31 22:14:24 INFO     [autogluon.assistant.tools_registry.indexing] Found 13 summaries for autogluon.tabular condensed_tutorials
+2026-03-31 22:14:24 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.tabular condensed_tutorials
+2026-03-31 22:14:41 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.tabular condensed_tutorials with 13 vectors
+2026-03-31 22:14:41 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for autogluon.tabular
+2026-03-31 22:14:41 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: autogluon.multimodal
+2026-03-31 22:14:41 INFO     [autogluon.assistant.tools_registry.indexing] Found 38 summaries for autogluon.multimodal tutorials
+2026-03-31 22:14:41 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.multimodal tutorials
+2026-03-31 22:16:33 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.multimodal tutorials with 38 vectors
+2026-03-31 22:16:33 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for autogluon.multimodal
+2026-03-31 22:16:33 INFO     [autogluon.assistant.tools_registry.indexing] Found 38 summaries for autogluon.multimodal condensed_tutorials
+2026-03-31 22:16:33 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.multimodal condensed_tutorials
+2026-03-31 22:18:40 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.multimodal condensed_tutorials with 38 vectors
+2026-03-31 22:18:40 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for autogluon.multimodal
+2026-03-31 22:18:40 INFO     [autogluon.assistant.tools_registry.indexing] Processing tool: autogluon.timeseries
+2026-03-31 22:18:40 INFO     [autogluon.assistant.tools_registry.indexing] Found 4 summaries for autogluon.timeseries tutorials
+2026-03-31 22:18:40 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.timeseries tutorials
+2026-03-31 22:18:53 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.timeseries tutorials with 4 vectors
+2026-03-31 22:18:53 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built tutorials index for autogluon.timeseries
+2026-03-31 22:18:53 INFO     [autogluon.assistant.tools_registry.indexing] Found 4 summaries for autogluon.timeseries condensed_tutorials
+2026-03-31 22:18:53 INFO     [autogluon.assistant.tools_registry.indexing] Generating embeddings for autogluon.timeseries condensed_tutorials
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Built index for autogluon.timeseries condensed_tutorials with 4 vectors
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Successfully built condensed_tutorials index for autogluon.timeseries
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saving indices to disk
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved FlagEmbedding tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved FlagEmbedding condensed_tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved machine learning tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved machine learning condensed_tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved wav2vec2 tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved wav2vec2 condensed_tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved qwen3 tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved qwen3 condensed_tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.tabular tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.tabular condensed_tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.multimodal tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.multimodal condensed_tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.timeseries tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.tools_registry.indexing] Saved autogluon.timeseries condensed_tutorials index and metadata
+2026-03-31 22:19:04 INFO     [autogluon.assistant.agents.retriever_agent] Tutorial indices built and saved successfully.
+2026-03-31 22:19:04 INFO     [autogluon.assistant.managers.chatting_manager] Reading input files...
+2026-03-31 22:19:05 INFO     [autogluon.assistant.managers.chatting_manager] Read 1 file(s)
+2026-03-31 22:19:05 INFO     [autogluon.assistant.managers.chatting_manager] Data context initialized.
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] AutoGluon Assistant - Chat Mode
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] Input data: /Users/macbookpro/AI4ML/data/samples
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] Loaded 1 file(s):
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent]   - iris.csv
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] Session ID: chat_20260331_215232
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] Output folder: /Users/macbookpro/AI4ML/storage/mlzero_chat_smoketest
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] 
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] Type your questions below. Type 'exit', 'quit', or 'bye' to end the session.
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] ================================================================================
+2026-03-31 22:19:05 BRIEF    [autogluon.assistant.chatting_agent] 
+2026-03-31 22:19:05 INFO     [autogluon.assistant.managers.chatting_manager] ToolSelectorAgent: choosing and ranking ML libraries for the task.
+2026-03-31 22:19:05 INFO     [httpx] HTTP Request: GET http://127.0.0.1:8001/v1/models "HTTP/1.1 200 OK"
+2026-03-31 22:19:05 INFO     [autogluon.assistant.llm.openai_chat] Using OpenAI model: gpt-4-local for session: single_turn_tool_selector_20260331221905
+2026-03-31 22:21:10 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-31 22:21:10 WARNING  [autogluon.assistant.managers.chatting_manager] Failed to identify tool: Missing key initial_root_children
+    full_key: initial_root_children
+    object_type=dict
+2026-03-31 22:21:10 INFO     [autogluon.assistant.managers.chatting_manager] ChatAgent: generating response to user question.
+2026-03-31 22:21:38 INFO     [openai._base_client] Retrying request to /chat/completions in 0.437678 seconds
+2026-03-31 22:21:38 INFO     [openai._base_client] Retrying request to /chat/completions in 0.805744 seconds
+2026-03-31 22:21:39 ERROR    [autogluon.assistant.llm.base_chat] Attempt 1 failed: APIConnectionError: Connection error.
+2026-03-31 22:22:11 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-03-31 22:22:11 ERROR    [autogluon.assistant.llm.base_chat] Attempt 2 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 5850 tokens (5850 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 08:42:37 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 08:42:37 ERROR    [autogluon.assistant.llm.base_chat] Attempt 3 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 8771 tokens (8771 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 09:49:19 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 09:49:19 ERROR    [autogluon.assistant.llm.base_chat] Attempt 4 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 11692 tokens (11692 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 09:51:27 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 09:51:27 ERROR    [autogluon.assistant.llm.base_chat] Attempt 5 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 14613 tokens (14613 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}
+2026-04-01 09:53:36 INFO     [httpx] HTTP Request: POST http://127.0.0.1:8001/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-04-01 09:53:36 ERROR    [autogluon.assistant.llm.base_chat] Attempt 6 failed: OpenAIContextOverflowError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, you requested 17534 tokens (17534 in the messages, None in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}

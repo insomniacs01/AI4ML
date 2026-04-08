@@ -1,0 +1,4 @@
+Rank the best libraries for this task.
+Task: binary classification on a small CSV with numeric features and label column.
+Choices: machine learning, autogluon.tabular, autogluon.multimodal.
+Return a short explanation line, then 3 ranked library names, one per line, exact names only.
