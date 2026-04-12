@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
     selected_project_base: str = "mlzero / autogluon-assistant"
     execution_runtime: str = "mlzero + local openai-compatible llama-cpp"
 
+    # ---- User / Auth settings ----
+    jwt_secret_key: str = secrets.token_urlsafe(32)
+    jwt_expire_minutes: int = 720  # 12 hours
+    user_storage_dir: Path = REPO_ROOT / "storage" / "users"
+
     @property
     def mlzero_provider_base_url(self) -> str:
         return f"http://{self.mlzero_server_host}:{self.mlzero_server_port}/v1"
@@ -45,4 +51,5 @@ def get_settings() -> Settings:
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.run_output_dir.mkdir(parents=True, exist_ok=True)
     settings.mlzero_runtime_dir.mkdir(parents=True, exist_ok=True)
+    settings.user_storage_dir.mkdir(parents=True, exist_ok=True)
     return settings
