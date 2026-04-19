@@ -32,7 +32,8 @@ class MLZeroExecutor(BaseExecutor):
             raise FileNotFoundError(
                 f"MLZero config file not found: {self.settings.mlzero_config_path}"
             )
-        self.provider.ensure_running()
+        if self.settings.llm_mode == "local":
+            self.provider.ensure_running()
 
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         output_dir = self.output_root / task.id / run_id
@@ -40,9 +41,7 @@ class MLZeroExecutor(BaseExecutor):
         output_dir.mkdir(parents=True, exist_ok=True)
         self._prepare_input_bundle(task, dataset_path, input_dir)
 
-        env = os.environ.copy()
-        env["OPENAI_API_KEY"] = self.settings.mlzero_openai_api_key
-        env["OPENAI_BASE_URL"] = self.settings.mlzero_provider_base_url
+        env = self._build_llm_environment()
         env["HF_ENDPOINT"] = self.settings.mlzero_hf_endpoint
         env["HF_HUB_OFFLINE"] = "1"
         env["TRANSFORMERS_OFFLINE"] = "1"
@@ -60,7 +59,7 @@ class MLZeroExecutor(BaseExecutor):
             "-c",
             str(self.settings.mlzero_config_path),
             "--provider",
-            "openai",
+            self.settings.llm_provider,
             "-n",
             str(self.settings.mlzero_max_iterations),
             "--initial-instruction",
@@ -178,3 +177,40 @@ class MLZeroExecutor(BaseExecutor):
             "STDERR tail:\n"
             f"{stderr_tail or '<empty>'}"
         )
+
+    def _build_llm_environment(self) -> dict[str, str]:
+        env = os.environ.copy()
+
+        if self.settings.llm_provider == "openai":
+            if self.settings.llm_mode == "local":
+                env["OPENAI_API_KEY"] = self.settings.mlzero_openai_api_key
+                env["OPENAI_BASE_URL"] = self.settings.mlzero_provider_base_url
+            else:
+                if not self.settings.llm_api_key:
+                    raise RuntimeError("AI4ML_LLM_API_KEY is required for remote OpenAI-compatible providers.")
+                env["OPENAI_API_KEY"] = self.settings.llm_api_key
+                if self.settings.llm_base_url:
+                    env["OPENAI_BASE_URL"] = self.settings.llm_base_url
+                else:
+                    env.pop("OPENAI_BASE_URL", None)
+        elif self.settings.llm_provider == "anthropic":
+            if not self.settings.anthropic_api_key:
+                raise RuntimeError("AI4ML_ANTHROPIC_API_KEY is required for provider=anthropic.")
+            env["ANTHROPIC_API_KEY"] = self.settings.anthropic_api_key
+        elif self.settings.llm_provider == "azure":
+            if not self.settings.azure_openai_api_key:
+                raise RuntimeError("AI4ML_AZURE_OPENAI_API_KEY is required for provider=azure.")
+            if not self.settings.azure_openai_endpoint:
+                raise RuntimeError("AI4ML_AZURE_OPENAI_ENDPOINT is required for provider=azure.")
+            if not self.settings.openai_api_version:
+                raise RuntimeError("AI4ML_OPENAI_API_VERSION is required for provider=azure.")
+            env["AZURE_OPENAI_API_KEY"] = self.settings.azure_openai_api_key
+            env["AZURE_OPENAI_ENDPOINT"] = self.settings.azure_openai_endpoint
+            env["OPENAI_API_VERSION"] = self.settings.openai_api_version
+        else:
+            raise RuntimeError(
+                f"Unsupported AI4ML_LLM_PROVIDER='{self.settings.llm_provider}'. "
+                "Use one of: openai, anthropic, azure."
+            )
+
+        return env

@@ -59,11 +59,24 @@ class ChatLLMFactory:
 
         if provider != "sagemaker":
             valid_models = cls.get_valid_models(provider)
-            if model not in valid_models:
-                if model[3:] not in valid_models:  # TODO: better logic for cross region inference
-                    raise ValueError(
-                        f"Invalid model: {model} for provider {provider}. All valid models are {valid_models}. If you are using Bedrock, please check if the requested model is available in the provided AWS_DEFAULT_REGION: {os.environ.get('AWS_DEFAULT_REGION')}"
-                    )
+            if valid_models:
+                if model not in valid_models:
+                    if model[3:] not in valid_models:  # TODO: better logic for cross region inference
+                        if provider == "openai" and getattr(config, "proxy_url", None):
+                            logger.warning(
+                                "Model '%s' not returned by endpoint '%s'; continuing because an OpenAI-compatible proxy_url is configured.",
+                                model,
+                                config.proxy_url,
+                            )
+                        else:
+                            raise ValueError(
+                                f"Invalid model: {model} for provider {provider}. All valid models are {valid_models}. If you are using Bedrock, please check if the requested model is available in the provided AWS_DEFAULT_REGION: {os.environ.get('AWS_DEFAULT_REGION')}"
+                            )
+            elif provider == "openai":
+                logger.warning(
+                    "Could not fetch model list for provider=openai; skipping strict model validation and using configured model '%s'.",
+                    model,
+                )
 
         if provider == "openai":
             return create_openai_chat(config, session_name)

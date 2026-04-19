@@ -1,0 +1,95 @@
+per_execution_timeout: 1800
+
+max_file_group_size_to_show: 5
+num_example_files_to_show: 2
+
+max_chars_per_file: 512
+num_tutorial_retrievals: 4
+max_num_tutorials: 2
+max_user_input_length: 2048
+max_error_message_length: 2048
+max_tutorial_length: 4096
+configure_env: false
+condense_tutorials: true
+use_tutorial_summary: true
+continuous_improvement: false
+optimize_system_resources: false
+cleanup_unused_env: true
+enable_meta_prompting: false
+
+llm: &default_llm
+  provider: anthropic
+  model: claude-3-5-sonnet-latest
+  max_tokens: 768
+  proxy_url: null
+  temperature: 0.1
+  top_p: 0.9
+  verbose: false
+  multi_turn: false
+  template: null
+  add_coding_format_instruction: false
+  apply_meta_prompting: false
+
+chat_agent:
+  <<: *default_llm
+  multi_turn: true
+  temperature: 0.3
+  max_tokens: 512
+
+python_coder:
+  <<: *default_llm
+  multi_turn: true
+  max_tokens: 768
+
+bash_coder:
+  <<: *default_llm
+  multi_turn: true
+  max_tokens: 512
+
+executer:
+  <<: *default_llm
+  max_tokens: 256
+  max_stdout_length: 8192
+  max_stderr_length: 4096
+
+meta_prompting:
+  <<: *default_llm
+  multi_turn: false
+
+reader:
+  <<: *default_llm
+  max_tokens: 256
+  details: false
+
+error_analyzer:
+  <<: *default_llm
+  max_tokens: 384
+
+retriever:
+  <<: *default_llm
+  max_tokens: 256
+
+reranker:
+  <<: *default_llm
+  max_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+
+description_file_retriever:
+  <<: *default_llm
+  max_tokens: 256
+  temperature: 0.0
+  top_p: 1.0
+
+task_descriptor:
+  <<: *default_llm
+  max_tokens: 384
+  max_description_files_length_to_show: 1024
+  max_description_files_length_for_summarization: 8192
+  apply_meta_prompting: false
+
+tool_selector:
+  <<: *default_llm
+  max_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
