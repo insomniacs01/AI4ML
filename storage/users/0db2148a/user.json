@@ -1,0 +1,11 @@
+{
+  "id": "0db2148a",
+  "username": "dev01",
+  "hashed_password": "d3789d7e1e66672cb82a3f5d2a3bb8a4$32d35755f4dbe2fd69dbf3209fbf71e71c9bbcbc273cd7c72611b0e94ac733e5",
+  "email": "dev@example.com",
+  "role": "developer",
+  "api_token_quota": 100,
+  "is_active": true,
+  "created_at": "2026-04-12T16:14:04.757728Z",
+  "updated_at": "2026-04-12T16:14:04.782230Z"
+}

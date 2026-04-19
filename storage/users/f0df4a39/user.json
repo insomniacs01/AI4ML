@@ -1,0 +1,11 @@
+{
+  "id": "f0df4a39",
+  "username": "admin",
+  "hashed_password": "23958adae1258494ba8dca67b5b5333c$685f0313193649d0beee25571a8c8c6fa0dd208827c8fe751d87a7fdb008cb5e",
+  "email": "admin@ai4ml.local",
+  "role": "admin",
+  "api_token_quota": 100,
+  "is_active": true,
+  "created_at": "2026-04-12T16:13:17.130243Z",
+  "updated_at": "2026-04-12T16:13:17.157534Z"
+}

@@ -1,0 +1,217 @@
+llama_context: n_ctx_seq (4096) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+INFO:     Started server process [11484]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:63331 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63332 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63343 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63343 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63459 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64143 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64287 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64473 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64474 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64474 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64753 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64754 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for connections to close. (CTRL+C to force quit)
+Interrupted system call ; error code 4
+llama_context: n_ctx_seq (4096) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+INFO:     Started server process [12885]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:64888 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64904 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:64929 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64931 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64932 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64933 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64950 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:49322 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49355 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49356 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49363 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49355 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49554 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:49749 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:49877 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:49898 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49935 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49936 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49937 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+Interrupted system call ; error code 4
+llama_context: n_ctx_seq (4096) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+INFO:     Started server process [13912]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50105 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50119 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50120 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50121 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+Interrupted system call ; error code 4
+llama_context: n_ctx_seq (4096) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+INFO:     Started server process [14391]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50211 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50213 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50214 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50236 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50243 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50244 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+Interrupted system call ; error code 4
+llama_context: n_ctx_seq (4096) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+INFO:     Started server process [15029]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50329 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50351 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50352 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+Interrupted system call ; error code 4
+llama_context: n_ctx_seq (4096) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+INFO:     Started server process [15827]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50698 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50705 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50706 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50809 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50820 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50821 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58681 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58695 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58696 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58844 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58900 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58901 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58902 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58903 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59008 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58903 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59051 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59084 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59160 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59161 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59162 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59246 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59253 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59273 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59295 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59312 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59327 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59374 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59403 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59412 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59163 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59551 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59925 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59926 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59927 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59944 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59949 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59968 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59977 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59980 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59987 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59988 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59994 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60033 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60035 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60036 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60046 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60048 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60059 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60063 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60067 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60069 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60071 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60076 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60107 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60108 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60109 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60117 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60118 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60127 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60133 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60136 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60137 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60140 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60110 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60235 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60236 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60237 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60236 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60863 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60864 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60865 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60935 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60942 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60995 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61004 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61011 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61014 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61017 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61020 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61023 - "POST /v1/chat/completions HTTP/1.1" 200 OK

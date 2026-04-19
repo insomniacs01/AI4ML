@@ -1,0 +1,11 @@
+{
+  "id": "2e31e7b9",
+  "username": "student01",
+  "hashed_password": "ce82d92b30d7d91b1ca80fffbcf86198$a36c44c2b9b91c9aec98af65aef7779f9fd5f7bddf0c744be87061a852dff84d",
+  "email": "student@example.com",
+  "role": "user",
+  "api_token_quota": 100,
+  "is_active": true,
+  "created_at": "2026-04-12T16:14:04.712153Z",
+  "updated_at": "2026-04-12T16:14:04.747991Z"
+}
