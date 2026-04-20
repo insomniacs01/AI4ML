@@ -3,13 +3,23 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from backend.app.core.config import get_settings
-from backend.app.models.task import TaskCreateRequest, TaskListResponse, TaskRecord, TaskRunRequest, TaskStatus
+from backend.app.models.task import (
+    TaskCreateRequest,
+    TaskListResponse,
+    TaskRecord,
+    TaskRunRequest,
+    TaskStatus,
+    TokenUsageResponse,
+)
 from backend.app.services.executors.base import BaseExecutor
 from backend.app.services.executors.mlzero_executor import MLZeroExecutor
 from backend.app.services.task_store import TaskStore
+from backend.app.services.token_usage import read_token_usage
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -42,6 +52,30 @@ def get_task(task_id: str) -> TaskRecord:
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     return task
+
+
+@router.get("/{task_id}/token-usage", response_model=TokenUsageResponse)
+def get_task_token_usage(task_id: str) -> TokenUsageResponse:
+    task = get_task_store().get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    if task.last_run is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="task has not been run")
+
+    output_dir = Path(task.last_run.output_dir)
+    if not output_dir.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run output directory not found")
+
+    stats = read_token_usage(output_dir)
+    return TokenUsageResponse(
+        task_id=task.id,
+        run_output_dir=str(output_dir),
+        input_tokens=stats.input_tokens,
+        output_tokens=stats.output_tokens,
+        total_tokens=stats.total_tokens,
+        source=stats.source,
+        updated_at=datetime.now(timezone.utc),
+    )
 
 
 @router.post("/{task_id}/dataset", response_model=TaskRecord)

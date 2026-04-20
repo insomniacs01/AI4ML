@@ -5,7 +5,7 @@ function formatMetric(task) {
   return `${task.last_run.metric_name}: ${task.last_run.metric_value.toFixed(4)}`;
 }
 
-export default function TaskCard({ task, onRun, running }) {
+export default function TaskCard({ task, totalTokens, onRun, running }) {
   return (
     <article className="task-card">
       <div className="task-card-top">
@@ -32,6 +32,10 @@ export default function TaskCard({ task, onRun, running }) {
         <div>
           <dt>latest</dt>
           <dd>{formatMetric(task)}</dd>
+        </div>
+        <div>
+          <dt>tokens</dt>
+          <dd>{typeof totalTokens === "number" ? totalTokens : "--"}</dd>
         </div>
       </dl>
       {task.last_run ? (

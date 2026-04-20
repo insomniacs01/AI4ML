@@ -37,5 +37,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ time_limit: timeLimit })
     });
+  },
+  getTaskTokenUsage(taskId) {
+    return request(`/tasks/${taskId}/token-usage`);
   }
 };

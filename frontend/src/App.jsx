@@ -15,6 +15,7 @@ const initialForm = {
 export default function App() {
   const [health, setHealth] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [taskTokenTotals, setTaskTokenTotals] = useState({});
   const [file, setFile] = useState(null);
   const [form, setForm] = useState(initialForm);
   const [message, setMessage] = useState("");
@@ -30,9 +31,23 @@ export default function App() {
   async function refresh() {
     try {
       const [healthData, taskData] = await Promise.all([api.health(), api.listTasks()]);
+      const tokenEntries = await Promise.all(
+        taskData.items.map(async (task) => {
+          if (!task.last_run) {
+            return [task.id, null];
+          }
+          try {
+            const usage = await api.getTaskTokenUsage(task.id);
+            return [task.id, usage.total_tokens];
+          } catch {
+            return [task.id, null];
+          }
+        })
+      );
       startTransition(() => {
         setHealth(healthData);
         setTasks(taskData.items);
+        setTaskTokenTotals(Object.fromEntries(tokenEntries));
       });
     } catch (error) {
       setMessage(error.message);
@@ -129,6 +144,7 @@ export default function App() {
                 <TaskCard
                   key={task.id}
                   task={task}
+                  totalTokens={taskTokenTotals[task.id]}
                   onRun={handleRun}
                   running={runningTaskId === task.id}
                 />
