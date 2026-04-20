@@ -23,6 +23,16 @@ class RunSummary(BaseModel):
     output_dir: str
 
 
+class TokenUsageResponse(BaseModel):
+    task_id: str
+    run_output_dir: str
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    source: str
+    updated_at: datetime
+
+
 class TaskCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(min_length=1, max_length=500)
