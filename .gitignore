@@ -2,10 +2,15 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+.idea/
+/package-lock.json
 docs/
 local/models/
+local/*.env
 external/**/.git/
 frontend/node_modules/
 storage/autogluon_iris_demo/
 storage/autogluon_runs/
 storage/tasks/
+storage/mlzero_runtime/*.pid
+storage/mlzero_runs/

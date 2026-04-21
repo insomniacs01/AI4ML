@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,6 +21,15 @@ class Settings(BaseSettings):
     run_output_dir: Path = REPO_ROOT / "storage" / "mlzero_runs"
     mlzero_runtime_dir: Path = REPO_ROOT / "storage" / "mlzero_runtime"
     mlzero_config_path: Path = REPO_ROOT / "backend" / "config" / "mlzero-local-openai.yaml"
+    llm_mode: str = "local"
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4-local"
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    azure_openai_api_key: Optional[str] = None
+    azure_openai_endpoint: Optional[str] = None
+    openai_api_version: Optional[str] = None
     mlzero_model_path: Path = REPO_ROOT / "local" / "models" / "Qwen2.5-Coder-0.5B-Instruct-Q4_K_M.gguf"
     mlzero_mamba_executable: Path = Path.home() / ".local" / "miniforge3" / "bin" / "mamba"
     mlzero_env_name: str = "mlzero"
