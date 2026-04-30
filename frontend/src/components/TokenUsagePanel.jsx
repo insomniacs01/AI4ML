@@ -49,12 +49,13 @@ export function TokenUsageCard({
   emptyText,
   description,
   showBreakdown = false,
+  embedded = false,
 }) {
   const sessionEntries = getBreakdownEntries(report, "sessions");
   const conversationEntries = getBreakdownEntries(report, "conversations");
 
   return (
-    <section className="section-card">
+    <section className={embedded ? "token-usage-card-embedded" : "section-card"}>
       <div className="section-head">
         <div>
           <h3>{title}</h3>

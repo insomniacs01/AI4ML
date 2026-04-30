@@ -21,21 +21,28 @@ import WorkflowStagePanel from "./components/WorkflowStagePanel.jsx";
 import { api } from "./lib/api.js";
 import { readSupabaseAuthSettings, supabase, supabaseReady } from "./lib/supabase.js";
 
+const NAV_GROUPS = [
+  { id: "work", label: "建模工作台" },
+  { id: "collab", label: "协同与资产" },
+  { id: "admin", label: "团队治理" },
+  { id: "system", label: "运行状态" },
+];
+
 const NAV_ITEMS = [
-  { id: "tasks", label: "任务", short: "任" },
-  { id: "workflow", label: "工作流", short: "流" },
-  { id: "report", label: "报告", short: "报" },
-  { id: "conversations", label: "AI 对话", short: "话" },
-  { id: "code", label: "代码工作区", short: "码", requiresDeveloper: true },
-  { id: "human", label: "人机协同", short: "协" },
-  { id: "usage", label: "Token 用量", short: "耗" },
-  { id: "connectors", label: "连接器", short: "连", requiresAdmin: true },
-  { id: "routing", label: "默认 AI", short: "由", requiresAdmin: true },
-  { id: "quotas", label: "配额", short: "额", requiresAdmin: true },
-  { id: "assets", label: "资产", short: "资" },
-  { id: "team", label: "团队", short: "团" },
-  { id: "audit", label: "审计", short: "审", requiresAdmin: true },
-  { id: "system", label: "系统", short: "系" },
+  { id: "tasks", label: "任务", short: "任", group: "work", helper: "创建、上传、运行" },
+  { id: "workflow", label: "工作流", short: "流", group: "work", helper: "阶段进度" },
+  { id: "report", label: "报告", short: "报", group: "work", helper: "结果解释" },
+  { id: "conversations", label: "AI 对话", short: "话", group: "work", helper: "Prompt / Response" },
+  { id: "code", label: "代码工作区", short: "码", group: "work", helper: "真实工件", requiresDeveloper: true },
+  { id: "human", label: "人机协同", short: "协", group: "collab", helper: "复核与恢复" },
+  { id: "usage", label: "Token 用量", short: "耗", group: "collab", helper: "消耗追踪" },
+  { id: "assets", label: "资产", short: "资", group: "collab", helper: "登记与审核" },
+  { id: "connectors", label: "连接器", short: "连", group: "admin", helper: "模型来源", requiresAdmin: true },
+  { id: "routing", label: "默认 AI", short: "由", group: "admin", helper: "阶段路由", requiresAdmin: true },
+  { id: "quotas", label: "配额", short: "额", group: "admin", helper: "成员额度", requiresAdmin: true },
+  { id: "team", label: "团队", short: "团", group: "admin", helper: "成员权限" },
+  { id: "audit", label: "审计", short: "审", group: "admin", helper: "治理日志", requiresAdmin: true },
+  { id: "system", label: "系统", short: "系", group: "system", helper: "健康检查" },
 ];
 
 function createEmptyTaskPolicy() {
@@ -101,6 +108,13 @@ const TASK_STATUS_TONES = {
   failed: "danger",
   published: "success",
 };
+const TEAM_ROLE_LABELS = {
+  team_owner: "团队所有者",
+  admin: "管理员",
+  business_user: "业务成员",
+  developer_user: "开发成员",
+  member: "成员",
+};
 
 function cn(...parts) { return parts.filter(Boolean).join(" "); }
 function formatDateTime(value) {
@@ -160,6 +174,7 @@ function getAnalysisSourceLabel(task) {
   if (!source) return "未标注";
   return source === "ai_connector" ? "当前运行时 AI 连接器" : String(source);
 }
+function getTeamRoleLabel(role) { return TEAM_ROLE_LABELS[role] ?? role ?? "未识别角色"; }
 function mergeTaskIntoList(items, nextTask) { return [nextTask, ...items.filter((task) => task.id !== nextTask.id)]; }
 function mergeConnectorIntoList(items, nextConnector) {
   const nextItems = items.map((item) => item.id === nextConnector.id ? nextConnector : nextConnector.is_active ? { ...item, is_active: false } : item);
@@ -279,6 +294,7 @@ export default function App() {
     () => NAV_ITEMS.filter((item) => (!item.requiresAdmin || teamCanManage) && (!item.requiresDeveloper || teamCanDevelop)),
     [teamCanDevelop, teamCanManage],
   );
+  const activeNavItem = useMemo(() => visibleNavItems.find((item) => item.id === activePage) ?? visibleNavItems[0] ?? null, [activePage, visibleNavItems]);
 
   async function loadHealth() {
     setHealthLoading(true);
@@ -1074,13 +1090,13 @@ export default function App() {
     const showingFailedAttempt = selectedTask.status === "failed" && lastRunAttempt;
     const conversationCount = Array.isArray(taskAIConversations?.items) ? taskAIConversations.items.length : 0;
     return (
-      <div className="detail-stack">
-        <section className="section-card">
+      <div className="detail-stack task-detail-panel">
+        <section className="section-card task-detail-hero">
           <div className="section-head">
-            <div><p className="eyebrow">任务详情</p><h3>{selectedTask.name}</h3><p>{selectedTask.description}</p></div>
+            <div><p className="eyebrow">任务详情</p><h3>{selectedTask.name}</h3><p className="task-description-large">{selectedTask.description}</p></div>
             <span className={`runtime-pill ${getTaskStatusTone(selectedTask.status)}`}>{formatTaskStatus(selectedTask.status)}</span>
           </div>
-          <div className="summary-grid">
+          <div className="summary-grid task-detail-kpis">
             <article className="summary-item"><span>数据集</span><strong>{selectedTask.dataset_filename ?? "未上传"}</strong></article>
             <article className="summary-item"><span>AI 解析状态</span><strong>{getTaskAnalysisStatus(selectedTask)}</strong></article>
             <article className="summary-item"><span>目标列</span><strong>{selectedTask.label_column ?? "未解析"}</strong></article>
@@ -1173,21 +1189,37 @@ export default function App() {
         </section>
 
         {selectedTask.last_run ? (
-          <LeaderboardPanel
-            run={selectedTask.last_run}
-            formatMetricName={formatMetricName}
-            formatMetricValue={formatMetricValue}
-          />
+          <details className="section-card task-detail-disclosure">
+            <summary>
+              <div>
+                <h3>候选模型对比</h3>
+                <p>最佳候选 {selectedTask.last_run.best_model}。完整 leaderboard 默认收起，避免任务详情右栏过长。</p>
+              </div>
+              <span className="disclosure-action">查看详细</span>
+            </summary>
+            <div className="disclosure-preview-grid">
+              <article className="summary-item"><span>最佳候选</span><strong>{selectedTask.last_run.best_model}</strong></article>
+              <article className="summary-item"><span>候选数量</span><strong>{Array.isArray(selectedTask.last_run.leaderboard) ? `${selectedTask.last_run.leaderboard.length} 个` : "未记录"}</strong></article>
+              <article className="summary-item"><span>指标</span><strong>{formatMetricName(selectedTask.last_run.metric_name)}</strong></article>
+            </div>
+            <LeaderboardPanel
+              run={selectedTask.last_run}
+              formatMetricName={formatMetricName}
+              formatMetricValue={formatMetricValue}
+              embedded
+            />
+          </details>
         ) : null}
 
-        <section className="section-card">
-          <div className="section-head">
+        <details className="section-card task-detail-disclosure">
+          <summary>
             <div>
-              <h3>Token 用量</h3>
-              <p>这里直接显示当前任务已经真实记录到的 token。没有数据时显示“未记录”，真实为 0 时会保留 0。</p>
+              <h3>Token 用量明细</h3>
+              <p>合计 {hasTokenUsage(combinedUsage) ? formatTokenValue(combinedUsage.total_tokens) : "未记录"}。只在需要排查消耗时展开查看 AI 解析与 MLZero 运行 token。</p>
             </div>
-          </div>
-          <div className="summary-grid">
+            <span className="disclosure-action">查看详细</span>
+          </summary>
+          <div className="summary-grid disclosure-summary-grid">
             <article className="summary-item">
               <span>AI 解析总 Token</span>
               <strong>{hasTokenUsage(analysisUsage) ? formatTokenValue(analysisUsage.total_tokens) : "未记录"}</strong>
@@ -1201,22 +1233,26 @@ export default function App() {
               <strong>{hasTokenUsage(combinedUsage) ? formatTokenValue(combinedUsage.total_tokens) : "未记录"}</strong>
             </article>
           </div>
-        </section>
 
-        <TokenUsageCard
-          title="AI 解析 Token"
-          report={analysisUsage}
-          description="这里记录的是任务上传后或手动点击“AI 解析”时，当前运行时连接器实际返回的 token 使用量。"
-          emptyText="当前还没有记录到 AI 解析 token。老任务如果是在这个模块完成之前创建的，也可能没有历史数据。"
-        />
+          <div className="disclosure-content-stack">
+            <TokenUsageCard
+              title="AI 解析 Token"
+              report={analysisUsage}
+              description="这里记录的是任务上传后或手动点击“AI 解析”时，当前运行时连接器实际返回的 token 使用量。"
+              emptyText="当前还没有记录到 AI 解析 token。老任务如果是在这个模块完成之前创建的，也可能没有历史数据。"
+              embedded
+            />
 
-        <TokenUsageCard
-          title="MLZero 运行 Token"
-          report={runUsage}
-          description="这里读取的是最近一次 MLZero 尝试输出目录里的真实 token_usage.json，不是前端估算值。失败但已经产生日志和 token_usage.json 的尝试，也会显示。"
-          emptyText="当前还没有记录到 MLZero 运行 token。只有对应输出目录里生成了 token_usage.json，系统才会显示。"
-          showBreakdown
-        />
+            <TokenUsageCard
+              title="MLZero 运行 Token"
+              report={runUsage}
+              description="这里读取的是最近一次 MLZero 尝试输出目录里的真实 token_usage.json，不是前端估算值。失败但已经产生日志和 token_usage.json 的尝试，也会显示。"
+              emptyText="当前还没有记录到 MLZero 运行 token。只有对应输出目录里生成了 token_usage.json，系统才会显示。"
+              showBreakdown
+              embedded
+            />
+          </div>
+        </details>
       </div>
     );
   }
@@ -1238,14 +1274,47 @@ export default function App() {
     <main className="app-shell">
       <div className="app-frame">
         <aside className="sidebar">
-          <div className="brand"><div className="brand-mark">AI</div><div><strong>AI4ML</strong><span>前端录入 + AI 解析 + MLZero</span></div></div>
+          <div className="brand">
+            <div className="brand-mark">AI</div>
+            <div>
+              <strong>AI4ML</strong>
+              <span>智能建模工作台</span>
+            </div>
+          </div>
+          <div className="sidebar-summary">
+            <span>当前团队</span>
+            <strong>{activeTeam?.name ?? "未选择团队"}</strong>
+            <em>{getTeamRoleLabel(activeTeam?.role)}</em>
+          </div>
           <nav className="nav-list" aria-label="主导航">
-            {visibleNavItems.map((item) => <button key={item.id} type="button" className={cn("nav-item", activePage === item.id && "active")} onClick={() => setActivePage(item.id)}><span className="nav-icon">{item.short}</span><span>{item.label}</span></button>)}
+            {NAV_GROUPS.map((group) => {
+              const items = visibleNavItems.filter((item) => item.group === group.id);
+              if (!items.length) return null;
+              return (
+                <section key={group.id} className="nav-group" aria-label={group.label}>
+                  <p>{group.label}</p>
+                  {items.map((item) => (
+                    <button key={item.id} type="button" className={cn("nav-item", activePage === item.id && "active")} onClick={() => setActivePage(item.id)}>
+                      <span className="nav-icon">{item.short}</span>
+                      <span className="nav-copy"><strong>{item.label}</strong><em>{item.helper}</em></span>
+                    </button>
+                  ))}
+                </section>
+              );
+            })}
           </nav>
         </aside>
         <div className="content">
           <header className="topbar">
-            <div className="topbar-left"><div className="topbar-heading"><strong>{visibleNavItems.find((item) => item.id === activePage)?.label ?? "工作台"}</strong><span>{activeTeam?.name ?? "未选择团队"}</span></div></div>
+            <div className="topbar-left">
+              <div className="topbar-heading">
+                <strong>{activeNavItem?.label ?? "工作台"}</strong>
+                <span>{activeNavItem?.helper ?? "当前页面"}</span>
+              </div>
+              <div className={cn("runtime-pill", activeConnector ? "success" : "warning")}>
+                {activeConnector ? `运行时：${activeConnector.display_name}` : "未激活连接器"}
+              </div>
+            </div>
             <div className="topbar-right">
               <select className="team-switcher" value={activeTeamId} onChange={(event) => setActiveTeamId(event.target.value)}>{memberships.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select>
               <button type="button" className="chip-button" onClick={() => void refreshWorkspaceData()}>刷新</button>
@@ -1256,13 +1325,23 @@ export default function App() {
           <div className="page-scroll">
             {activePage === "tasks" ? (
               <>
-                <section className="page-header"><div><p className="eyebrow">Tasks</p><h1>任务上传与 AI 解析</h1><p className="page-copy">上传 CSV 后，系统会立即调用当前运行时 AI 去解析目标列、任务类型和指标。你也可以切换连接器后，对同一任务手动重新做一次 AI 解析。</p></div><div className="detail-stack"><div className="runtime-pill info">当前运行时：{activeConnector ? `${activeConnector.display_name} · ${activeConnector.model_name}` : health?.model_alias ?? "未读取"}</div></div></section>
+                <section className="page-header workbench-header">
+                  <div>
+                    <p className="eyebrow">Tasks</p>
+                    <h1>任务上传与 AI 解析</h1>
+                    <p className="page-copy">把自然语言需求、CSV 数据集、阶段 AI 路由和人工复核策略放在一条清晰链路里。上传后系统会调用当前团队的运行时 AI 填充目标列、任务类型和指标。</p>
+                  </div>
+                  <div className="header-status-stack">
+                    <div className="runtime-pill info">当前运行时：{activeConnector ? `${activeConnector.display_name} · ${activeConnector.model_name}` : health?.model_alias ?? "未读取"}</div>
+                    <div className="runtime-pill">任务数：{tasks.length}</div>
+                  </div>
+                </section>
                 {taskMessage ? <div className="notice-banner">{taskMessage}</div> : null}
                 {taskError ? <div className="error-banner">{taskError}</div> : null}
-                <div className="dashboard-grid">
+                <div className="task-workspace-grid">
                   <div className="detail-stack">
                     <TaskForm form={taskForm} connectors={connectors} selectedFile={taskFile} fileInputKey={taskUploadToken} submitting={submittingTask} onFieldChange={handleTaskFormFieldChange} onStageRoutingChange={handleTaskStageRoutingChange} onAddPolicy={handleAddTaskPolicy} onPolicyChange={handleTaskPolicyChange} onRemovePolicy={handleRemoveTaskPolicy} onFileChange={(event) => setTaskFile(event.target.files?.[0] ?? null)} onSubmit={handleTaskSubmit} />
-                    <section className="section-card"><div className="section-head"><div><h3>任务列表</h3><p>这里能直接看出任务是否真的完成了 AI 解析，以及 MLZero 是否真正跑出结果。</p></div></div>{tasksState === "loading" && !tasks.length ? <div className="empty-state">正在读取任务列表...</div> : null}{!tasks.length && tasksState !== "loading" ? <div className="empty-state">还没有任务。先上传一个 CSV 任务。</div> : null}{tasks.length ? <div className="task-cards">{tasks.map((task) => <TaskCard key={task.id} task={task} selected={selectedTask?.id === task.id} running={runningTaskId === task.id} analyzing={analyzingTaskId === task.id} deleting={deletingTaskId === task.id} onSelect={setSelectedTaskId} onAnalyze={handleAnalyzeTask} onRun={handleRunTask} onDelete={handleDeleteTask} onOpenHumanCollaboration={(nextTaskId) => handleOpenHumanCollaboration(nextTaskId)} />)}</div> : null}</section>
+                    <section className="section-card task-list-card"><div className="section-head"><div><h3>任务列表</h3><p>按任务状态、AI 解析和最近运行结果快速判断下一步动作。</p></div></div>{tasksState === "loading" && !tasks.length ? <div className="empty-state">正在读取任务列表...</div> : null}{!tasks.length && tasksState !== "loading" ? <div className="empty-state">还没有任务。先上传一个 CSV 任务。</div> : null}{tasks.length ? <div className="task-cards">{tasks.map((task) => <TaskCard key={task.id} task={task} selected={selectedTask?.id === task.id} running={runningTaskId === task.id} analyzing={analyzingTaskId === task.id} deleting={deletingTaskId === task.id} onSelect={setSelectedTaskId} onAnalyze={handleAnalyzeTask} onRun={handleRunTask} onDelete={handleDeleteTask} onOpenHumanCollaboration={(nextTaskId) => handleOpenHumanCollaboration(nextTaskId)} />)}</div> : null}</section>
                   </div>
                   {renderTaskDetail()}
                 </div>

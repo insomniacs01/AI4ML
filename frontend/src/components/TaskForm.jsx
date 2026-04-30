@@ -42,7 +42,7 @@ export default function TaskForm({
   const connectorOptions = Array.isArray(connectors) ? connectors : [];
 
   return (
-    <section className="section-card">
+    <section className="section-card task-form-card">
       <div className="section-head">
         <div>
           <p className="eyebrow">Step 1</p>
@@ -80,7 +80,7 @@ export default function TaskForm({
           <p>上传后，系统会把任务描述、CSV 列名和预览样本发给当前阶段路由对应的 AI，自动填充目标列、任务类型和建议指标。</p>
         </div>
 
-        <section className="section-card">
+        <section className="task-subsection">
           <div className="section-head">
             <div>
               <h3>阶段 AI 覆盖</h3>
@@ -88,11 +88,11 @@ export default function TaskForm({
             </div>
           </div>
 
-          <div className="detail-stack">
+          <div className="stage-routing-grid">
             {STAGE_OPTIONS.map((stage) => {
               const current = form.stage_routing?.find((item) => item.stage === stage.value) ?? { stage: stage.value, connector_id: "", model_name: "" };
               return (
-                <div key={stage.value} className="section-card">
+                <article key={stage.value} className="stage-route-card">
                   <div className="section-head">
                     <div>
                       <h3>{stage.label}</h3>
@@ -124,13 +124,13 @@ export default function TaskForm({
                       />
                     </label>
                   </div>
-                </div>
+                </article>
               );
             })}
           </div>
         </section>
 
-        <section className="section-card">
+        <section className="task-subsection">
           <div className="section-head">
             <div>
               <h3>人工参与策略</h3>
@@ -143,9 +143,9 @@ export default function TaskForm({
 
           {!form.interaction_policies?.length ? <div className="empty-state compact">当前还没有人工参与策略。</div> : null}
 
-          <div className="detail-stack">
+          <div className="policy-list">
             {(form.interaction_policies ?? []).map((policy, index) => (
-              <div key={policy.client_id ?? `${policy.stage}-${index}`} className="section-card">
+              <article key={policy.client_id ?? `${policy.stage}-${index}`} className="policy-card">
                 <div className="section-head">
                   <div>
                     <h3>策略 {index + 1}</h3>
@@ -256,7 +256,7 @@ export default function TaskForm({
                     placeholder="例如：确认 metric_name 是否应改为 F1。"
                   />
                 </label>
-              </div>
+              </article>
             ))}
           </div>
         </section>

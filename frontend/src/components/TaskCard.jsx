@@ -129,21 +129,27 @@ export default function TaskCard({
 
       <p className="task-description">{task.description}</p>
 
-      <dl className="task-meta">
-        <div><dt>AI 解析</dt><dd>{getAnalysisStatus(task)}</dd></div>
-        <div><dt>目标列</dt><dd>{task.label_column ?? "未解析"}</dd></div>
-        <div><dt>任务类型</dt><dd>{formatProblemType(task.problem_type)}</dd></div>
-        <div><dt>数据集</dt><dd>{task.dataset_filename ?? "未上传"}</dd></div>
+      <div className="task-card-statusline">
+        <span>{getAnalysisStatus(task)}</span>
+        <span>{task.dataset_filename ?? "未上传数据"}</span>
+      </div>
+
+      <div className="task-highlights">
+        <div><span>目标列</span><strong>{task.label_column ?? "未解析"}</strong></div>
+        <div><span>任务类型</span><strong>{formatProblemType(task.problem_type)}</strong></div>
+        <div><span>最佳候选</span><strong>{getBestCandidateSummary(task)}</strong></div>
+        <div><span>候选数</span><strong>{getCandidateCountSummary(task)}</strong></div>
+      </div>
+
+      <dl className="task-meta task-meta-compact">
         <div><dt>最新结果</dt><dd>{getMetricSummary(task)}</dd></div>
-        <div><dt>最佳候选</dt><dd>{getBestCandidateSummary(task)}</dd></div>
-        <div><dt>候选数</dt><dd>{getCandidateCountSummary(task)}</dd></div>
         <div><dt>Token</dt><dd>{getTokenSummary(task)}</dd></div>
         <div><dt>更新时间</dt><dd>{new Date(task.updated_at).toLocaleString()}</dd></div>
       </dl>
 
       {task.notes ? <p className="meta-note">{task.notes}</p> : null}
 
-      <div className="button-row connector-actions">
+      <div className="button-row connector-actions task-card-actions">
         <button type="button" className="chip-button" onClick={() => onSelect(task.id)}>
           {selected ? "当前选中" : "查看详情"}
         </button>

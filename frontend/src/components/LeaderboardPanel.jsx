@@ -13,12 +13,13 @@ export default function LeaderboardPanel({
   run,
   formatMetricName = defaultFormatMetricName,
   formatMetricValue = defaultFormatMetricValue,
+  embedded = false,
 }) {
   if (!run) return null;
   const entries = normalizeLeaderboardEntries(run.leaderboard ?? [], run.metric_name ?? "validation_score");
 
   return (
-    <section className="section-card">
+    <section className={embedded ? "leaderboard-panel-embedded" : "section-card"}>
       <div className="section-head">
         <div>
           <h3>候选模型对比</h3>
