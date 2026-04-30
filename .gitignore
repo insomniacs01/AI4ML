@@ -6,6 +6,9 @@ docs/
 local/models/
 external/**/.git/
 frontend/node_modules/
+frontend/.env.local
+backend/.env.local
+/.env.local
 storage/autogluon_iris_demo/
 storage/autogluon_runs/
 storage/tasks/

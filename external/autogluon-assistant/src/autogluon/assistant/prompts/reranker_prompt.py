@@ -137,37 +137,34 @@ DO NOT include any other text, explanation, or formatting in your response.
             content=response, save_name="reranker_response.txt", per_iteration=True, add_uuid=False
         )
 
+        # Clean the response - take first line and keep only digits and commas
+        content = response.split("\n")[0]
+        content = "".join(char for char in content if char.isdigit() or char == ",")
+
+        if not content:
+            raise ValueError("Reranker LLM did not return any tutorial indices.")
+
         try:
-            # Clean the response - take first line and keep only digits and commas
-            content = response.split("\n")[0]
-            content = "".join(char for char in content if char.isdigit() or char == ",")
+            indices = [int(idx.strip()) - 1 for idx in content.split(",") if idx.strip()]
+        except ValueError as exc:
+            raise ValueError(f"Reranker LLM returned invalid tutorial indices: {response!r}") from exc
 
-            if not content:
-                logger.warning("No valid indices found in LLM response")
-                return []
+        selected_tutorials = []
+        seen_indices = set()
+        for idx in indices:
+            if idx < 0 or idx in seen_indices:
+                continue
+            seen_indices.add(idx)
+            if 0 <= idx < len(self.tutorials):
+                selected_tutorials.append(self.tutorials[idx])
 
-            # Parse comma-separated indices
-            selected_indices = []
-            try:
-                indices = [int(idx.strip()) - 1 for idx in content.split(",") if idx.strip()]
-                selected_indices = [idx for idx in indices if idx >= 0]  # Filter out negative indices
-            except ValueError as e:
-                logger.warning(f"Error parsing indices from LLM response: {e}")
-                return []
+        if not selected_tutorials:
+            raise ValueError("Reranker LLM selected no valid tutorial indices.")
 
-            selected_tutorials = []
-            for idx in selected_indices:
-                if 0 <= idx < len(self.tutorials):
-                    selected_tutorials.append(self.tutorials[idx])
+        if len(selected_tutorials) > self.manager.config.max_num_tutorials:
+            selected_tutorials = selected_tutorials[: self.manager.config.max_num_tutorials]
 
-            if len(selected_tutorials) > self.manager.config.max_num_tutorials:
-                selected_tutorials = selected_tutorials[: self.manager.config.max_num_tutorials]
-
-            self.manager.save_and_log_states(
-                content=selected_tutorials, save_name="selected_tutorials.txt", per_iteration=True, add_uuid=False
-            )
-            return selected_tutorials
-
-        except Exception as e:
-            logger.warning(f"Error parsing tutorial selection response: {e}")
-            return []
+        self.manager.save_and_log_states(
+            content=selected_tutorials, save_name="selected_tutorials.txt", per_iteration=True, add_uuid=False
+        )
+        return selected_tutorials

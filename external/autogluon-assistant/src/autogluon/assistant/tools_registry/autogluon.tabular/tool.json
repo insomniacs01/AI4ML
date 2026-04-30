@@ -4,8 +4,8 @@
   "description": "AutoGluon Tabular automates ML model training for tabular data, excelling at numerical and categorical data processing. It doesn't support NLP or image-based tasks.",
   "requirements": [],
   "prompt_template": [
-    "try to use presets=\"extreme\"",
-    "Do not manually split a validation set from the training data - AutoGluon Tabular automatically handles internal validation and reports validation scores, so simply pass the full training data to the fit() method.",
-    "AutoGluon Tabular requires converting multiple label columns into either a single combined label for mutually exclusive cases or training separate predictors for each label in non-exclusive scenarios."
+    "Do not use presets or optional model families unless the runtime instructions explicitly allow them.",
+    "Normalize AutoGluon leaderboard() output before saving project artifacts: persist exact fields model and validation_score, and rename timing columns such as pred_time_val to pred_time when available.",
+    "Use predictor.model_best or the top normalized leaderboard row to identify the selected model."
   ]
 }

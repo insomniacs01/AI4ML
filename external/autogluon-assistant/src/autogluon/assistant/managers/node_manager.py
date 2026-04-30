@@ -7,6 +7,7 @@ space. It also ensures all available tools are tried during the exploration proc
 import logging
 import math
 import os
+import stat
 import threading
 import time
 import uuid
@@ -18,6 +19,16 @@ from ..llm import ChatLLMFactory
 from ..tools_registry import registry
 
 logger = logging.getLogger(__name__)
+
+
+def _is_windows_reparse_directory(path: str) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        file_attributes = os.lstat(path).st_file_attributes
+    except (AttributeError, FileNotFoundError, OSError):
+        return False
+    return bool(file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT) and os.path.isdir(path) and not os.path.islink(path)
 
 
 @dataclass
@@ -1046,6 +1057,10 @@ class NodeManager:
                     )
                     os.unlink(best_run_folder)
                     logger.info("Removed existing best_run symlink")
+                elif _is_windows_reparse_directory(best_run_folder):
+                    logger.debug(f"Removing existing best_run directory junction: {best_run_folder}")
+                    os.rmdir(best_run_folder)
+                    logger.info("Removed existing best_run directory junction")
                 else:
                     import shutil
 
@@ -1081,13 +1096,8 @@ class NodeManager:
                     shutil.copytree(source_item, dest_item, dirs_exist_ok=True)
             logger.debug("Finished copying output folder contents")
 
-            # Create symbolic link to the source folder instead of copying
-            logger.debug(f"About to create symlink: {best_run_folder} -> {source_folder}")
-            logger.info("Creating best_run symlink to best solution folder (instant operation, saves disk space)")
-            os.symlink(source_folder, best_run_folder, target_is_directory=True)
-            logger.debug("Successfully created best_run symlink")
-
-            logger.info(f"Created best_run symlink (linked to node {target_node.id} - {link_reason})")
+            best_run_kind = self._create_best_run_folder(source_folder, best_run_folder)
+            logger.info(f"Created best_run {best_run_kind} (linked to node {target_node.id} - {link_reason})")
 
             # Save summary information in the target node folder
             summary_content = [
@@ -1096,7 +1106,7 @@ class NodeManager:
                 f"Linked to: node_{target_node.id}",
                 f"Reason: {link_reason}",
                 f"Tool used: {target_node.tool_used}",
-                f"Symlink created at: {os.path.basename(best_run_folder)}",
+                f"Best run folder created at: {os.path.basename(best_run_folder)} ({best_run_kind})",
                 "",
                 self.get_validation_score_summary(),
                 "",
@@ -1134,7 +1144,42 @@ class NodeManager:
                         logger.warning(f"Failed to remove old best folder {old_best_folder}: {e}")
 
         except Exception as e:
-            logger.error(f"Failed to create symlink: {e}")
+            logger.error(f"Failed to create best_run folder: {e}")
+
+    def _create_best_run_folder(self, source_folder: str, best_run_folder: str) -> str:
+        """Create a best_run entry that works on Windows without symlink privileges."""
+        logger.debug(f"About to create best_run folder: {best_run_folder} -> {source_folder}")
+
+        if os.name == "nt":
+            import subprocess
+
+            logger.info("Creating best_run directory junction to best solution folder")
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", best_run_folder, source_folder],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            if result.returncode == 0:
+                logger.debug("Successfully created best_run directory junction")
+                return "directory junction"
+
+            logger.warning(
+                "Failed to create best_run directory junction; copying best node folder instead. "
+                f"stdout={result.stdout.strip()!r} stderr={result.stderr.strip()!r}"
+            )
+            import shutil
+
+            shutil.copytree(source_folder, best_run_folder, dirs_exist_ok=True)
+            logger.debug("Successfully copied best node folder into best_run")
+            return "directory copy"
+
+        logger.info("Creating best_run symlink to best solution folder")
+        os.symlink(source_folder, best_run_folder, target_is_directory=True)
+        logger.debug("Successfully created best_run symlink")
+        return "symlink"
 
     def remove_current_iteration_folder(self):
         """Remove the current iteration folder to save disk space.
@@ -1153,21 +1198,21 @@ class NodeManager:
         logger.debug(f"  Current node: {self.current_node.id}")
         logger.debug(f"  Best run folder: {best_run_folder}")
 
-        # Check if best_run symlink exists and points to the current folder
-        if os.path.islink(best_run_folder):
-            logger.debug("  best_run is a symlink, checking target...")
-            link_target = os.readlink(best_run_folder)
-            # Resolve to absolute paths for comparison
-            link_target_abs = os.path.abspath(os.path.join(os.path.dirname(best_run_folder), link_target))
-            source_folder_abs = os.path.abspath(source_folder)
+        # Check if best_run resolves to the current folder. On Windows this may be
+        # a directory junction rather than a symlink.
+        if (os.path.islink(best_run_folder) or _is_windows_reparse_directory(best_run_folder)) and os.path.exists(
+            best_run_folder
+        ):
+            logger.debug("  best_run is a symlink or directory junction, checking target...")
+            try:
+                same_target = os.path.samefile(best_run_folder, source_folder)
+            except OSError:
+                same_target = False
 
-            logger.debug(f"  Symlink target (absolute): {link_target_abs}")
-            logger.debug(f"  Current folder (absolute): {source_folder_abs}")
-            logger.debug(f"  Are they the same? {link_target_abs == source_folder_abs}")
-
-            if link_target_abs == source_folder_abs:
+            logger.debug(f"  best_run points to current folder? {same_target}")
+            if same_target:
                 logger.info(
-                    f"Skipping removal of Node {self.current_node.id} folder - it is linked by best_run symlink."
+                    f"Skipping removal of Node {self.current_node.id} folder - it is linked by best_run."
                 )
                 return
 

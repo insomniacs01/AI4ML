@@ -1,8 +1,8 @@
 import logging
+import json
 import re
 from typing import Dict, List, Union
 
-from ..constants import DEFAULT_LIBRARY
 from ..tools_registry import registry
 from .base_prompt import BasePrompt
 
@@ -61,26 +61,18 @@ You are a data science expert tasked with selecting and ranking the most appropr
 ### Available ML Libraries:
 {tools_info}
 
-IMPORTANT: Your response MUST follow this exact format:
----
-EXPLANATION: <provide your detailed reasoning process for evaluating the libraries>
+Return JSON only with exactly these keys:
+{
+  "ranked_libraries": ["<best library>", "<second choice>", "<third choice>"],
+  "explanation": "<brief explanation>"
+}
 
-RANKED_LIBRARIES:
-1. <first choice library name>
-2. <second choice library name>
-3. <third choice library name>
-...
----
-
-Requirements for your response:
-1. First provide a detailed explanation of your reasoning process using the "EXPLANATION:" header
-2. Then provide a ranking of libraries using the "RANKED_LIBRARIES:" header
-3. The library names must be exactly as shown in the available libraries list
-4. Provide a ranking of at least 3 libraries (if available)
-5. In your explanation, analyze each library's strengths and weaknesses for this specific task
-6. Consider the task requirements, data characteristics, and library features
-
-Do not include any other formatting or additional sections in your response.
+Requirements:
+1. `ranked_libraries` must be a JSON array of exact library names copied from the available libraries list.
+2. Put the best choice first.
+3. Include at least 3 libraries if 3 or more are available.
+4. Keep `explanation` under 80 words.
+5. Do not use markdown, code fences, or any extra keys.
 """
 
     def _build(self, **kwargs) -> str:
@@ -90,9 +82,16 @@ Do not include any other formatting or additional sections in your response.
             **kwargs: Additional keyword arguments to customize the prompt building process
         """
 
-        # Render the prompt using the variable provider with additional variables
-        additional_vars = {"tools_info": _format_tools_info(registry.tools)}
+        supported_tool_names = getattr(self.manager, "supported_tool_names", None)
+        if isinstance(supported_tool_names, list) and supported_tool_names:
+            tools_info = {tool_name: registry.tools[tool_name] for tool_name in supported_tool_names}
+        else:
+            tools_info = dict(registry.tools)
 
+        if not tools_info:
+            raise ValueError("No tools are available to present to the tool selector prompt.")
+
+        additional_vars = {"tools_info": _format_tools_info(tools_info)}
         prompt = self.render(additional_vars)
 
         self.manager.save_and_log_states(
@@ -103,7 +102,7 @@ Do not include any other formatting or additional sections in your response.
 
     def parse(self, response: str) -> Union[List[str], str]:
         """
-        Parse the library selection response from LLM with improved robustness.
+        Parse the library selection response from LLM.
 
         Args:
             response: The raw response from the LLM
@@ -111,85 +110,74 @@ Do not include any other formatting or additional sections in your response.
         Returns:
             Union[List[str], str]: Either a prioritized list of tools or a single tool name
         """
-        # Clean the response
         response = response.strip()
+        cleaned = response
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
 
-        # Extract explanation first
-        explanation_match = re.search(
-            r"EXPLANATION:[\s]*(.+?)(?=RANKED_LIBRARIES:|$)", response, re.IGNORECASE | re.DOTALL
-        )
+        try:
+            payload = json.loads(cleaned)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if not match:
+                self._log_results(response, "", "")
+                raise ValueError("Tool selector response is not valid JSON.")
+            try:
+                payload = json.loads(match.group(0))
+            except json.JSONDecodeError as exc:
+                self._log_results(response, "", "")
+                raise ValueError("Tool selector response JSON could not be parsed.") from exc
 
-        if not explanation_match:
-            explanation_match = re.search(
-                r"(?:explanation|reasoning|rationale):[\s]*(.+?)(?=RANKED_LIBRARIES:|ranking|ranked|prioritized|priority|$)",
-                response,
-                re.IGNORECASE | re.DOTALL,
-            )
+        if not isinstance(payload, dict):
+            self._log_results(response, "", "")
+            raise ValueError("Tool selector response JSON must be an object.")
 
-        explanation = (
-            explanation_match.group(1).strip() if explanation_match else "No explanation provided by the model."
-        )
+        explanation = str(payload.get("explanation", "")).strip()
+        if not explanation:
+            self._log_results(response, "", "")
+            raise ValueError("Tool selector response is missing a non-empty explanation.")
 
-        # Strategy 1: Look for ranked libraries section
-        ranked_libraries_section = re.search(r"RANKED_LIBRARIES:(.*?)$", response, re.IGNORECASE | re.DOTALL)
+        ranked_payload = payload.get("ranked_libraries")
+        if not isinstance(ranked_payload, list):
+            self._log_results(response, "", explanation)
+            raise ValueError("Tool selector response is missing a ranked_libraries array.")
 
-        # Strategy 2: Fallback to more lenient parsing
-        if not ranked_libraries_section:
-            ranked_libraries_section = re.search(
-                r"(?:ranking|ranked|prioritized|priority).*?(?:libraries|tools):(.*?)$",
-                response,
-                re.IGNORECASE | re.DOTALL,
-            )
-
-        # Parse the ranked libraries
         prioritized_tools = []
+        for item in ranked_payload:
+            if not isinstance(item, str):
+                continue
+            stripped = item.strip()
+            if stripped:
+                prioritized_tools.append(stripped)
+        if not prioritized_tools:
+            self._log_results(response, "", explanation)
+            raise ValueError("Tool selector response ranked_libraries array is empty.")
 
-        if ranked_libraries_section:
-            # Get the list section
-            ranked_section = ranked_libraries_section.group(1).strip()
-
-            # Try to find numbered list items
-            list_items = re.findall(r"^\s*\d+\.\s*(.+?)$", ranked_section, re.MULTILINE)
-
-            if list_items:
-                # Found a numbered list
-                for item in list_items:
-                    tool_name = item.strip()
-                    if tool_name:
-                        prioritized_tools.append(tool_name)
-            else:
-                # Try to find bullet points or just lines
-                list_items = re.findall(r"(?:^|\n)\s*(?:[-*•])?\s*(.+?)(?:$|\n)", ranked_section)
-                for item in list_items:
-                    tool_name = item.strip()
-                    if tool_name:
-                        prioritized_tools.append(tool_name)
-
-        # Validate against available tools and clean up
         available_tools = set(registry.tools.keys())
         validated_tools = []
+        invalid_tools = []
+        seen_tools = set()
 
         for tool in prioritized_tools:
-            if tool in available_tools:
-                validated_tools.append(tool)
-            else:
-                # Try to find the closest match
-                closest_match = min(available_tools, key=lambda x: len(set(x.lower()) ^ set(tool.lower())))
-                logger.warning(f"Tool '{tool}' not in available tools. Using closest match: '{closest_match}'")
-                validated_tools.append(closest_match)
+            if tool not in available_tools:
+                invalid_tools.append(tool)
+                continue
+            if tool in seen_tools:
+                continue
+            seen_tools.add(tool)
+            validated_tools.append(tool)
 
-        # Final validation - if we couldn't parse any tools, default to original behavior
+        if invalid_tools:
+            self._log_results(response, "", explanation)
+            raise ValueError("Tool selector returned unknown library names: " + ", ".join(invalid_tools))
+
         if not validated_tools:
-            logger.error("Failed to extract ranked tools from LLM response")
-            default_tool = DEFAULT_LIBRARY
-            logger.warning(f"Defaulting to single tool: {default_tool}")
-            self._log_results(response, default_tool, explanation)
-            return [default_tool]
+            self._log_results(response, "", explanation)
+            raise ValueError("Failed to extract any valid ranked tools from the LLM response.")
 
-        # Log the results
         tools_str = ", ".join(validated_tools)
         self._log_results(response, tools_str, explanation)
-
         return validated_tools
 
     def _log_results(self, response: str, selected_tool: str, explanation: str):

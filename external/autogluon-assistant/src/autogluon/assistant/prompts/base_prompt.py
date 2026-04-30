@@ -53,7 +53,7 @@ class BasePrompt(ABC):
         if isinstance(template_str_or_path, str) and template_str_or_path.endswith(".txt"):
             try:
                 logger.info(f"Loading template from file {template_str_or_path}")
-                with open(template_str_or_path, "r") as f:
+                with open(template_str_or_path, "r", encoding="utf-8", errors="replace") as f:
                     self.template = f.read()
             except Exception as e:
                 logger.warning(f"Failed to load template from file {template_str_or_path}: {e}")

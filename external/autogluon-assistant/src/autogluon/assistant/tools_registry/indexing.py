@@ -1,14 +1,27 @@
+from __future__ import annotations
+
 import contextlib
 import io
 import logging
 import os
 import pickle
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import faiss
-import numpy as np
-from FlagEmbedding import FlagAutoModel
+try:
+    import faiss
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    faiss = None
+
+try:
+    import numpy as np
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    np = None
+
+try:
+    from FlagEmbedding import FlagAutoModel
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    FlagAutoModel = None
 
 from .registry import ToolsRegistry
 
@@ -28,8 +41,9 @@ class TutorialIndexer:
         self.embedding_model_name = embedding_model_name
         self.sanitized_model_name = self.embedding_model_name.replace("/", "_")
         self.model = None
-        self.disabled = False
-        self.indices: Dict[str, Dict[str, faiss.Index]] = {}  # {tool_name: {type: index}}
+        self.disabled = faiss is None or np is None or FlagAutoModel is None
+        self._disabled_warning_logged = False
+        self.indices: Dict[str, Dict[str, Any]] = {}  # {tool_name: {type: index}}
         self.metadata: Dict[str, Dict[str, List[Dict]]] = {}  # {tool_name: {type: [metadata]}}
         self.index_dir = Path(__file__).parent / "indices" / self.sanitized_model_name
         self.index_dir.mkdir(parents=True, exist_ok=True)
@@ -61,6 +75,12 @@ class TutorialIndexer:
     def _load_embedding_model(self):
         """Load the BGE embedding model lazily."""
         if self.disabled:
+            if not self._disabled_warning_logged:
+                logger.warning(
+                    "Tutorial retrieval is disabled because optional dependencies are missing. "
+                    "Install faiss-cpu, numpy, and FlagEmbedding to enable it."
+                )
+                self._disabled_warning_logged = True
             return False
         if self.model is None:
             logger.info(f"Loading embedding model: {self.embedding_model_name}")
@@ -224,6 +244,11 @@ class TutorialIndexer:
 
         logger.info(f"Building indices for tools: {tools}")
 
+        if self.disabled:
+            self._load_embedding_model()
+            logger.info("Skipping tutorial index build because tutorial retrieval is disabled in this runtime.")
+            return
+
         for tool_name in tools:
             logger.info(f"Processing tool: {tool_name}")
 
@@ -277,7 +302,7 @@ class TutorialIndexer:
 
         # Check if index_dir is empty
         if not any(self.index_dir.iterdir()):
-            logger.warning(f"No index exists at {self.index_dir}")
+            logger.info(f"No tutorial index exists at {self.index_dir}")
             return False
 
         for tool_dir in self.index_dir.iterdir():
@@ -307,7 +332,7 @@ class TutorialIndexer:
                             logger.error(f"Error loading {tool_name} {tutorial_type} index: {e}")
                             return False
                     else:
-                        logger.error(f"There is no {index_file} or {metadata_file}.")
+                        logger.info(f"No tutorial index files found for {tool_name} {tutorial_type}; retrieval remains disabled.")
                         return False
         return True
 
@@ -325,7 +350,7 @@ class TutorialIndexer:
             List of dictionaries containing tutorial information and content
         """
         if not self._load_embedding_model():
-            logger.warning("Tutorial search is disabled because the embedding model is unavailable.")
+            logger.info("Tutorial search is disabled because the embedding model is unavailable.")
             return []
 
         tutorial_type = "condensed_tutorials" if condensed else "tutorials"

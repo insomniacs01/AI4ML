@@ -50,7 +50,7 @@ Be very clear about the problem type (e.g. audio classification/image regression
         file_contents = []
         for filename in self.manager.description_files:
             try:
-                with open(filename, "r") as f:
+                with open(filename, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
                 if to_show:
                     file_contents.append(content)

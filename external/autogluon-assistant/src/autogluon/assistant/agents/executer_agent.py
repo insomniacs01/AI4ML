@@ -31,13 +31,21 @@ def execute_code(code, language, timeout):
     import subprocess
     import time
     from collections import deque
+    import os
 
     try:
         # Set up the command based on language
+        env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
+
         if language.lower() == "python":
             cmd = ["python", "-c", code]
         elif language.lower() == "bash":
-            cmd = ["bash", "-c", code]
+            if os.name == "nt":
+                cmd = ["powershell", "-NoProfile", "-Command", code]
+            else:
+                cmd = ["bash", "-c", code]
         else:
             return False, "", f"Unsupported language: {language}. Use 'python' or 'bash'."
 
@@ -46,8 +54,20 @@ def execute_code(code, language, timeout):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
+            env=env,
         )
+
+        if os.name == "nt":
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                stdout = (stdout or "") + f"\nProcess reached time limit after {timeout} seconds.\n"
+            return process.returncode == 0, stdout or "", stderr or ""
 
         stdout_chunks, stderr_chunks = [], []
 
@@ -185,7 +205,8 @@ class ExecuterAgent(BaseAgent):
         success, stdout, stderr = execute_code(code=code_to_execute, language=self.language, timeout=self.timeout)
 
         local_score = self._extract_validation_score(stdout)
-        if success and local_score is not None:
+        if local_score is not None and success:
+            prompt_text = "Local deterministic execution evaluation."
             self.manager.save_and_log_states(content=stdout, save_name="stdout.txt", per_iteration=True, add_uuid=True)
             self.manager.save_and_log_states(content=stderr, save_name="stderr.txt", per_iteration=True, add_uuid=True)
             self.manager.save_and_log_states(
@@ -195,7 +216,7 @@ class ExecuterAgent(BaseAgent):
                 content=stderr, save_name="stderr.orig.txt", per_iteration=True, add_uuid=True
             )
             self.manager.save_and_log_states(
-                content="Local deterministic execution evaluation.",
+                content=prompt_text,
                 save_name="executer_prompt.txt",
                 per_iteration=True,
                 add_uuid=True,
@@ -219,7 +240,7 @@ class ExecuterAgent(BaseAgent):
             logger.brief("Planner decision: SUCCESS")
             logger.info(f"Validation score: {local_score}")
             self.manager.log_agent_end("ExecuterAgent: execution finished; planner decision logged.")
-            return "SUCCESS", None, local_score, "Local deterministic execution evaluation.", stderr, stdout
+            return "SUCCESS", None, local_score, prompt_text, stderr, stdout
 
         if not self.executer_llm_config.multi_turn:
             self.executer_llm = init_llm(

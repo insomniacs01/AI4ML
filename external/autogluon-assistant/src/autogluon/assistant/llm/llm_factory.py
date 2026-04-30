@@ -1,15 +1,8 @@
 import logging
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 from omegaconf import DictConfig
-
-from .anthropic_chat import AssistantChatAnthropic, create_anthropic_chat, get_anthropic_models
-from .azure_openai_chat import AssistantAzureChatOpenAI, create_azure_openai_chat, get_azure_models
-from .base_chat import GlobalTokenTracker
-from .bedrock_chat import AssistantChatBedrock, create_bedrock_chat, get_bedrock_models
-from .openai_chat import AssistantChatOpenAI, create_openai_chat, get_openai_models
-from .sagemaker_chat import SagemakerEndpointChat, create_sagemaker_chat, get_sagemaker_endpoints
 
 logger = logging.getLogger(__name__)
 
@@ -20,19 +13,31 @@ class ChatLLMFactory:
     @staticmethod
     def get_total_token_usage(save_path: Optional[str] = None) -> Dict[str, Any]:
         """Get total token usage across all conversations and sessions."""
+        from .base_chat import GlobalTokenTracker
+
         return GlobalTokenTracker().get_total_usage(save_path)
 
     @classmethod
     def get_valid_models(cls, provider):
         if provider == "azure":
+            from .azure_openai_chat import get_azure_models
+
             return get_azure_models()
         elif provider == "openai":
+            from .openai_chat import get_openai_models
+
             return get_openai_models()
         elif provider == "bedrock":
+            from .bedrock_chat import get_bedrock_models
+
             return get_bedrock_models()
         elif provider == "anthropic":
+            from .anthropic_chat import get_anthropic_models
+
             return get_anthropic_models()
         elif provider == "sagemaker":
+            from .sagemaker_chat import get_sagemaker_endpoints
+
             return get_sagemaker_endpoints()
         else:
             raise ValueError(f"Unsupported provider: {provider}")
@@ -42,13 +47,7 @@ class ChatLLMFactory:
         return ["azure", "openai", "bedrock", "anthropic", "sagemaker"]
 
     @classmethod
-    def get_chat_model(cls, config: DictConfig, session_name: str) -> Union[
-        AssistantChatOpenAI,
-        AssistantAzureChatOpenAI,
-        AssistantChatBedrock,
-        AssistantChatAnthropic,
-        SagemakerEndpointChat,
-    ]:
+    def get_chat_model(cls, config: DictConfig, session_name: str) -> Any:
         """Get a configured chat model instance using LangGraph patterns."""
         provider = config.provider
         model = config.model
@@ -57,7 +56,9 @@ class ChatLLMFactory:
         if provider not in valid_providers:
             raise ValueError(f"Invalid provider: {provider}. Must be one of {valid_providers}")
 
-        if provider != "sagemaker":
+        skip_model_validation = provider == "openai" and bool(getattr(config, "proxy_url", None))
+
+        if provider != "sagemaker" and not skip_model_validation:
             valid_models = cls.get_valid_models(provider)
             if model not in valid_models:
                 if model[3:] not in valid_models:  # TODO: better logic for cross region inference
@@ -66,14 +67,24 @@ class ChatLLMFactory:
                     )
 
         if provider == "openai":
+            from .openai_chat import create_openai_chat
+
             return create_openai_chat(config, session_name)
         elif provider == "azure":
+            from .azure_openai_chat import create_azure_openai_chat
+
             return create_azure_openai_chat(config, session_name)
         elif provider == "anthropic":
+            from .anthropic_chat import create_anthropic_chat
+
             return create_anthropic_chat(config, session_name)
         elif provider == "bedrock":
+            from .bedrock_chat import create_bedrock_chat
+
             return create_bedrock_chat(config, session_name)
         elif provider == "sagemaker":
+            from .sagemaker_chat import create_sagemaker_chat
+
             return create_sagemaker_chat(config, session_name)
         else:
             raise ValueError(f"Unsupported provider: {provider}")

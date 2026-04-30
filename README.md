@@ -1,84 +1,273 @@
 # AI4ML
 
-AI4ML is a course project for a low-code / no-code machine learning community platform. The current repository state targets the Week 2 milestone in the project plan dated 2026-04-01: finalize the long-term base platform, validate that base locally on the current machine, record the environment honestly, and scaffold the frontend/backend repository structure around the chosen runtime.
+AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已经不再是早期的 Week 2 脚手架状态，而是一个包含真实前后端、Supabase 团队体系、AI 连接器、任务执行、人机协同、代码工作区、资产登记和审计能力的可运行版本。
 
-## Week 2 deliverables
+## 当前项目状态
 
-- Finalized the long-term upstream base as `MLZero / AutoGluon Assistant`.
-- Validated the selected MLZero base locally with `llama-cpp-python` and a local GGUF model.
-- Pulled the main GitHub candidate repositories into `external/` for architecture and selection review.
-- Verified a direct MLZero executor run and a full API-backed task flow on the current machine.
-- Added an initial monorepo structure for `frontend`, `backend`, `docs`, `scripts`, `data`, `local`, and `storage`.
-- Defined the first-round API boundaries for task creation, CSV upload, MLZero execution, and run inspection.
+- 前端：React + Vite 工作台，已接入真实登录、团队、任务、连接器、默认 AI 路由、配额、资产、审计、AI 对话、代码工作区。
+- 后端：FastAPI 服务，负责团队鉴权后的任务编排、AI 解析、MLZero 执行、人机协同、代码工件读取与 Token 记账。
+- 身份与团队：Supabase Auth + Postgres，作为用户、团队、成员、路由、配额、资产和审计的真实数据源。
+- 执行引擎：以 `MLZero / AutoGluon Assistant` 为基础，已做本地二次改造，支持 OpenAI-compatible 云模型提供方。
+- 当前优先完成的是 P0 能力闭环；更高层的工作流广场、模型广场、公开发布等仍处于后续阶段。
 
-## Latest local validation
+## 已实现的核心能力
 
-- Direct executor validation succeeded with `validation_score = 0.9` at `storage/mlzero_runs/irismlz_fastpath6/20260401T021635Z`.
-- API integration validation succeeded with task `f2032269` and `validation_score = 0.9` at `storage/mlzero_runs/f2032269/20260401T021837Z`.
-- `GET /api/health` currently reports `execution_runtime = mlzero + local openai-compatible llama-cpp`.
+- Supabase 登录、注册、建队、邀请码入队
+- 团队成员角色与状态管理
+  - `team_owner`
+  - `admin`
+  - `business_user`
+  - `developer_user`
+  - `member`
+  - 成员状态支持 `active / invited / frozen / removed`
+- AI 连接器管理
+  - 创建连接器
+  - 测试连接器
+  - 激活团队当前运行连接器
+- 团队默认 AI 路由
+  - 按阶段配置 primary / fallback 连接器与模型
+- 任务链路
+  - 创建任务
+  - 上传 CSV
+  - AI 自动解析目标列、任务类型、指标等结构化信息
+  - 触发 MLZero 运行
+- 人机协同
+  - 手动发起协同请求
+  - 运行前 `before_run` 自动协同策略
+  - 任务 `paused_for_review` / 恢复继续执行
+- 代码工作区
+  - 查看最新运行目录中的真实代码与日志工件
+  - 开发成员可编辑可写文件
+- 配额与 Token
+  - 团队成员配额管理
+  - 预警阈值拦截高开销阶段
+  - Token ledger 记账
+- 资产与审计
+  - 资产登记与基础审核状态流转
+  - 审计日志记录团队治理动作
 
-## Repository layout
+## 技术栈
+
+### 前端
+
+- React 18
+- Vite 5
+- `@supabase/supabase-js`
+
+### 后端
+
+- FastAPI
+- Pydantic / pydantic-settings
+- Supabase REST/Auth API
+
+### 执行与模型
+
+- MLZero
+- AutoGluon Assistant（仓库内 `external/` 已有补丁）
+- OpenAI-compatible provider
+  - `chat_completions`
+  - `responses`
+
+## 目录结构
 
 ```text
 AI4ML/
-├── backend/                  # FastAPI service, MLZero executor, and local provider runtime
-├── data/                     # Sample datasets and local fixtures
-├── docs/                     # Week 2 architecture / selection / environment records
-├── external/                 # Upstream repos; MLZero is installed editable from here
-├── frontend/                 # Vite + React task prototype
-├── local/                    # Local GGUF model files and other machine-local assets
-├── scripts/                  # Reproducible helper scripts
-├── storage/                  # Local task uploads, MLZero outputs, and runtime logs
-├── weekly_report_template.md
-└── 1.“智算”AI4ML 社区.docx
+├─ backend/                    # FastAPI 后端
+├─ frontend/                   # React + Vite 前端
+├─ supabase/                   # Supabase schema 与数据库结构
+├─ external/                   # 上游依赖仓库与本地补丁
+├─ scripts/                    # 验证与辅助脚本
+├─ data/                       # 示例数据
+├─ storage/                    # 本地任务与运行产物
+├─ docs/                       # 记忆文档与项目过程记录
+├─ tools/                      # 其他辅助工具
+└─ 周报/                       # 周报文档
 ```
 
-## Quick start
+## 主要后端接口
 
-### Backend
+- `GET /api/health`
+- `GET/POST /api/tasks`
+- `POST /api/tasks/{task_id}/dataset`
+- `POST /api/tasks/{task_id}/analyze`
+- `POST /api/tasks/{task_id}/run`
+- `PUT /api/tasks/{task_id}/workflow-config`
+- `GET/POST /api/tasks/{task_id}/human-requests`
+- `GET/PUT /api/tasks/{task_id}/code-workspace`
+- `GET/POST /api/connectors`
+- `GET/PATCH /api/team/members`
+- `GET/POST /api/team/quotas`
+- `GET/PUT /api/team/routing`
+- `GET/POST /api/team/assets`
+- `GET /api/team/audit-logs`
 
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r backend/requirements.txt
-AI4ML_MLZERO_MAX_ITERATIONS=1 uvicorn backend.app.main:app --reload --port 8000
+## 环境准备
+
+### 1. 前端 Supabase 配置
+
+在 [`frontend/.env.example`](frontend/.env.example) 的基础上创建 `frontend/.env.local`：
+
+```env
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
+VITE_API_ROOT=/api
 ```
 
-The first MLZero task run will automatically start a local `llama-cpp-python` OpenAI-compatible provider on `http://127.0.0.1:8001/v1` with model alias `gpt-4-local`. The default model file is `local/models/Qwen2.5-Coder-0.5B-Instruct-Q4_K_M.gguf`.
+### 2. 后端 AI Provider 配置
 
-Quick health check:
+在 [`backend/.env.example`](backend/.env.example) 的基础上创建 `backend/.env.local`。
 
-```bash
-curl -s http://127.0.0.1:8000/api/health
+最小示例：
+
+```env
+AI4ML_MLZERO_PROVIDER_MODE=cloud
+AI4ML_MLZERO_PROVIDER_BASE_URL_OVERRIDE=https://your-provider.example.com/v1
+AI4ML_MLZERO_MODEL_ALIAS=your-model
+AI4ML_MLZERO_PROVIDER_WIRE_API=chat_completions
+AI4ML_MLZERO_EXECUTION_MODE=python
+AI4ML_MLZERO_PYTHON_EXECUTABLE=D:\333\AI4ML\.venv\Scripts\python.exe
+AI4ML_MLZERO_OPENAI_API_KEY=YOUR_REAL_API_KEY
+AI4ML_MLZERO_MAX_ITERATIONS=6
+AI4ML_MLZERO_CONTINUOUS_IMPROVEMENT=true
+AI4ML_MLZERO_MIN_CANDIDATE_MODELS=3
 ```
 
-### Frontend
+说明：
 
-```bash
-cd frontend
+- 后端会自动读取 `.env`、`.env.local`、`backend/.env.local`、`frontend/.env.local` 等文件。
+- 不要把真实密钥提交到仓库。
+
+### 3. Supabase 数据库初始化
+
+在 Supabase SQL Editor 中执行：
+
+- [`supabase/schema.sql`](supabase/schema.sql)
+
+这是当前团队、成员、任务、连接器、配额、路由、协同、资产、审计等能力的数据库基础。
+
+## 启动方式
+
+### 后端
+
+PowerShell：
+
+```powershell
+cd <repo-root>
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r backend\requirements.txt
+uvicorn backend.app.main:app --reload --port 8000
+```
+
+健康检查：
+
+```powershell
+curl http://127.0.0.1:8000/api/health
+```
+
+### 前端
+
+```powershell
+cd <repo-root>\frontend
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` after the backend is running on `http://localhost:8000`.
+访问：
 
-## Week 2 documents
+- 前端：[http://localhost:5173](http://localhost:5173)
+- 后端：[http://127.0.0.1:8000](http://127.0.0.1:8000)
 
-- `docs/week2-tech-selection.md`
-- `docs/week2-architecture.md`
-- `docs/week2-environment-validation.md`
-- `docs/repository-guidelines.md`
-- `docs/current-memory.md`
+## 运行时说明
 
-## Current decision
+- 默认任务产物会写到系统本地运行目录，而不是强依赖仓库内目录。
+- Windows 默认运行产物目录通常位于：
+  - `%LOCALAPPDATA%\AI4ML\mlzero_runs`
+- 这样可以避免 `uvicorn --reload` 被运行过程中生成的 Python 文件反复触发。
 
-The selected project base is `MLZero / AutoGluon Assistant`. This base is also the active local execution path in this repo.
+## 前端主要页面
 
-`AIDE ML` and `AutoML-Agent` remain architecture references:
+- 任务
+- AI 对话
+- 代码工作区
+- 人机协同
+- Token 用量
+- 连接器
+- 默认 AI
+- 配额
+- 资产
+- 团队
+- 审计
+- 系统
 
-- `AIDE ML` for experiment-tree and progress visualization ideas
-- `AutoML-Agent` for role decomposition and multi-agent module boundaries
+## 资产页面说明
 
-`AutoGluon Tabular 1.1.0` is no longer the active runtime path. It only remains as historical context from earlier Week 2 exploration.
+当前“资产中心”是一个团队内部的资产登记台账，不是完整的文件托管系统。它主要用于登记以下几类产物：
 
-The current local validation path uses a tiny on-device GGUF model plus deterministic compatibility fallbacks in the editable `external/autogluon-assistant` checkout. That proves end-to-end MLZero wiring on this machine, but it is not the final quality target.
+- `dataset`
+- `model`
+- `workflow`
+- `report`
+
+并给它们附加：
+
+- 标题
+- 描述
+- 存储路径
+- 元数据
+- 审核状态
+
+当前版本更偏“资产登记与审核目录”，不是公开广场，也不是自动上传式文件中心。
+
+## 验证方式
+
+### 后端基础检查
+
+```powershell
+cd <repo-root>
+.\.venv\Scripts\python.exe -m compileall backend\app
+.\.venv\Scripts\python.exe -m unittest discover backend\tests
+```
+
+### 前端构建检查
+
+```powershell
+cd <repo-root>\frontend
+npm run build
+```
+
+### 已做过的真实联调验证
+
+当前代码已经做过真实 Supabase 联调，验证通过的关键链路包括：
+
+- 注册 / 登录
+- 创建团队
+- 邀请码入队
+- 成员冻结 / 恢复
+- 角色提升到 `developer_user`
+- 连接器创建 / 激活
+- 团队默认 AI 路由保存 / 读取
+- 手工人机协同请求
+- `before_run` 自动协同策略
+- 代码工作区权限隔离
+- 配额与预警阈值拦截
+- 审计日志读取
+
+## 当前限制
+
+- 更高层的工作流广场、模型广场、公开发布等仍未完全产品化。
+- 资产中心当前是登记台账，不是完整资产平台。
+- 代码工作区当前是运行工件编辑器，不是完整 IDE。
+- MLZero 长时多轮搜索虽然可配置，但实际稳定性仍依赖当前机器环境和所配置的云模型提供方。
+
+## 重要文件
+
+- [`docs/current-memory.md`](docs/current-memory.md)
+- [`supabase/schema.sql`](supabase/schema.sql)
+- [`backend/.env.example`](backend/.env.example)
+- [`frontend/.env.example`](frontend/.env.example)
+
+## 许可与备注
+
+- 本仓库包含基于上游 `MLZero / AutoGluon Assistant` 的本地改造。
+- `external/` 目录中的改动用于当前项目集成验证，不代表上游原始实现状态。

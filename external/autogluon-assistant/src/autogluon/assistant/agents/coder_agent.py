@@ -1,5 +1,8 @@
 import logging
+import os
 import re
+import sys
+from ast import parse as parse_python
 from pathlib import Path
 
 from ..prompts import BashCoderPrompt, PythonCoderPrompt
@@ -9,128 +12,84 @@ from .utils import init_llm
 logger = logging.getLogger(__name__)
 
 
-def _extract_task_field(task_description: str, field_name: str, default: str) -> str:
-    pattern = rf"{re.escape(field_name)}:\s*(.+)"
-    match = re.search(pattern, task_description)
-    if match:
-        return match.group(1).strip()
-    return default
-
-
-def _build_local_machine_learning_python(manager) -> str:
+def _build_local_windows_python_runner(manager) -> str:
     node_dir = Path(manager.get_iteration_folder(manager.current_node))
-    output_dir = Path(manager.get_per_iteration_output_folder(manager.current_node))
-    train_path = Path(manager.input_data_folder) / "train.csv"
-    label_column = _extract_task_field(manager.task_description, "Label column", "label")
-    problem_type = _extract_task_field(manager.task_description, "Problem type", "classification").lower()
-
+    python_executable = Path(sys.executable)
     lines = [
-        '"""Deterministic sklearn baseline generated for local MLZero validation."""',
-        "from __future__ import annotations",
-        "",
-        "import time",
-        "from pathlib import Path",
-        "",
-        "import joblib",
-        "import pandas as pd",
-        "from sklearn.compose import ColumnTransformer",
-        "from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor",
-        "from sklearn.impute import SimpleImputer",
-        "from sklearn.metrics import accuracy_score, mean_squared_error",
-        "from sklearn.model_selection import train_test_split",
-        "from sklearn.pipeline import Pipeline",
-        "from sklearn.preprocessing import OneHotEncoder, StandardScaler",
-        "",
-        f'TRAIN_PATH = Path(r"{train_path}")',
-        f'OUTPUT_DIR = Path(r"{output_dir}")',
-        f'LABEL_COLUMN = "{label_column}"',
-        f'PROBLEM_TYPE = "{problem_type}"',
-        "",
-        "def build_preprocessor(frame: pd.DataFrame) -> ColumnTransformer:",
-        '    numeric_features = frame.select_dtypes(include=["number", "bool"]).columns.tolist()',
-        "    categorical_features = [col for col in frame.columns if col not in numeric_features]",
-        "    transformers = []",
-        "    if numeric_features:",
-        "        transformers.append((",
-        '            "numeric",',
-        "            Pipeline(",
-        "                steps=[",
-        '                    ("imputer", SimpleImputer(strategy="median")),',
-        '                    ("scaler", StandardScaler()),',
-        "                ]",
-        "            ),",
-        "            numeric_features,",
-        "        ))",
-        "    if categorical_features:",
-        "        transformers.append((",
-        '            "categorical",',
-        "            Pipeline(",
-        "                steps=[",
-        '                    ("imputer", SimpleImputer(strategy="most_frequent")),',
-        '                    ("encoder", OneHotEncoder(handle_unknown="ignore")),',
-        "                ]",
-        "            ),",
-        "            categorical_features,",
-        "        ))",
-        '    remainder = "drop" if transformers else "passthrough"',
-        "    return ColumnTransformer(transformers=transformers, remainder=remainder)",
-        "",
-        "def main() -> None:",
-        "    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)",
-        "    data = pd.read_csv(TRAIN_PATH)",
-        "    if LABEL_COLUMN not in data.columns:",
-        '        raise ValueError(f"Missing label column: {LABEL_COLUMN}")',
-        "    data = data.dropna(subset=[LABEL_COLUMN]).copy()",
-        "    y = data.pop(LABEL_COLUMN)",
-        "    X = data",
-        "    stratify = None",
-        '    if PROBLEM_TYPE == "classification" and y.nunique() > 1 and y.value_counts().min() > 1:',
-        "        stratify = y",
-        "    X_train, X_valid, y_train, y_valid = train_test_split(",
-        "        X,",
-        "        y,",
-        "        test_size=0.2,",
-        "        random_state=42,",
-        "        stratify=stratify,",
-        "    )",
-        "    preprocessor = build_preprocessor(X_train)",
-        '    model = RandomForestClassifier(n_estimators=200, random_state=42) if PROBLEM_TYPE == "classification" else RandomForestRegressor(n_estimators=200, random_state=42)',
-        "    pipeline = Pipeline(",
-        "        steps=[",
-        '            ("preprocessor", preprocessor),',
-        '            ("model", model),',
-        "        ]",
-        "    )",
-        "    pipeline.fit(X_train, y_train)",
-        "    predictions = pipeline.predict(X_valid)",
-        '    if PROBLEM_TYPE == "classification":',
-        "        score = accuracy_score(y_valid, predictions)",
-        "    else:",
-        "        score = mean_squared_error(y_valid, predictions, squared=False)",
-        '    model_dir = OUTPUT_DIR / f"model_{int(time.time())}"',
-        "    model_dir.mkdir(parents=True, exist_ok=True)",
-        '    joblib.dump(pipeline, model_dir / "pipeline.joblib")',
-        "    results = X_valid.copy()",
-        "    results[LABEL_COLUMN] = predictions",
-        '    results.to_csv(OUTPUT_DIR / "results.csv", index=True)',
-        '    print(f"validation_score={score:.6f}")',
-        '    print(f"Validation score: {score:.6f}")',
-        "",
-        'if __name__ == "__main__":',
-        "    main()",
+        "$ErrorActionPreference = 'Stop'",
+        f'Set-Location "{node_dir}"',
+        f'& "{python_executable}" "generated_code.py"',
     ]
     return "\n".join(lines) + "\n"
 
 
-def _build_local_machine_learning_bash(manager) -> str:
-    node_dir = Path(manager.get_iteration_folder(manager.current_node))
-    lines = [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        f'cd "{node_dir}"',
-        "python generated_code.py",
-    ]
-    return "\n".join(lines) + "\n"
+def _python_code_completion_issue(code: str) -> str | None:
+    stripped = (code or "").strip()
+    if not stripped:
+        return "generated code is empty"
+
+    lowered = stripped.lower()
+    if stripped.startswith("```") or "```" in stripped:
+        return "response still contains markdown fences instead of a raw python script"
+    if stripped.startswith("#!/bin/bash") or stripped.startswith("#!/usr/bin/env bash"):
+        return "python candidate still starts with a shell script header"
+    if re.search(r"^\s*(pip|python|conda|mamba)\s+install\b", lowered, re.MULTILINE):
+        return "python candidate still contains shell package installation commands"
+
+    try:
+        parse_python(stripped)
+    except SyntaxError as exc:
+        return f"{exc.msg} near line {exc.lineno}"
+
+    if (
+        "def main(" in stripped
+        and 'if __name__ == "__main__":' not in stripped
+        and "if __name__ == '__main__':" not in stripped
+    ):
+        return "defines main() but never calls it from a __main__ entrypoint"
+
+    if "validation_score" not in lowered and "validation score" not in lowered and "metric_value" not in lowered:
+        return "missing any visible validation score output or summary artifact"
+
+    return None
+
+
+def _truncate_for_prompt(text: str, max_chars: int = 12000) -> str:
+    stripped = (text or "").strip()
+    if len(stripped) <= max_chars:
+        return stripped
+    return stripped[:max_chars] + "\n...[truncated]..."
+
+
+def _build_python_repair_prompt(issue: str, generated_code: str, response: str, retry_count: int) -> str:
+    if retry_count < 3:
+        strategy = (
+            "Repair the current script instead of rewriting a verbose new draft. "
+            "Keep the script compact and complete."
+        )
+    else:
+        strategy = (
+            "Rewrite the script from scratch as a SHORTER minimal solution so it cannot be truncated again. "
+            "Keep the implementation concise and stay within the libraries already required by the task."
+        )
+
+    return (
+        "Your previous reply did not produce a valid executable Python script.\n"
+        f"Detected issue: {issue}.\n"
+        f"{strategy}\n\n"
+        "Hard requirements:\n"
+        "- Return exactly one COMPLETE script inside a single ```python``` code block.\n"
+        "- Do not include any bash, shell, PowerShell, or pip install blocks.\n"
+        "- Start from the first line and include the final line. Do not truncate the ending.\n"
+        "- Keep the code compact.\n"
+        "- Use only files that actually exist in the input folder.\n"
+        '- Include a runnable `if __name__ == "__main__":` entrypoint.\n'
+        "- Persist or print the final validation score.\n\n"
+        "Current extracted Python candidate:\n"
+        f"```python\n{_truncate_for_prompt(generated_code)}\n```\n\n"
+        "Previous raw assistant reply:\n"
+        f"```text\n{_truncate_for_prompt(str(response))}\n```\n"
+    )
 
 
 class CoderAgent(BaseAgent):
@@ -173,36 +132,24 @@ class CoderAgent(BaseAgent):
     def __call__(self):
         self.manager.log_agent_start("CoderAgent: starting to build and send code-generation prompt to the LLM.")
 
-        if self.coding_mode == "coder" and self.manager.selected_tool == "machine learning":
-            if self.language == "python":
-                prompt = "Local deterministic machine learning baseline generator."
-                generated_code = _build_local_machine_learning_python(self.manager)
-                self.manager.save_and_log_states(
-                    content=prompt, save_name="python_coder_prompt.txt", per_iteration=True, add_uuid=False
-                )
-                self.manager.save_and_log_states(
-                    content=generated_code, save_name="python_coder_response.txt", per_iteration=True, add_uuid=False
-                )
-                self.manager.save_and_log_states(
-                    content=generated_code, save_name="python_code.py", per_iteration=True, add_uuid=False
-                )
-            else:
-                prompt = "Local deterministic bash runner for machine learning baseline."
-                generated_code = _build_local_machine_learning_bash(self.manager)
-                self.manager.save_and_log_states(
-                    content=prompt, save_name="bash_coder_prompt.txt", per_iteration=True, add_uuid=False
-                )
-                self.manager.save_and_log_states(
-                    content=generated_code, save_name="bash_coder_response.txt", per_iteration=True, add_uuid=False
-                )
-                self.manager.save_and_log_states(
-                    content=generated_code,
-                    save_name="extracted_bash_script.sh",
-                    per_iteration=True,
-                    add_uuid=False,
-                )
-
-            self.manager.log_agent_end("CoderAgent: local deterministic code generated without LLM.")
+        if self.coding_mode == "coder" and self.language == "bash" and os.name == "nt":
+            prompt = "Local PowerShell execution wrapper for generated Python code on Windows."
+            generated_code = _build_local_windows_python_runner(self.manager)
+            self.manager.save_and_log_states(
+                content=prompt, save_name="bash_coder_prompt.txt", per_iteration=True, add_uuid=False
+            )
+            self.manager.save_and_log_states(
+                content=generated_code, save_name="bash_coder_response.txt", per_iteration=True, add_uuid=False
+            )
+            self.manager.save_and_log_states(
+                content=generated_code,
+                save_name="extracted_bash_script.sh",
+                per_iteration=True,
+                add_uuid=False,
+            )
+            self.manager.log_agent_end(
+                "CoderAgent: local PowerShell execution wrapper generated for the Python script."
+            )
             return generated_code
 
         # Build prompt for evaluating execution results
@@ -218,6 +165,38 @@ class CoderAgent(BaseAgent):
         response = self.coder_llm.assistant_chat(prompt)
 
         generated_code = self.coder_prompt.parse(response)
+
+        if self.language == "python":
+            completion_issue = _python_code_completion_issue(generated_code)
+            retry_count = 0
+            while completion_issue is not None and retry_count < 4:
+                retry_count += 1
+                retry_prompt = _build_python_repair_prompt(
+                    issue=completion_issue,
+                    generated_code=generated_code,
+                    response=str(response),
+                    retry_count=retry_count,
+                )
+                self.manager.save_and_log_states(
+                    content=retry_prompt,
+                    save_name=f"python_coder_retry_request_{retry_count}.txt",
+                    per_iteration=True,
+                    add_uuid=False,
+                )
+                response = self.coder_llm.assistant_chat(retry_prompt)
+                self.manager.save_and_log_states(
+                    content=response,
+                    save_name=f"python_coder_retry_response_{retry_count}.txt",
+                    per_iteration=True,
+                    add_uuid=False,
+                )
+                generated_code = self.coder_prompt.parse(response)
+                completion_issue = _python_code_completion_issue(generated_code)
+            if completion_issue is not None:
+                logger.warning(
+                    "LLM-generated Python code remained invalid after retries. "
+                    f"Final detected issue: {completion_issue}"
+                )
 
         self.manager.log_agent_end("CoderAgent: code-generation prompt handled and code parsed from response.")
 

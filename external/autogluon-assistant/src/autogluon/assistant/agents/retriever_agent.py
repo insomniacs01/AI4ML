@@ -58,46 +58,39 @@ class RetrieverAgent(BaseAgent):
         """Retrieve relevant tutorials using LLM-generated search queries."""
         self.manager.log_agent_start("RetrieverAgent: generating search query and retrieving tutorials.")
 
-        try:
-            search_query = self._get_fallback_query()
-            logger.info(f"Using local heuristic tutorial query: {search_query}")
+        prompt = self.retriever_prompt.build()
 
-            # Perform semantic search
-            results = self.indexer.search(
-                query=search_query,
-                tool_name=self.manager.selected_tool,
-                condensed=self.config.condense_tutorials,
-                top_k=self.config.num_tutorial_retrievals,
+        if not self.retriever_llm_config.multi_turn:
+            self.retriever_llm = init_llm(
+                llm_config=self.retriever_llm_config,
+                agent_name="retriever",
+                multi_turn=self.retriever_llm_config.multi_turn,
             )
 
-            # Convert results to tutorial info format
-            retrieved_tutorials = self._convert_to_tutorial_info(results)
+        response = self.retriever_llm.assistant_chat(prompt)
+        search_query = self.retriever_prompt.parse(response)
 
-            # Save retriever results for debugging
-            self.manager.save_and_log_states(
-                content=self._format_retriever_results(results, search_query),
-                save_name="tutorial_retriever_results.txt",
-                per_iteration=True,
-                add_uuid=False,
-            )
+        results = self.indexer.search(
+            query=search_query,
+            tool_name=self.manager.selected_tool,
+            condensed=self.config.condense_tutorials,
+            top_k=self.config.num_tutorial_retrievals,
+        )
 
-            self.manager.log_agent_end(
-                f"RetrieverAgent: retrieved {len(retrieved_tutorials)} tutorial candidates using query: '{search_query}'"
-            )
+        retrieved_tutorials = self._convert_to_tutorial_info(results)
 
-            return retrieved_tutorials
+        self.manager.save_and_log_states(
+            content=self._format_retriever_results(results, search_query),
+            save_name="tutorial_retriever_results.txt",
+            per_iteration=True,
+            add_uuid=False,
+        )
 
-        except Exception as e:
-            logger.error(f"Error in tutorial retriever: {e}")
-            self.manager.log_agent_end("RetrieverAgent: tutorial retriever failed.")
-            return []
+        self.manager.log_agent_end(
+            f"RetrieverAgent: retrieved {len(retrieved_tutorials)} tutorial candidates using query: '{search_query}'"
+        )
 
-    def _get_fallback_query(self) -> str:
-        """Get fallback search query when LLM generation fails."""
-        # Simple fallback: use task description or tool name
-        if hasattr(self.manager, "task_description") and self.manager.task_description:
-            return self.manager.task_description[:256]  # Limit length
-        return self.manager.selected_tool
+        return retrieved_tutorials
 
     def _convert_to_tutorial_info(self, search_results: List[Dict[str, Any]]) -> List[TutorialInfo]:
         """Convert search results to TutorialInfo objects."""

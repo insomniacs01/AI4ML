@@ -1,5 +1,6 @@
 import logging
-from typing import List, Union
+from importlib.util import find_spec
+from typing import List
 
 from ..prompts import ToolSelectorPrompt
 from ..tools_registry import registry
@@ -9,26 +10,31 @@ from .utils import init_llm
 logger = logging.getLogger(__name__)
 
 
-def infer_tools_from_task(task_description: str, data_prompt: str) -> List[str]:
-    available_tools = list(registry.tools.keys())
-    normalized = f"{task_description}\n{data_prompt}".lower()
+TOOL_RUNTIME_REQUIREMENTS = {
+    "machine learning": ("sklearn", "pandas"),
+    "autogluon.tabular": ("autogluon.tabular",),
+    "autogluon.multimodal": ("autogluon.multimodal",),
+    "autogluon.timeseries": ("autogluon.timeseries",),
+    "wav2vec2": ("transformers",),
+}
 
-    def ordered(candidates: List[str]) -> List[str]:
-        return [tool for tool in candidates if tool in available_tools]
 
-    if any(keyword in normalized for keyword in ("forecast", "time series", "timeseries")):
-        return ordered(["autogluon.timeseries", "machine learning", "autogluon.tabular"])
+def _module_available(module_name: str) -> bool:
+    try:
+        return find_spec(module_name) is not None
+    except ModuleNotFoundError:
+        return False
 
-    if any(keyword in normalized for keyword in ("audio", "speech", "wav")):
-        return ordered(["wav2vec2", "autogluon.multimodal", "machine learning"])
 
-    if any(keyword in normalized for keyword in ("image", "vision", "multimodal", "text")):
-        return ordered(["autogluon.multimodal", "machine learning", "autogluon.tabular"])
+def _tool_supported_locally(tool_name: str) -> bool:
+    requirements = TOOL_RUNTIME_REQUIREMENTS.get(tool_name)
+    if not requirements:
+        return True
+    return all(_module_available(module_name) for module_name in requirements)
 
-    if any(keyword in normalized for keyword in ("classification", "regression", "label column", ".csv")):
-        return ordered(["machine learning", "autogluon.tabular", "autogluon.multimodal"])
 
-    return ordered(["machine learning", "autogluon.tabular", "autogluon.multimodal"])
+def _supported_tool_names() -> List[str]:
+    return [tool_name for tool_name in registry.tools.keys() if _tool_supported_locally(tool_name)]
 
 
 class ToolSelectorAgent(BaseAgent):
@@ -63,25 +69,12 @@ class ToolSelectorAgent(BaseAgent):
                 multi_turn=self.tool_selector_llm_config.multi_turn,
             )
 
-    def __call__(self) -> Union[List[str], str]:
+    def __call__(self) -> List[str]:
         self.manager.log_agent_start("ToolSelectorAgent: choosing and ranking ML libraries for the task.")
-
-        heuristic_tools = infer_tools_from_task(
-            task_description=self.manager.task_description,
-            data_prompt=self.manager.data_prompt,
-        )
-        if heuristic_tools:
-            logger.info(f"Using local heuristic tool ranking: {', '.join(heuristic_tools)}")
-            synthetic_response = "EXPLANATION: Local heuristic selected tools based on task description and data type.\n\nRANKED_LIBRARIES:\n"
-            synthetic_response += "\n".join(
-                f"{index}. {tool}" for index, tool in enumerate(heuristic_tools, start=1)
-            )
-            tools = self.tool_selector_prompt.parse(synthetic_response)
-            if len(tools) > self.manager.config.initial_root_children:
-                tools = tools[: self.manager.config.initial_root_children]
-            tools_str = ", ".join(tools)
-            self.manager.log_agent_end(f"ToolSelectorAgent: selected tools in priority order: {tools_str}")
-            return tools
+        supported_tools = _supported_tool_names()
+        if not supported_tools:
+            raise RuntimeError("No locally supported tools are available for selection in the current runtime.")
+        self.manager.supported_tool_names = supported_tools
 
         # Build prompt for tool selection
         prompt = self.tool_selector_prompt.build()
@@ -96,6 +89,12 @@ class ToolSelectorAgent(BaseAgent):
         response = self.tool_selector_llm.assistant_chat(prompt)
 
         tools = self.tool_selector_prompt.parse(response)
+        unsupported_tools = [tool for tool in tools if tool not in supported_tools]
+        if unsupported_tools:
+            raise RuntimeError(
+                "Tool selector chose tools that are unavailable in the current runtime: "
+                + ", ".join(unsupported_tools)
+            )
         # Select only top #tools required
         if len(tools) > self.manager.config.initial_root_children:
             tools = tools[: self.manager.config.initial_root_children]

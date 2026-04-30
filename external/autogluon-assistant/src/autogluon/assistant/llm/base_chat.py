@@ -14,6 +14,53 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 logger = logging.getLogger(__name__)
 
 
+def _normalize_ai_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                    continue
+
+                if isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+                    continue
+
+                parts.append(json.dumps(item, ensure_ascii=False))
+                continue
+
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+                continue
+
+            nested_content = getattr(item, "content", None)
+            if isinstance(nested_content, str):
+                parts.append(nested_content)
+                continue
+
+            parts.append(str(item))
+
+        return "\n".join(part for part in parts if part).strip()
+
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+        return json.dumps(content, ensure_ascii=False)
+
+    return str(content)
+
+
 def log_retry_attempt(retry_state):
     """Custom callback to log each retry attempt"""
     if retry_state.outcome.failed:
@@ -187,6 +234,7 @@ class BaseAssistantChat(BaseModel):
         response = self.app.invoke({"messages": input_messages}, config)
 
         ai_message = response["messages"][-1]
+        normalized_output = _normalize_ai_message_content(ai_message.content)
         input_tokens = output_tokens = 0
 
         if hasattr(ai_message, "usage_metadata"):
@@ -202,13 +250,13 @@ class BaseAssistantChat(BaseModel):
         self.history_.append(
             {
                 "input": message,
-                "output": ai_message.content,
+                "output": normalized_output,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             }
         )
 
-        return ai_message.content
+        return normalized_output
 
     async def astream(self, message: str):
         """Stream responses using LangGraph."""

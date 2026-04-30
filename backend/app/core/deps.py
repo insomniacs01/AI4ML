@@ -19,8 +19,7 @@ _bearer_scheme = HTTPBearer()
 @lru_cache
 def get_user_store() -> UserStore:
     """Singleton user-store instance."""
-    settings = get_settings()
-    return UserStore(settings.user_storage_dir)
+    raise RuntimeError("The legacy local UserStore is disabled; use Supabase auth and team membership instead.")
 
 
 def get_current_user(

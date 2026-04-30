@@ -29,40 +29,42 @@ This prompt generates executable Python code for the specified task. Make sure t
 
     def default_template(self) -> str:
         return """
-As an AutoML Agent, you will be given a folder containing data and description files. Please generate Python code using {selected_tool} to train a predictor and make predictions on test data. Follow these specifications:
+As an AutoML Agent, you will be given a folder containing data and description files. Generate one COMPLETE Python script using {selected_tool}. Keep it concise, fully executable, and aligned with the files that actually exist in the input folder.
 
 ONLY save files to the working directory: {per_iteration_output_folder}.
 
-1. Data preprocessing:
-   - Remove training data samples without valid labels (drop NA values from training dataset ONLY, NOT from test dataset) unless explicitly instructed otherwise.
-   - Remove the unneccesary index column (if applicable)
-
-2. Model training:
-   - Use {selected_tool} with appropriate parameters for the task
-   - If a model is trained, save it in a folder with random timestamp within {per_iteration_output_folder}
-
-3. Prediction:
-   - Make predictions on the ENTIRE test set, preserving ORIGINAL INDICES to maintain exact row correspondence. NEVER drop any test rows for any reason (including missing values), and ensure the output has the exact same number of rows as the test set.
-   - Save the predicted results to {per_iteration_output_folder}, result file name should be "results", the format and extension should be same as the test data file
-   - Output column names must exactly match those in the training or sample submission files without adding "predicted_" prefixes or creating any new columns.
-   - IMPORTANT: At the end, implement validation checks that assert the prediction file maintains exact test data indices, verify correct column names match requirements, confirm proper output format, verify the number of predictions equals the number of test samples, and if applicable, sanity check output predictions are valid and correct.
-
-4. Documentation:
-   - Add a brief docstring at the beginning of the script explaining its purpose
-   - Include additional installation steps with comments at the beginning of the script
-   - Include comments explaining any complex operations or design decisions
-
-5. Others:
-   - To avoid DDP errors, wrap the code in: if __name__ == "__main__":
-   - Ensure errors are propagated up and not silently caught - do not use try/except blocks unless you explicitly re-raise the exception.
-
-{validation_prompt}
+Requirements:
+- Use train.csv as the primary dataset. If test.csv is missing, do NOT assume it exists; use a validation approach that works with the selected library and report a validation score.
+- If test.csv exists, predict the full test set without dropping rows and preserve original row order and indices.
+- Remove training samples without valid labels from training data only, unless explicitly instructed otherwise.
+- Remove unnecessary index columns such as 'Unnamed: 0' when appropriate.
+- Do not stop at a single baseline when labeled training data is available. Compare multiple candidate models and persist a ranked leaderboard of the candidates you actually evaluated.
+- For tabular classification and regression in this project runtime, use autogluon.tabular and fix its configuration directly instead of switching to sklearn or another library.
+- Follow any runtime-verified AutoGluon dependency and model-family constraints provided in the task description or user instruction. Restrict fit() hyperparameters to the verified supported families and do not assume torch, lightgbm, xgboost, catboost, tabicl, or tabm are installed unless they are explicitly verified.
+- Do not use AutoGluon presets or portfolios that depend on optional extras unless those dependencies are explicitly verified. In particular, do not use extreme, extreme_quality, best, best_quality, high, high_quality, good, good_quality, or any zeroshot/tabarena/foundation-model portfolio when the runtime guidance forbids them.
+- Do not add a secondary sklearn implementation path. If an autogluon.tabular attempt fails, correct the AutoGluon hyperparameters, preset choice, API usage, or data handling and keep the solution in autogluon.tabular.
+- In AutoGluon 1.4, use predictor.model_best or the first leaderboard row to identify the best model. Do not call predictor.get_model_best().
+- Before saving leaderboard.json or leaderboard.csv, normalize AutoGluon leaderboard() output to the canonical artifact schema. Each saved row must include exact fields model and validation_score, and should include fit_time and pred_time when available.
+- Do not persist raw AutoGluon field names such as score_val or pred_time_val in the final saved leaderboard artifact; rename them to validation_score and pred_time first. If you include rank, derive it yourself from the sorted row order.
+- AutoGluon does not accept the generic problem_type value 'classification'. Infer the label cardinality first and pass problem_type='binary' for 2 classes or problem_type='multiclass' for more than 2 classes.
+- If a model is trained, save it in a timestamped folder under {per_iteration_output_folder}.
+- Save prediction results to {per_iteration_output_folder}. If there is no test set, save validation artifacts instead.
+- Print the final validation score clearly when labeled training data is available, and persist any summary artifacts needed by downstream evaluation.
+- Save a machine-readable run summary to {per_iteration_output_folder}/run_summary.json with at least: metric_name, metric_value, validation_score, best_model, tool, and candidate_model_count.
+- Save the compared candidates to {per_iteration_output_folder}/leaderboard.json or {per_iteration_output_folder}/leaderboard.csv. Each row should include exact fields model and validation_score, plus fit_time and pred_time when available.
+- If the task metric is naturally lower-is-better (for example RMSE), still persist a higher-is-better validation_score for search and comparison, while also saving the raw metric in run_summary.json.
+- Add only brief comments when they genuinely help readability.
+- Wrap the runnable entrypoint with: if __name__ == "__main__":
+- Do not use try/except blocks unless you explicitly re-raise the exception.
+- Do not include bash, shell, PowerShell, or pip install commands anywhere in the Python response.
+- Return one Python script only. Do not prepend a shell setup block before the Python code.
+- Return the FULL script from the first line to the final line. Do not omit the ending.
 
 {tool_prompt}
 
 {code_improvement_prompt}
 
-Please provide the complete Python script that accomplishes these tasks, ensuring it's ready to run given the appropriate data inputs.
+{validation_prompt}
 
 ### Task Description
 {task_description}
@@ -83,7 +85,10 @@ These errors were encountered across different implementation approaches and may
 
     def get_format_instruction(self) -> str:
         """Get the format instruction to append to the prompt."""
-        return "Please format your response with the code in a ```python``` code block to make it easily extractable."
+        return (
+            "Please format your response with exactly one ```python``` code block containing the full script. "
+            "Do not include any ```bash``` or shell code blocks."
+        )
 
     def _build(self, **kwargs) -> str:
         """Build a prompt for the LLM to generate Python code.

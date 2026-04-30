@@ -28,7 +28,7 @@ class RerankerAgent(BaseAgent):
 
         if self.reranker_llm_config.multi_turn:
             self.reranker_llm = init_llm(
-                llm_config=self.rerankerl_llm_config,
+                llm_config=self.reranker_llm_config,
                 agent_name="reranker",
                 multi_turn=self.reranker_llm_config.multi_turn,
             )
@@ -36,8 +36,24 @@ class RerankerAgent(BaseAgent):
     def __call__(self):
         """Select and rerank relevant tutorials from retrieved candidates."""
         self.manager.log_agent_start("RerankerAgent: reranking and selecting top tutorials from retrieved candidates.")
-        selected_tutorials = self._select_top_by_score(self.manager.current_node.tutorial_retrieval or [])
-        logger.info("Using retrieval scores directly for tutorial reranking.")
+        tutorials = self.manager.current_node.tutorial_retrieval or []
+        if not tutorials:
+            self.manager.log_agent_end("RerankerAgent: no retrieved tutorials were available to rerank.")
+            return ""
+
+        prompt = self.reranker_prompt.build()
+        if not prompt.strip():
+            raise ValueError("Reranker prompt is empty even though tutorial candidates are available.")
+
+        if not self.reranker_llm_config.multi_turn:
+            self.reranker_llm = init_llm(
+                llm_config=self.reranker_llm_config,
+                agent_name="reranker",
+                multi_turn=self.reranker_llm_config.multi_turn,
+            )
+
+        response = self.reranker_llm.assistant_chat(prompt)
+        selected_tutorials = self.reranker_prompt.parse(response)
 
         # Generate tutorial prompt using selected tutorials
         tutorial_prompt = self._generate_tutorial_prompt(selected_tutorials)
@@ -54,12 +70,6 @@ class RerankerAgent(BaseAgent):
             f"RerankerAgent: selected {len(selected_tutorials)} tutorials and formatted prompt."
         )
         return tutorial_prompt
-
-    def _select_top_by_score(self, tutorials: List[TutorialInfo]) -> List[TutorialInfo]:
-        """Select top tutorials by retrieval score as fallback."""
-        # Sort by score (descending) and take top max_num_tutorials
-        sorted_tutorials = sorted(tutorials, key=lambda t: getattr(t, "score", 0.0), reverse=True)
-        return sorted_tutorials[: self.config.max_num_tutorials]
 
     def _format_tutorial_content(
         self,

@@ -1,1 +1,0 @@
-The label column in the provided iris dataset is "label".

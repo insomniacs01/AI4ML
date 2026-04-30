@@ -1,3 +1,0 @@
-Problem type: binary classification
-Input: tiny.csv with numeric feature columns and a label column
-Goal: predict the label column and report a validation score

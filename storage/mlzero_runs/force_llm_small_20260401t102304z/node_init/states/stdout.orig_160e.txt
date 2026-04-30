@@ -1,5 +1,0 @@
-
-Decompressed Content:
-Binary classification task.
-Use tiny.csv to predict the label column from the numeric feature columns.
-Return a validation score.
