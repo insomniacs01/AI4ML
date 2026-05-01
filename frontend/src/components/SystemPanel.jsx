@@ -18,7 +18,7 @@
 
 export default function SystemPanel({ health, loading, error, onRefresh }) {
   return (
-    <section className="section-card">
+    <section className="section-card system-panel-card">
       <div className="section-head">
         <div>
           <p className="eyebrow">Health</p>

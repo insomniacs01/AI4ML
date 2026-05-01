@@ -31,7 +31,7 @@ export default function QuotaManagementPanel({
   }, [quotas]);
 
   return (
-    <div className="detail-stack">
+    <div className="detail-stack quota-page-layout">
       <section className="section-card">
         <div className="section-head">
           <div>

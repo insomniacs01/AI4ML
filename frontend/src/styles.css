@@ -4586,6 +4586,66 @@ summary:focus-visible {
   font-size: 0.86rem;
 }
 
+.task-advanced-section {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.task-advanced-section > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.task-advanced-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-advanced-section > summary div {
+  display: grid;
+  gap: 3px;
+}
+
+.task-advanced-section > summary strong {
+  color: var(--ink);
+}
+
+.task-advanced-section > summary span,
+.task-advanced-section > summary em {
+  color: var(--ink-muted);
+  font-size: 0.86rem;
+  font-style: normal;
+}
+
+.task-advanced-section[open] > summary {
+  border-bottom: 1px solid var(--line-soft);
+  background: #f8fbff;
+}
+
+.task-advanced-section[open] > summary em {
+  font-size: 0;
+}
+
+.task-advanced-section[open] > summary em::after {
+  content: "收起";
+  font-size: 0.86rem;
+}
+
+.task-advanced-section > .task-subsection {
+  margin: 0;
+  padding: 16px;
+}
+
+.task-advanced-section > .task-subsection + .task-subsection {
+  border-top: 1px solid var(--line-soft);
+}
+
 .ai-chat-main {
   min-width: 0;
   overflow: hidden;
@@ -5025,5 +5085,372 @@ summary:focus-visible {
 
   .ai-chat-message.is-user .ai-chat-message-content {
     grid-column: 1;
+  }
+}
+
+/* Broad page polish */
+.section-card,
+.page-card,
+.task-card,
+.connector-card,
+.ai-chat-sidebar,
+.ai-chat-main {
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.section-card:hover,
+.page-card:hover {
+  border-color: #cad6e4;
+}
+
+.section-head {
+  min-width: 0;
+}
+
+.section-head > div {
+  min-width: 0;
+}
+
+.section-head h3 {
+  overflow-wrap: anywhere;
+}
+
+.summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.summary-item {
+  min-height: 76px;
+}
+
+.summary-item strong {
+  overflow-wrap: anywhere;
+}
+
+.table-wrap {
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fbff;
+  text-align: left;
+  white-space: nowrap;
+}
+
+table td {
+  padding: 12px;
+}
+
+table tbody tr:nth-child(even) td {
+  background: #fbfdff;
+}
+
+table tbody tr:hover td {
+  background: #f3f7ff;
+}
+
+.table-cell-stack {
+  gap: 3px;
+}
+
+.table-cell-stack strong {
+  color: var(--ink);
+}
+
+.table-cell-stack span {
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+}
+
+.callout {
+  padding: 14px 16px;
+  background: #f8fbff;
+}
+
+.callout strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink);
+}
+
+.compact-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--ink-muted);
+}
+
+.compact-list li + li {
+  margin-top: 6px;
+}
+
+.report-page-layout,
+.workflow-page-layout,
+.demo-page-layout,
+.asset-page-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.34fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.report-page-layout > :first-child,
+.workflow-page-layout > :first-child,
+.demo-page-layout > :first-child,
+.asset-page-layout > :first-child {
+  position: sticky;
+  top: 86px;
+  grid-column: 1;
+  max-height: calc(100vh - 110px);
+  overflow: auto;
+}
+
+.report-page-layout > :not(:first-child),
+.workflow-page-layout > :not(:first-child),
+.demo-page-layout > :not(:first-child),
+.asset-page-layout > :not(:first-child) {
+  grid-column: 2;
+}
+
+.report-page-layout > .error-banner,
+.report-page-layout > .empty-state,
+.workflow-page-layout > .error-banner,
+.workflow-page-layout > .empty-state,
+.demo-page-layout > .empty-state {
+  grid-column: 2;
+}
+
+.report-page-layout > :first-child .task-cards,
+.workflow-page-layout > :first-child .task-cards {
+  max-height: 54vh;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.report-page-layout > :first-child .task-card,
+.workflow-page-layout > :first-child .task-card {
+  padding: 13px;
+}
+
+.report-page-layout > :first-child .task-card-top,
+.workflow-page-layout > :first-child .task-card-top {
+  display: grid;
+  gap: 6px;
+}
+
+.report-page-layout > :first-child .task-card-top span,
+.workflow-page-layout > :first-child .task-card-top span {
+  justify-self: start;
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--app-blue-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.demo-page-layout > :first-child {
+  align-self: start;
+}
+
+.demo-page-layout textarea.mono-text {
+  min-height: 280px;
+  border-color: #cbd7e5;
+  background: #101828;
+  color: #e7eefc;
+}
+
+.asset-page-layout > :first-child .summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.asset-page-layout > :first-child .task-form {
+  margin-top: 16px;
+}
+
+.asset-page-layout .toolbar {
+  justify-content: flex-end;
+}
+
+.asset-page-layout .segmented-control {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.quota-page-layout .table-wrap,
+.team-page-layout .table-wrap,
+.audit-page-layout .table-wrap {
+  max-height: calc(100vh - 260px);
+}
+
+.quota-page-layout td:last-child,
+.team-page-layout td:last-child {
+  min-width: 280px;
+}
+
+.quota-page-layout .quota-input {
+  min-width: 96px;
+}
+
+.team-page-layout > .section-card:first-child,
+.team-page-layout > .section-card:nth-child(2) {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+}
+
+.audit-page-layout code.mono-text {
+  display: block;
+  max-width: 520px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #475467;
+}
+
+.routing-stage-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.routing-stage-form > .routing-stage-card {
+  margin: 0;
+  padding: 14px;
+  border-color: var(--line-soft);
+  background: #f8fbff;
+  box-shadow: none;
+}
+
+.routing-stage-card .section-head {
+  margin-bottom: 12px;
+}
+
+.routing-stage-card .section-head h3 {
+  font-size: 1rem;
+}
+
+.routing-stage-form > .button-row {
+  grid-column: 1 / -1;
+  padding-top: 4px;
+}
+
+.system-panel-card .summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.system-panel-card .summary-item {
+  min-height: 86px;
+}
+
+.system-panel-card .summary-item strong {
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.86rem;
+}
+
+.connector-page-grid {
+  align-items: start;
+}
+
+.connector-form-card {
+  position: sticky;
+  top: 86px;
+}
+
+.connector-list-card {
+  min-width: 0;
+}
+
+.connector-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.task-workspace-grid {
+  align-items: start;
+}
+
+.task-list-card .task-cards {
+  max-height: 58vh;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.task-detail-panel {
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+@media (max-width: 1320px) {
+  .report-page-layout,
+  .workflow-page-layout,
+  .demo-page-layout,
+  .asset-page-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .report-page-layout > :first-child,
+  .workflow-page-layout > :first-child,
+  .demo-page-layout > :first-child,
+  .asset-page-layout > :first-child,
+  .report-page-layout > :not(:first-child),
+  .workflow-page-layout > :not(:first-child),
+  .demo-page-layout > :not(:first-child),
+  .asset-page-layout > :not(:first-child),
+  .report-page-layout > .error-banner,
+  .report-page-layout > .empty-state,
+  .workflow-page-layout > .error-banner,
+  .workflow-page-layout > .empty-state,
+  .demo-page-layout > .empty-state {
+    grid-column: 1;
+  }
+
+  .report-page-layout > :first-child,
+  .workflow-page-layout > :first-child,
+  .demo-page-layout > :first-child,
+  .asset-page-layout > :first-child,
+  .connector-form-card {
+    position: static;
+    max-height: none;
+  }
+
+  .report-page-layout > :first-child .task-cards,
+  .workflow-page-layout > :first-child .task-cards {
+    max-height: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .routing-stage-form {
+    grid-template-columns: 1fr;
+  }
+
+  .task-detail-panel,
+  .task-list-card .task-cards,
+  .quota-page-layout .table-wrap,
+  .team-page-layout .table-wrap,
+  .audit-page-layout .table-wrap {
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  table th,
+  table td {
+    padding: 10px;
+  }
+
+  .asset-page-layout > :first-child .summary-grid {
+    grid-template-columns: 1fr;
   }
 }

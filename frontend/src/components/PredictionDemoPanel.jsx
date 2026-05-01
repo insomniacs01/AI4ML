@@ -68,7 +68,7 @@ export default function PredictionDemoPanel({
   }
 
   return (
-    <div className="detail-stack">
+    <div className="detail-stack demo-page-layout">
       <section className="section-card">
         <div className="section-head">
           <div>

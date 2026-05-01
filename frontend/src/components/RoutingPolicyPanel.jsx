@@ -58,7 +58,7 @@ export default function RoutingPolicyPanel({
   }
 
   return (
-    <div className="detail-stack">
+    <div className="detail-stack routing-page-layout">
       <section className="section-card">
         <div className="section-head">
           <div>
@@ -73,9 +73,9 @@ export default function RoutingPolicyPanel({
         {message ? <div className="notice-banner">{message}</div> : null}
         {error ? <div className="error-banner">{error}</div> : null}
 
-        <form className="task-form" onSubmit={handleSubmit}>
+        <form className="task-form routing-stage-form" onSubmit={handleSubmit}>
           {STAGE_OPTIONS.map((stage) => (
-            <div key={stage.key} className="section-card">
+            <div key={stage.key} className="section-card routing-stage-card">
               <div className="section-head">
                 <div>
                   <h3>{stage.label}</h3>

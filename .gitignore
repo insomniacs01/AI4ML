@@ -1,34 +1,70 @@
+# Python
 .venv/
+venv/
+env/
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
 .coverage
 .coverage.*
 htmlcov/
 
+# Node / frontend build output
+node_modules/
+frontend/node_modules/
+dist/
+build/
+coverage/
+frontend/dist/
+frontend/.vite/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs and runtime process files
+*.log
+*.pid
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / editor files
 .DS_Store
 Thumbs.db
+desktop.ini
 .idea/
 .vscode/
 
-.env
-.env.local
-backend/.env
-backend/.env.local
-frontend/.env
-frontend/.env.local
-
+# Local model weights, generated task data, and run artifacts
 local/models/
-external/**/.git/
-
-frontend/node_modules/
-frontend/dist/
-
-*.log
-*.pid
-
 storage/*
 !storage/run_force_llm_full.py
+tmp/
+tmp_*/
+tmp-*/
+tmp_executor_verify/
+
+# Nested upstream repository metadata
+external/**/.git/
+
+# Office temporary lock files
+~$*

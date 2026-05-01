@@ -48,7 +48,7 @@ export default function ModelReportPanel({
   const metricName = formatMetricName ?? ((value) => value || "暂无");
 
   return (
-    <div className="detail-stack">
+    <div className="detail-stack report-page-layout">
       <section className="section-card">
         <div className="section-head">
           <div>

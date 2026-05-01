@@ -101,7 +101,7 @@ export default function WorkflowStagePanel({
   }
 
   return (
-    <div className="detail-stack">
+    <div className="detail-stack workflow-page-layout">
       <section className="section-card">
         <div className="section-head">
           <div>

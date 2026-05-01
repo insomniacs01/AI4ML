@@ -89,7 +89,7 @@ export default function AssetCenterPanel({
   }
 
   return (
-    <div className="detail-stack">
+    <div className="detail-stack asset-page-layout">
       <section className="section-card">
         <div className="section-head">
           <div>

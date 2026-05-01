@@ -11,7 +11,7 @@ export default function AuditLogPanel({
   onRefresh,
 }) {
   return (
-    <div className="detail-stack">
+    <div className="detail-stack audit-page-layout">
       <section className="section-card">
         <div className="section-head">
           <div>
