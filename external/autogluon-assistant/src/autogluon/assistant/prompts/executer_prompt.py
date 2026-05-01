@@ -116,18 +116,35 @@ For validation scores:
             content = response
         else:
             logger.warning("Unexpected response format from LLM")
-            return "FIX", "Parser error", None
+            self.manager.save_and_log_states(
+                content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True
+            )
+            raise ValueError("Unexpected response format from executer LLM.")
 
         # Parse the decision
-        decision = "FIX"  # Default to FIX if parsing fails
-        if "DECISION:" in content:
-            decision_line = [line for line in content.split("\n") if "DECISION:" in line]
-            if decision_line:
-                decision_text = decision_line[0].split("DECISION:")[1].strip()
-                if "SUCCESS" in decision_text.upper():
-                    decision = "SUCCESS"
-                elif "FIX" in decision_text.upper():
-                    decision = "FIX"
+        if "DECISION:" not in content:
+            self.manager.save_and_log_states(
+                content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True
+            )
+            raise ValueError("Executer LLM response is missing DECISION.")
+
+        decision_line = [line for line in content.split("\n") if "DECISION:" in line]
+        if not decision_line:
+            self.manager.save_and_log_states(
+                content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True
+            )
+            raise ValueError("Executer LLM response DECISION line could not be found.")
+
+        decision_text = decision_line[0].split("DECISION:", 1)[1].strip()
+        if "SUCCESS" in decision_text.upper():
+            decision = "SUCCESS"
+        elif "FIX" in decision_text.upper():
+            decision = "FIX"
+        else:
+            self.manager.save_and_log_states(
+                content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True
+            )
+            raise ValueError(f"Executer LLM returned an unsupported DECISION: {decision_text!r}.")
 
         # Parse the error summary
         error_summary = None
@@ -146,11 +163,18 @@ For validation scores:
                 try:
                     validation_score = float(validation_score_text)
                 except ValueError:
-                    logger.warning(f"Could not parse validation score: {validation_score_text}")
-                    validation_score = None
+                    self.manager.save_and_log_states(
+                        content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True
+                    )
+                    raise ValueError(f"Could not parse validation score: {validation_score_text}") from None
         # The Validation score is only meaningful if this is a success run
         if decision != "SUCCESS":
             validation_score = None
+        elif validation_score is None:
+            self.manager.save_and_log_states(
+                content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True
+            )
+            raise ValueError("Executer LLM marked SUCCESS but did not provide a numeric VALIDATION_SCORE.")
 
         self.manager.save_and_log_states(
             content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True

@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 from typing import List
 
 from ..prompts import DescriptionFileRetrieverPrompt
@@ -7,32 +6,6 @@ from .base_agent import BaseAgent
 from .utils import init_llm
 
 logger = logging.getLogger(__name__)
-
-
-DESCRIPTION_FILE_MARKERS = (
-    "readme",
-    "description",
-    "requirement",
-    "task",
-    "instruction",
-    "overview",
-)
-
-
-def infer_description_files_from_data_prompt(data_prompt: str) -> List[str]:
-    description_files: List[str] = []
-
-    for raw_line in data_prompt.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("Absolute path:"):
-            continue
-
-        candidate = line.split("Absolute path:", 1)[1].strip()
-        name = Path(candidate).name.lower()
-        if any(marker in name for marker in DESCRIPTION_FILE_MARKERS):
-            description_files.append(candidate)
-
-    return description_files
 
 
 class DescriptionFileRetrieverAgent(BaseAgent):
@@ -68,14 +41,6 @@ class DescriptionFileRetrieverAgent(BaseAgent):
 
     def __call__(self) -> List[str]:
         self.manager.log_agent_start("DescriptionFileRetrieverAgent: identifying description files from data prompt.")
-
-        heuristic_matches = infer_description_files_from_data_prompt(self.manager.data_prompt)
-        if heuristic_matches:
-            logger.info("Using local heuristic description file detection.")
-            synthetic_response = "Description Files:\n" + "\n".join(heuristic_matches)
-            description_files = self.description_file_retriever_prompt.parse(synthetic_response)
-            self.manager.log_agent_end("DescriptionFileRetrieverAgent: description file list extracted.")
-            return description_files
 
         # Build prompt for identifying description files
         prompt = self.description_file_retriever_prompt.build()

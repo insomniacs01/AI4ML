@@ -22,28 +22,22 @@ def get_all_tutorials(selected_tool: str, condensed: bool = False) -> List[Tutor
 
     tutorial_files = []
     for file_path in tutorial_dir.rglob("*.md"):  # TODO: support other file formats
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read().split("\n")
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read().split("\n")
 
-                # Find title (first line starting with #)
-                title = next(
-                    (line.lstrip("#").strip() for line in content if line.strip().startswith("#")),
-                    "",
-                )
+        title = next(
+            (line.lstrip("#").strip() for line in content if line.strip().startswith("#")),
+            "",
+        )
+        if not title:
+            raise RuntimeError(f"Tutorial file {file_path} is missing a markdown title.")
 
-                # Find summary (line starting with "Summary: ")
-                summary = next(
-                    (line.replace("Summary:", "").strip() for line in content if line.strip().startswith("Summary:")),
-                    "",
-                )
+        summary = next(
+            (line.replace("Summary:", "").strip() for line in content if line.strip().startswith("Summary:")),
+            "",
+        )
 
-                if title:  # Only add if we found a title
-                    tutorial_files.append(TutorialInfo(file_path, title, summary))
-
-        except Exception as e:
-            logger.warning(f"Error reading tutorial file {file_path}: {e}")
-            continue
+        tutorial_files.append(TutorialInfo(file_path, title, summary))
 
     return tutorial_files
 
@@ -152,17 +146,24 @@ DO NOT include any other text, explanation, or formatting in your response.
         selected_tutorials = []
         seen_indices = set()
         for idx in indices:
-            if idx < 0 or idx in seen_indices:
-                continue
+            if idx in seen_indices:
+                raise ValueError(f"Reranker LLM returned a duplicate tutorial index: {idx + 1}.")
             seen_indices.add(idx)
-            if 0 <= idx < len(self.tutorials):
-                selected_tutorials.append(self.tutorials[idx])
+            if not 0 <= idx < len(self.tutorials):
+                raise ValueError(
+                    f"Reranker LLM selected tutorial index {idx + 1}, "
+                    f"but only {len(self.tutorials)} tutorials are available."
+                )
+            selected_tutorials.append(self.tutorials[idx])
 
         if not selected_tutorials:
             raise ValueError("Reranker LLM selected no valid tutorial indices.")
 
         if len(selected_tutorials) > self.manager.config.max_num_tutorials:
-            selected_tutorials = selected_tutorials[: self.manager.config.max_num_tutorials]
+            raise ValueError(
+                "Reranker LLM selected more tutorials than allowed: "
+                f"{len(selected_tutorials)} > {self.manager.config.max_num_tutorials}."
+            )
 
         self.manager.save_and_log_states(
             content=selected_tutorials, save_name="selected_tutorials.txt", per_iteration=True, add_uuid=False

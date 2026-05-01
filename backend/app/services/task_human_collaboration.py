@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from backend.app.core.supabase_auth import TEAM_ADMIN_ROLES
+from backend.app.models.governance import TeamMemberRecord
 from backend.app.models.task import (
+    HumanInteractionDecisionAction,
     HumanInteractionRequestStatus,
+    InteractionAssigneeType,
     PRIMARY_WORKFLOW_STAGES,
     TaskHumanCollaborationResponse,
     TaskHumanRequestCreateRequest,
@@ -30,6 +34,14 @@ from backend.app.services.task_store import TaskStore
 
 
 STAGE_ORDER = list(PRIMARY_WORKFLOW_STAGES)
+ACTIVE_REQUEST_STATUSES = {
+    HumanInteractionRequestStatus.pending,
+    HumanInteractionRequestStatus.open,
+}
+RERUN_DECISION_ACTIONS = {
+    HumanInteractionDecisionAction.revise,
+    HumanInteractionDecisionAction.reject,
+}
 
 
 @dataclass(frozen=True)
@@ -44,6 +56,7 @@ class TaskHumanCollaborationService:
         self.task_store = task_store
 
     def get_snapshot(self, task: TaskRecord, *, access_token: str) -> TaskHumanCollaborationResponse:
+        self._expire_overdue_requests(task, access_token=access_token)
         stages = self.sync_task_stages(task, access_token=access_token)
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         open_request_count = self._count_open_requests(requests)
@@ -64,6 +77,7 @@ class TaskHumanCollaborationService:
         access_token: str,
         stage_selection_map: dict[str, TaskStageRoutingRecord] | None = None,
     ) -> list[WorkflowStageRecord]:
+        self._expire_overdue_requests(task, access_token=access_token)
         existing_records = {
             self._stage_key(record.stage): record
             for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
@@ -72,7 +86,7 @@ class TaskHumanCollaborationService:
         open_requests_by_stage = {
             self._stage_key(request.stage): request
             for request in requests
-            if request.status == HumanInteractionRequestStatus.open
+            if self._is_active_request(request)
         }
 
         normalized_selection_map = {
@@ -122,9 +136,19 @@ class TaskHumanCollaborationService:
         *,
         requested_by: str,
         access_token: str,
+        actor_role: str = "admin",
+        team_members: list[TeamMemberRecord] | None = None,
     ) -> TaskHumanCollaborationResponse:
         if task.status == TaskStatus.running:
             raise RuntimeError("Current task run is still in progress. Wait until it finishes before creating a human collaboration request.")
+
+        assignee_type, assignee_value, assigned_to = self.resolve_assignee(
+            assignee_type=payload.assignee_type,
+            assignee_value=payload.assignee_value,
+            assigned_to=payload.assigned_to,
+            default_member_id=requested_by,
+            team_members=team_members or [TeamMemberRecord(team_id=task.team_id, user_id=requested_by, role=actor_role, member_status="active")],
+        )
 
         timeout_at = None
         if payload.timeout_minutes is not None:
@@ -135,9 +159,9 @@ class TaskHumanCollaborationService:
             task_id=task.id,
             stage=normalize_workflow_stage(payload.stage),
             requested_by=requested_by,
-            assigned_to=payload.assigned_to,
-            assignee_type=payload.assignee_type.value if payload.assignee_type else None,
-            assignee_value=payload.assignee_value,
+            assigned_to=assigned_to,
+            assignee_type=assignee_type.value,
+            assignee_value=assignee_value,
             timeout_at=timeout_at,
             payload={
                 "request_type": payload.request_type,
@@ -146,6 +170,7 @@ class TaskHumanCollaborationService:
                 "suggested_action": payload.suggested_action,
                 "artifact_paths": payload.artifact_paths,
                 "details": payload.details,
+                "created_by_role": actor_role,
             },
             access_token=access_token,
         )
@@ -160,27 +185,65 @@ class TaskHumanCollaborationService:
         *,
         decided_by: str,
         access_token: str,
+        actor_role: str = "admin",
+        team_members: list[TeamMemberRecord] | None = None,
     ) -> TaskHumanCollaborationResponse:
         request = self.task_store.get_human_request(task.team_id, task.id, request_id, access_token=access_token)
         if request is None:
             raise ValueError("human request not found")
-        if request.status != HumanInteractionRequestStatus.open:
-            raise RuntimeError("human request has already been resolved")
+        if self._is_overdue(request):
+            request.status = HumanInteractionRequestStatus.expired
+            request.decision = {
+                "action": "expired",
+                "summary": "Request expired before a human decision was submitted.",
+                "decided_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self.task_store.update_human_request(request, access_token=access_token)
+            raise RuntimeError("human request has expired")
+        if not self._is_active_request(request):
+            raise RuntimeError("human request has already been closed")
 
-        request.status = HumanInteractionRequestStatus.resolved
+        self._assert_actor_can_decide(request, actor_id=decided_by, actor_role=actor_role)
+
+        if payload.action == HumanInteractionDecisionAction.reassign:
+            return self._reassign_request(
+                task,
+                request,
+                payload,
+                decided_by=decided_by,
+                actor_role=actor_role,
+                team_members=team_members or [TeamMemberRecord(team_id=task.team_id, user_id=decided_by, role=actor_role, member_status="active")],
+                access_token=access_token,
+            )
+
+        request.status = self._status_for_decision_action(payload.action)
+        requires_rerun = payload.action in RERUN_DECISION_ACTIONS
         request.decision = {
             "action": payload.action.value,
             "summary": payload.decision_summary,
             "artifact_paths": payload.artifact_paths,
             "details": payload.details,
             "decided_by": decided_by,
+            "decided_by_role": actor_role,
             "decided_at": datetime.now(timezone.utc).isoformat(),
+            "requires_rerun": requires_rerun,
         }
         self.task_store.update_human_request(request, access_token=access_token)
 
         task = self._record_latest_decision(task, request=request, payload=payload)
         remaining_requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         if self._count_open_requests(remaining_requests):
+            saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        elif payload.action == HumanInteractionDecisionAction.block:
+            saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        elif requires_rerun and payload.resume_task:
+            saved_task = self._mark_task_ready_for_rerun(
+                task,
+                access_token=access_token,
+                reason=payload.decision_summary,
+            )
+        elif requires_rerun:
+            self._mark_task_rerun_requested(task, reason=payload.decision_summary)
             saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
         elif payload.resume_task:
             saved_task = self._resume_task_record(task, access_token=access_token)
@@ -197,11 +260,141 @@ class TaskHumanCollaborationService:
         return self.get_snapshot(saved_task, access_token=access_token)
 
     def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
+        self._expire_overdue_requests(task, access_token=access_token)
         if task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
             raise RuntimeError("Task is waiting for human collaboration. Resolve or resume it before running MLZero.")
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         if self._count_open_requests(requests):
             raise RuntimeError("Task has open human collaboration requests. Resolve them before running MLZero.")
+
+    def resolve_assignee(
+        self,
+        *,
+        assignee_type: InteractionAssigneeType | str | None,
+        assignee_value: str | None,
+        assigned_to: str | None,
+        default_member_id: str,
+        team_members: list[TeamMemberRecord],
+    ) -> tuple[InteractionAssigneeType, str, str | None]:
+        resolved_type = assignee_type or InteractionAssigneeType.member
+        if not isinstance(resolved_type, InteractionAssigneeType):
+            resolved_type = InteractionAssigneeType(str(resolved_type))
+
+        resolved_value = (assignee_value or assigned_to or default_member_id or "").strip()
+        if not resolved_value:
+            raise RuntimeError("human request assignee is required")
+
+        active_members = [item for item in team_members if item.member_status == "active"]
+        active_member_ids = {item.user_id for item in active_members}
+        active_roles = {str(item.role) for item in active_members}
+
+        if resolved_type == InteractionAssigneeType.member:
+            if resolved_value not in active_member_ids:
+                raise RuntimeError("human request assignee member is not an active member of this team")
+            return resolved_type, resolved_value, resolved_value
+
+        if resolved_type == InteractionAssigneeType.role:
+            if resolved_value not in active_roles:
+                raise RuntimeError("human request assignee role has no active member in this team")
+            return resolved_type, resolved_value, None
+
+        if resolved_type == InteractionAssigneeType.candidate_pool:
+            if not self._parse_candidate_pool(resolved_value):
+                raise RuntimeError("human request candidate pool is empty")
+            return resolved_type, resolved_value, None
+
+        raise RuntimeError(f"unsupported human request assignee type: {resolved_type}")
+
+    def _reassign_request(
+        self,
+        task: TaskRecord,
+        request: TaskHumanRequestRecord,
+        payload: TaskHumanRequestDecisionRequest,
+        *,
+        decided_by: str,
+        actor_role: str,
+        team_members: list[TeamMemberRecord],
+        access_token: str,
+    ) -> TaskHumanCollaborationResponse:
+        assignee_type, assignee_value, assigned_to = self.resolve_assignee(
+            assignee_type=payload.reassign_assignee_type or request.assignee_type,
+            assignee_value=payload.reassign_assignee_value,
+            assigned_to=payload.reassign_assigned_to,
+            default_member_id=decided_by,
+            team_members=team_members,
+        )
+        now = datetime.now(timezone.utc)
+        request.status = HumanInteractionRequestStatus.reassigned
+        request.decision = {
+            "action": payload.action.value,
+            "summary": payload.decision_summary,
+            "artifact_paths": payload.artifact_paths,
+            "details": payload.details,
+            "decided_by": decided_by,
+            "decided_by_role": actor_role,
+            "decided_at": now.isoformat(),
+            "reassigned_to": {
+                "assignee_type": assignee_type.value,
+                "assignee_value": assignee_value,
+                "assigned_to": assigned_to,
+            },
+        }
+        self.task_store.update_human_request(request, access_token=access_token)
+
+        timeout_at = None
+        if payload.reassign_timeout_minutes is not None:
+            timeout_at = now + timedelta(minutes=payload.reassign_timeout_minutes)
+        elif request.timeout_at and request.timeout_at > now:
+            timeout_at = request.timeout_at
+
+        request_payload = request.payload if isinstance(request.payload, dict) else {}
+        reassigned_payload = {
+            **request_payload,
+            "reassigned_from_request_id": request.id,
+            "reassigned_by": decided_by,
+            "reassigned_by_role": actor_role,
+            "reassign_reason": payload.decision_summary,
+            "previous_assignee_type": request.assignee_type.value if request.assignee_type else None,
+            "previous_assignee_value": request.assignee_value,
+        }
+        version_seed = request.version_id or request.id
+        self.task_store.create_human_request(
+            team_id=task.team_id,
+            task_id=task.id,
+            stage=normalize_workflow_stage(request.stage),
+            requested_by=decided_by,
+            assigned_to=assigned_to,
+            assignee_type=assignee_type.value,
+            assignee_value=assignee_value,
+            timeout_at=timeout_at,
+            version_id=f"{version_seed}:reassigned:{int(now.timestamp())}",
+            payload=reassigned_payload,
+            access_token=access_token,
+        )
+        task = self._record_latest_decision(task, request=request, payload=payload)
+        saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        return self.get_snapshot(saved_task, access_token=access_token)
+
+    def _expire_overdue_requests(self, task: TaskRecord, *, access_token: str) -> list[TaskHumanRequestRecord]:
+        requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
+        now = datetime.now(timezone.utc)
+        expired_any = False
+        for request in requests:
+            if not self._is_active_request(request) or request.timeout_at is None:
+                continue
+            if request.timeout_at > now:
+                continue
+            request.status = HumanInteractionRequestStatus.expired
+            request.decision = {
+                "action": "expired",
+                "summary": "Request expired before a human decision was submitted.",
+                "decided_at": now.isoformat(),
+            }
+            self.task_store.update_human_request(request, access_token=access_token)
+            expired_any = True
+        if not expired_any:
+            return requests
+        return self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
 
     def _build_stage_blueprints(self, task: TaskRecord) -> list[_StageBlueprint]:
         effective_status = self._get_progress_status(task)
@@ -358,7 +551,60 @@ class TaskHumanCollaborationService:
 
     @staticmethod
     def _count_open_requests(requests: list[TaskHumanRequestRecord]) -> int:
-        return sum(1 for item in requests if item.status == HumanInteractionRequestStatus.open)
+        return sum(1 for item in requests if TaskHumanCollaborationService._is_active_request(item))
+
+    @staticmethod
+    def _is_active_request(request: TaskHumanRequestRecord) -> bool:
+        return request.status in ACTIVE_REQUEST_STATUSES
+
+    @staticmethod
+    def _is_overdue(request: TaskHumanRequestRecord) -> bool:
+        return (
+            request.timeout_at is not None
+            and TaskHumanCollaborationService._is_active_request(request)
+            and request.timeout_at <= datetime.now(timezone.utc)
+        )
+
+    @staticmethod
+    def _parse_candidate_pool(value: str | None) -> list[str]:
+        return [
+            item.strip()
+            for item in str(value or "").replace(";", ",").split(",")
+            if item.strip()
+        ]
+
+    @staticmethod
+    def _assert_actor_can_decide(request: TaskHumanRequestRecord, *, actor_id: str, actor_role: str) -> None:
+        if actor_role in TEAM_ADMIN_ROLES:
+            return
+        if request.assignee_type == InteractionAssigneeType.member:
+            if actor_id in {request.assigned_to, request.assignee_value}:
+                return
+            raise PermissionError("Only the assigned member or a team admin can decide this human request.")
+        if request.assignee_type == InteractionAssigneeType.role:
+            if actor_role == request.assignee_value:
+                return
+            raise PermissionError("Only members with the assigned role or a team admin can decide this human request.")
+        if request.assignee_type == InteractionAssigneeType.candidate_pool:
+            candidates = set(TaskHumanCollaborationService._parse_candidate_pool(request.assignee_value))
+            if actor_id in candidates or actor_role in candidates:
+                return
+            raise PermissionError("Only a candidate-pool member or a team admin can decide this human request.")
+        if actor_id == request.requested_by:
+            return
+        raise PermissionError("Only the request owner, assignee, or a team admin can decide this human request.")
+
+    @staticmethod
+    def _status_for_decision_action(action: HumanInteractionDecisionAction) -> HumanInteractionRequestStatus:
+        if action == HumanInteractionDecisionAction.approve:
+            return HumanInteractionRequestStatus.confirmed
+        if action == HumanInteractionDecisionAction.revise:
+            return HumanInteractionRequestStatus.modified
+        if action in {HumanInteractionDecisionAction.block, HumanInteractionDecisionAction.reject}:
+            return HumanInteractionRequestStatus.rejected
+        if action == HumanInteractionDecisionAction.skip:
+            return HumanInteractionRequestStatus.skipped
+        raise RuntimeError(f"unsupported human decision action: {action}")
 
     def _get_progress_status(self, task: TaskRecord) -> TaskStatus:
         if task.status not in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
@@ -380,6 +626,26 @@ class TaskHumanCollaborationService:
         task.status = TaskStatus.paused_for_review
         return self.task_store.save_task(task, access_token=access_token)
 
+    def _mark_task_rerun_requested(self, task: TaskRecord, *, reason: str) -> None:
+        human_loop = self._ensure_human_loop(task)
+        human_loop["rerun_requested"] = True
+        human_loop["rerun_reason"] = reason
+        human_loop["rerun_requested_at"] = datetime.now(timezone.utc).isoformat()
+        human_loop["manual_hold"] = False
+        human_loop["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    def _mark_task_ready_for_rerun(
+        self,
+        task: TaskRecord,
+        *,
+        access_token: str,
+        reason: str,
+    ) -> TaskRecord:
+        self._mark_task_rerun_requested(task, reason=reason)
+        task.status = TaskStatus.uploaded if task.dataset_filename else TaskStatus.draft
+        task.notes = f"人工协同要求重新运行：{reason}"
+        return self.task_store.save_task(task, access_token=access_token)
+
     def _resume_task_record(self, task: TaskRecord, *, access_token: str) -> TaskRecord:
         human_loop = self._ensure_human_loop(task)
         human_loop["manual_hold"] = False
@@ -389,6 +655,10 @@ class TaskHumanCollaborationService:
 
     def _get_previous_status(self, task: TaskRecord) -> TaskStatus:
         human_loop = self._read_human_loop(task)
+        if human_loop.get("rerun_requested"):
+            if task.dataset_filename:
+                return TaskStatus.uploaded
+            return TaskStatus.draft
         raw_status = human_loop.get("previous_status") if human_loop else None
         if isinstance(raw_status, str):
             try:
@@ -430,6 +700,10 @@ class TaskHumanCollaborationService:
             "artifact_paths": resolved_artifact_paths,
             "decision_details": payload.details,
             "resume_task": payload.resume_task,
+            "requires_rerun": payload.action in RERUN_DECISION_ACTIONS,
+            "reassign_assignee_type": payload.reassign_assignee_type.value if payload.reassign_assignee_type else None,
+            "reassign_assignee_value": payload.reassign_assignee_value,
+            "reassign_assigned_to": payload.reassign_assigned_to,
             "decided_by": request.decision.get("decided_by") if isinstance(request.decision, dict) else None,
             "decided_at": request.decision.get("decided_at") if isinstance(request.decision, dict) else datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),

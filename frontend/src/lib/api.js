@@ -33,6 +33,29 @@ async function request(path, options = {}) {
   return response.json();
 }
 
+async function requestBlob(path, options = {}) {
+  const { accessToken, teamId, headers, ...fetchOptions } = options;
+  const response = await fetch(`${API_ROOT}${path}`, {
+    ...fetchOptions,
+    headers: buildHeaders(accessToken, teamId, headers),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    if (typeof payload.detail === "string" && payload.detail) {
+      throw new Error(payload.detail);
+    }
+    throw new Error(`接口 ${path} 返回 HTTP ${response.status}，但响应体没有 detail 字段。`);
+  }
+
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filenameMatch = disposition.match(/filename="?([^"]+)"?/i);
+  return {
+    blob: await response.blob(),
+    filename: filenameMatch?.[1] ?? "artifact",
+  };
+}
+
 export const api = {
   health(context = {}) {
     return request("/health", context);
@@ -132,6 +155,22 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  publishTeamAsset(assetId, payload = {}, context = {}) {
+    return request(`/team/assets/${assetId}/publish`, {
+      ...context,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  forkTeamAsset(assetId, payload = {}, context = {}) {
+    return request(`/team/assets/${assetId}/fork`, {
+      ...context,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
   teamAuditLogs(context = {}) {
     return request("/team/audit-logs", context);
   },
@@ -183,8 +222,19 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  getTaskTokenUsage(taskId) {
-    return request(`/tasks/${taskId}/token-usage`);
+  getTaskTokenUsage(taskId, context = {}) {
+    return request(`/tasks/${taskId}/token-usage`, context);
+  },
+  taskModelReport(taskId, context = {}) {
+    return request(`/tasks/${taskId}/report`, context);
+  },
+  taskPredictionDemo(taskId, payload, context = {}) {
+    return request(`/tasks/${taskId}/prediction-demo`, {
+      ...context,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   },
   decideTaskHumanRequest(taskId, requestId, payload, context = {}) {
     return request(`/tasks/${taskId}/human-requests/${requestId}/decision`, {
@@ -215,10 +265,22 @@ export const api = {
     const query = new URLSearchParams({ path: artifactPath }).toString();
     return request(`/tasks/${taskId}/code-workspace/file?${query}`, context);
   },
+  downloadTaskCodeArtifact(taskId, artifactPath, context = {}) {
+    const query = new URLSearchParams({ path: artifactPath }).toString();
+    return requestBlob(`/tasks/${taskId}/code-workspace/download?${query}`, context);
+  },
   updateTaskCodeArtifact(taskId, payload, context = {}) {
     return request(`/tasks/${taskId}/code-workspace/file`, {
       ...context,
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  rerunTaskCodeArtifact(taskId, payload, context = {}) {
+    return request(`/tasks/${taskId}/code-workspace/rerun`, {
+      ...context,
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });

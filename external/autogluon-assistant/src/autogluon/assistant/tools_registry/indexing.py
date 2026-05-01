@@ -95,13 +95,8 @@ class TutorialIndexer:
                 )
                 logger.info("Embedding model loaded successfully")
             except Exception as e:
-                logger.warning(
-                    f"Disabling tutorial retrieval because embedding model '{self.embedding_model_name}' "
-                    f"could not be loaded: {e}"
-                )
-                self.disabled = True
                 self.model = None
-                return False
+                raise RuntimeError(f"Embedding model '{self.embedding_model_name}' could not be loaded: {e}") from e
         return True
 
     def _extract_summary_from_md(self, md_path: Path) -> Optional[str]:
@@ -114,20 +109,15 @@ class TutorialIndexer:
         Returns:
             Summary text if found, None otherwise
         """
-        try:
-            with open(md_path, "r", encoding="utf-8") as f:
-                content = f.read()
+        with open(md_path, "r", encoding="utf-8") as f:
+            content = f.read()
 
-            # Look for summary line
-            lines = content.split("\n")
-            for line in lines:
-                if line.strip().startswith("Summary: "):
-                    return line.strip()[9:]  # Remove "Summary: " prefix
+        lines = content.split("\n")
+        for line in lines:
+            if line.strip().startswith("Summary: "):
+                return line.strip()[9:]  # Remove "Summary: " prefix
 
-            return None
-        except Exception as e:
-            logger.warning(f"Error extracting summary from {md_path}: {e}")
-            return None
+        return None
 
     def _build_tool_index(self, tool_name: str, tutorial_type: str) -> Tuple[faiss.Index, List[Dict]]:
         """
@@ -209,9 +199,7 @@ class TutorialIndexer:
 
             # Check for NaN or infinite values
             if not np.isfinite(embeddings).all():
-                logger.warning(f"Found non-finite values in embeddings for {tool_name} {tutorial_type}")
-                # Replace NaN/inf with zeros
-                embeddings = np.nan_to_num(embeddings, nan=0.0, posinf=0.0, neginf=0.0)
+                raise ValueError(f"Found non-finite values in embeddings for {tool_name} {tutorial_type}")
 
             # Create FAISS index
             dimension = embeddings.shape[1]
@@ -229,8 +217,9 @@ class TutorialIndexer:
             return index, metadata
 
         except Exception as e:
-            logger.error(f"Error during embedding generation or indexing for {tool_name} {tutorial_type}: {e}")
-            return None, []
+            raise RuntimeError(
+                f"Error during embedding generation or indexing for {tool_name} {tutorial_type}: {e}"
+            ) from e
 
     def build_indices(self, tools: Optional[List[str]] = None) -> None:
         """
@@ -270,8 +259,7 @@ class TutorialIndexer:
                         logger.warning(f"Failed to build {tutorial_type} index for {tool_name}")
 
                 except Exception as e:
-                    logger.error(f"Error building {tutorial_type} index for {tool_name}: {e}")
-                    continue
+                    raise RuntimeError(f"Error building {tutorial_type} index for {tool_name}: {e}") from e
 
     def save_indices(self) -> None:
         """Save all indices and metadata to disk."""
@@ -388,25 +376,19 @@ class TutorialIndexer:
 
             meta = metadata[idx]
 
-            # Load full content from file
-            try:
-                with open(meta["file_path"], "r", encoding="utf-8") as f:
-                    content = f.read()
+            with open(meta["file_path"], "r", encoding="utf-8") as f:
+                content = f.read()
 
-                result = {
-                    "tool_name": meta["tool_name"],
-                    "tutorial_type": meta["tutorial_type"],
-                    "file_path": meta["file_path"],
-                    "relative_path": meta["relative_path"],
-                    "summary": meta["summary"],
-                    "content": content,
-                    "score": float(score),
-                }
-                results.append(result)
-
-            except Exception as e:
-                logger.error(f"Error loading content from {meta['file_path']}: {e}")
-                continue
+            result = {
+                "tool_name": meta["tool_name"],
+                "tutorial_type": meta["tutorial_type"],
+                "file_path": meta["file_path"],
+                "relative_path": meta["relative_path"],
+                "summary": meta["summary"],
+                "content": content,
+                "score": float(score),
+            }
+            results.append(result)
 
         logger.info(f"Found {len(results)} results for query: {query}")
         return results

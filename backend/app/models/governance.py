@@ -170,6 +170,18 @@ class PlatformAssetReviewRequest(BaseModel):
     note: str | None = Field(default=None, max_length=4000)
 
 
+class PlatformAssetPublishRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=4000)
+    metadata: dict[str, Any] | None = None
+
+
+class PlatformAssetForkRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    review_status: str = Field(default="private", min_length=1, max_length=80)
+    metadata: dict[str, Any] | None = None
+
+
 class PlatformAssetMutationResponse(BaseModel):
     detail: str
     asset: PlatformAssetRecord

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -12,7 +13,9 @@ from backend.app.models.governance import (
     AIRoutingPolicyRecord,
     AuditLogRecord,
     PlatformAssetCreateRequest,
+    PlatformAssetForkRequest,
     PlatformAssetRecord,
+    PlatformAssetPublishRequest,
     PlatformAssetReviewRequest,
     TeamMemberRecord,
     TeamProfileRecord,
@@ -297,8 +300,6 @@ class GovernanceStore:
             has_any_value = bool(
                 item.connector_id
                 or item.model_name
-                or item.fallback_connector_id
-                or item.fallback_model_name
                 or item.config
             )
             stage = item.stage.strip()
@@ -322,8 +323,8 @@ class GovernanceStore:
                     "stage": stage,
                     "connector_id": item.connector_id,
                     "model_name": item.model_name,
-                    "fallback_connector_id": item.fallback_connector_id,
-                    "fallback_model_name": item.fallback_model_name,
+                    "fallback_connector_id": None,
+                    "fallback_model_name": None,
                     "config": item.config,
                     "created_by": created_by,
                 },
@@ -352,6 +353,25 @@ class GovernanceStore:
         )
         profile_map = {item.user_id: item for item in profiles}
         return [self._asset_from_payload(item, profile_map=profile_map) for item in payload if isinstance(item, dict)]
+
+    def get_asset(self, team_id: str, asset_id: str, *, access_token: str) -> PlatformAssetRecord | None:
+        payload = self._request_json(
+            path=(
+                "platform_assets"
+                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+                f"&id=eq.{quote(asset_id, safe='')}"
+                "&limit=1"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, list):
+            raise ConnectionError("Unexpected platform-asset detail response from Supabase.")
+        if not payload:
+            return None
+        creator_id = str(payload[0].get("created_by")) if payload[0].get("created_by") else None
+        profiles = self._list_profiles([creator_id] if creator_id else [], access_token=access_token)
+        profile_map = {item.user_id: item for item in profiles}
+        return self._asset_from_payload(payload[0], profile_map=profile_map)
 
     def create_asset(
         self,
@@ -401,6 +421,93 @@ class GovernanceStore:
         record = self._unwrap_single_record(updated, "asset review")
         creator_id = str(record.get("created_by")) if record.get("created_by") else None
         profiles = self._list_profiles([creator_id] if creator_id else [], access_token=access_token)
+        profile_map = {item.user_id: item for item in profiles}
+        return self._asset_from_payload(record, profile_map=profile_map)
+
+    def publish_asset(
+        self,
+        team_id: str,
+        asset_id: str,
+        actor_id: str,
+        payload: PlatformAssetPublishRequest,
+        *,
+        access_token: str,
+    ) -> PlatformAssetRecord:
+        existing = self.get_asset(team_id, asset_id, access_token=access_token)
+        if existing is None:
+            raise ValueError("asset not found")
+        metadata = dict(existing.metadata or {})
+        metadata.update(payload.metadata or {})
+        metadata["marketplace"] = {
+            **(metadata.get("marketplace") if isinstance(metadata.get("marketplace"), dict) else {}),
+            "published": True,
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "published_by": actor_id,
+            "note": payload.note,
+        }
+        updated = self._request_json(
+            path=(
+                "platform_assets"
+                f"?team_id=eq.{quote(team_id, safe='')}&id=eq.{quote(asset_id, safe='')}"
+            ),
+            access_token=access_token,
+            method="PATCH",
+            body={
+                "review_status": "published",
+                "metadata": metadata,
+            },
+        )
+        record = self._unwrap_single_record(updated, "asset publish")
+        creator_id = str(record.get("created_by")) if record.get("created_by") else None
+        profiles = self._list_profiles([creator_id] if creator_id else [], access_token=access_token)
+        profile_map = {item.user_id: item for item in profiles}
+        return self._asset_from_payload(record, profile_map=profile_map)
+
+    def fork_asset(
+        self,
+        team_id: str,
+        created_by: str,
+        source_asset_id: str,
+        payload: PlatformAssetForkRequest,
+        *,
+        access_token: str,
+    ) -> PlatformAssetRecord:
+        source = self.get_asset(team_id, source_asset_id, access_token=access_token)
+        if source is None:
+            raise ValueError("asset not found")
+        now = datetime.now(timezone.utc).isoformat()
+        source_metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        fork_metadata = {
+            **(payload.metadata or {}),
+            "fork": {
+                "forked_from_asset_id": source.id,
+                "forked_from_team_id": source.team_id,
+                "forked_from_title": source.title,
+                "forked_from_type": source.asset_type,
+                "forked_by": created_by,
+                "forked_at": now,
+                "source_storage_path": source.storage_path,
+                "source_review_status": source.review_status,
+            },
+            "source_metadata": source_metadata,
+        }
+        created = self._request_json(
+            path="platform_assets",
+            access_token=access_token,
+            method="POST",
+            body={
+                "team_id": team_id,
+                "created_by": created_by,
+                "asset_type": source.asset_type,
+                "title": payload.title or f"Fork of {source.title}",
+                "description": payload.description if payload.description is not None else source.description,
+                "storage_path": source.storage_path,
+                "metadata": fork_metadata,
+                "review_status": payload.review_status,
+            },
+        )
+        record = self._unwrap_single_record(created, "asset fork")
+        profiles = self._list_profiles([created_by], access_token=access_token)
         profile_map = {item.user_id: item for item in profiles}
         return self._asset_from_payload(record, profile_map=profile_map)
 

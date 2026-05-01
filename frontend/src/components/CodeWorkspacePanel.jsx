@@ -239,6 +239,9 @@ export default function CodeWorkspacePanel({
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   const [saveMessage, setSaveMessage] = useState("");
+  const [downloadState, setDownloadState] = useState("idle");
+  const [rerunState, setRerunState] = useState("idle");
+  const [rerunResult, setRerunResult] = useState(null);
   const gutterRef = useRef(null);
   const artifactCacheRef = useRef(new Map());
   const artifactInFlightRef = useRef(new Map());
@@ -270,6 +273,7 @@ export default function CodeWorkspacePanel({
   const activeCategoryTone = CATEGORY_TONES[artifactData?.artifact?.category] ?? "info";
   const activeStageLabel = artifactData?.artifact?.stage ? (STAGE_LABELS[artifactData.artifact.stage] ?? artifactData.artifact.stage) : "";
   const canEditActiveArtifact = Boolean(artifactData?.artifact?.editable);
+  const canRerunActiveArtifact = artifactData?.artifact?.category === "code" && artifactData?.artifact?.language === "python";
 
   function buildArtifactCacheKey(taskId, path, runOutputDir) {
     return `${taskId}::${runOutputDir}::${path}`;
@@ -318,6 +322,9 @@ export default function CodeWorkspacePanel({
       setDirty(false);
       setSaveState("idle");
       setSaveMessage("");
+      setDownloadState("idle");
+      setRerunState("idle");
+      setRerunResult(null);
       return;
     }
 
@@ -325,6 +332,7 @@ export default function CodeWorkspacePanel({
     setWorkspaceState("loading");
     setWorkspaceError("");
     setSaveMessage("");
+    setRerunResult(null);
     setArtifactError("");
 
     api.taskCodeWorkspace(selectedTaskId, requestContext)
@@ -485,6 +493,7 @@ export default function CodeWorkspacePanel({
     setArtifactData(null);
     setArtifactError("");
     setSaveMessage("");
+    setRerunResult(null);
     setWorkspaceState("loading");
 
     api.taskCodeWorkspace(selectedTaskId, requestContext)
@@ -527,7 +536,7 @@ export default function CodeWorkspacePanel({
       setEditorValue(payload.content ?? "");
       setDirty(false);
       setSaveState("saved");
-      setSaveMessage("已保存到本次运行目录。当前还不会自动触发重跑。");
+      setSaveMessage(payload.version_id ? `已保存到本次运行目录，版本 ${payload.version_id}。` : "已保存到本次运行目录。");
       setWorkspaceData((current) => {
         if (!current) return current;
         return {
@@ -538,6 +547,52 @@ export default function CodeWorkspacePanel({
     } catch (error) {
       setSaveState("idle");
       setSaveMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleDownload() {
+    if (!selectedTaskId || !activePath || downloadState === "loading") return;
+    setDownloadState("loading");
+    setSaveMessage("");
+    try {
+      const payload = await api.downloadTaskCodeArtifact(selectedTaskId, activePath, requestContext);
+      const url = URL.createObjectURL(payload.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = payload.filename || artifactData?.artifact?.name || "artifact";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDownloadState("idle");
+    }
+  }
+
+  async function handleRerunArtifact() {
+    if (!selectedTaskId || !activePath || !canRerunActiveArtifact || rerunState === "loading") return;
+    if (dirty) {
+      setSaveMessage("请先保存当前文件，再重跑代码工件。");
+      return;
+    }
+    setRerunState("loading");
+    setRerunResult(null);
+    setSaveMessage("");
+    try {
+      const payload = await api.rerunTaskCodeArtifact(
+        selectedTaskId,
+        { path: activePath, time_limit_seconds: 300 },
+        requestContext,
+      );
+      setRerunResult(payload);
+      setSaveMessage(payload.detail);
+      clearTaskCache(selectedTaskId);
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRerunState("idle");
     }
   }
 
@@ -621,11 +676,29 @@ export default function CodeWorkspacePanel({
 
               <button
                 type="button"
+                className="ghost-button"
+                onClick={() => void handleDownload()}
+                disabled={!selectedTaskId || !activePath || downloadState === "loading"}
+              >
+                {downloadState === "loading" ? "下载中..." : "下载当前文件"}
+              </button>
+
+              <button
+                type="button"
                 className="primary-button"
                 onClick={() => void handleSave()}
                 disabled={!canEditActiveArtifact || !dirty || saveState === "saving"}
               >
                 {saveState === "saving" ? "保存中..." : "保存修改"}
+              </button>
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleRerunArtifact()}
+                disabled={!selectedTaskId || !canRerunActiveArtifact || rerunState === "loading"}
+              >
+                {rerunState === "loading" ? "重跑中..." : "重跑当前代码"}
               </button>
             </div>
           </div>
@@ -649,7 +722,13 @@ export default function CodeWorkspacePanel({
             </span>
           </div>
 
-          {saveMessage ? <div className={saveState === "saved" ? "notice-banner" : "error-banner"}>{saveMessage}</div> : null}
+          {saveMessage ? <div className={saveState === "saved" || rerunResult?.success ? "notice-banner" : "error-banner"}>{saveMessage}</div> : null}
+          {rerunResult ? (
+            <div className="callout">
+              <strong>最近一次代码重跑</strong>
+              <p>退出码：{rerunResult.exit_code}；stdout：<span className="mono-text">{rerunResult.stdout_path}</span>；stderr：<span className="mono-text">{rerunResult.stderr_path}</span></p>
+            </div>
+          ) : null}
           {workspaceError ? <div className="error-banner">{workspaceError}</div> : null}
           {artifactError ? <div className="error-banner">{artifactError}</div> : null}
           {Array.isArray(workspaceData?.warnings) && workspaceData.warnings.length ? (
@@ -762,6 +841,8 @@ export default function CodeWorkspacePanel({
                       {activeStageLabel ? <span className="runtime-pill">{activeStageLabel}</span> : null}
                       <span className="runtime-pill">{formatBytes(activeArtifactEntry.size_bytes)}</span>
                       <span className="runtime-pill">{formatDateTime(activeArtifactEntry.updated_at)}</span>
+                      {artifactData?.version_id ? <span className="runtime-pill success">版本 {artifactData.version_id}</span> : null}
+                      {Array.isArray(artifactData?.version_history) && artifactData.version_history.length ? <span className="runtime-pill info">{artifactData.version_history.length} 个保存版本</span> : null}
                       <span className="workspace-filepath">{activeArtifactEntry.path}</span>
                     </div>
 

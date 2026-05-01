@@ -9,6 +9,7 @@ import CodeWorkspacePanel from "./components/CodeWorkspacePanel.jsx";
 import HumanCollaborationPanel from "./components/HumanCollaborationPanel.jsx";
 import LeaderboardPanel from "./components/LeaderboardPanel.jsx";
 import ModelReportPanel from "./components/ModelReportPanel.jsx";
+import PredictionDemoPanel from "./components/PredictionDemoPanel.jsx";
 import QuotaManagementPanel from "./components/QuotaManagementPanel.jsx";
 import RoutingPolicyPanel from "./components/RoutingPolicyPanel.jsx";
 import SystemPanel from "./components/SystemPanel.jsx";
@@ -32,6 +33,7 @@ const NAV_ITEMS = [
   { id: "tasks", label: "任务", short: "任", group: "work", helper: "创建、上传、运行" },
   { id: "workflow", label: "工作流", short: "流", group: "work", helper: "阶段进度" },
   { id: "report", label: "报告", short: "报", group: "work", helper: "结果解释" },
+  { id: "demo", label: "Web Demo", short: "测", group: "work", helper: "在线预测" },
   { id: "conversations", label: "AI 对话", short: "话", group: "work", helper: "Prompt / Response" },
   { id: "code", label: "代码工作区", short: "码", group: "work", helper: "真实工件", requiresDeveloper: true },
   { id: "human", label: "人机协同", short: "协", group: "collab", helper: "复核与恢复" },
@@ -251,6 +253,9 @@ export default function App() {
   const [taskAIConversationsError, setTaskAIConversationsError] = useState("");
   const [taskChatSubmitting, setTaskChatSubmitting] = useState(false);
   const [taskChatError, setTaskChatError] = useState("");
+  const [taskModelReport, setTaskModelReport] = useState(null);
+  const [taskModelReportState, setTaskModelReportState] = useState("idle");
+  const [taskModelReportError, setTaskModelReportError] = useState("");
   const [humanRequestPreset, setHumanRequestPreset] = useState(null);
   const [connectors, setConnectors] = useState([]);
   const [connectorsState, setConnectorsState] = useState("idle");
@@ -280,6 +285,8 @@ export default function App() {
   const [assetMessage, setAssetMessage] = useState("");
   const [assetCreating, setAssetCreating] = useState(false);
   const [assetReviewingId, setAssetReviewingId] = useState("");
+  const [assetPublishingId, setAssetPublishingId] = useState("");
+  const [assetForkingId, setAssetForkingId] = useState("");
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditState, setAuditState] = useState("idle");
   const [auditError, setAuditError] = useState("");
@@ -398,6 +405,25 @@ export default function App() {
     }
   }
 
+  async function loadTaskModelReport(taskId = selectedTask?.id) {
+    if (!session?.access_token || !activeTeamId || !taskId) {
+      setTaskModelReport(null);
+      setTaskModelReportState("idle");
+      setTaskModelReportError("");
+      return;
+    }
+    setTaskModelReportState("loading");
+    setTaskModelReportError("");
+    try {
+      setTaskModelReport(await api.taskModelReport(taskId, requestContext));
+    } catch (error) {
+      setTaskModelReport(null);
+      setTaskModelReportError(getErrorMessage(error));
+    } finally {
+      setTaskModelReportState("ready");
+    }
+  }
+
   async function loadUsageSummary() {
     if (!session?.access_token || !activeTeamId) {
       setUsageSummary(null);
@@ -509,6 +535,7 @@ export default function App() {
       loadAuditLogs(),
     ]);
     await loadTaskAIConversations();
+    await loadTaskModelReport();
   }
 
   useEffect(() => {
@@ -546,6 +573,9 @@ export default function App() {
         setTaskAIConversations(null);
         setTaskAIConversationsState("idle");
         setTaskAIConversationsError("");
+        setTaskModelReport(null);
+        setTaskModelReportState("idle");
+        setTaskModelReportError("");
         setUsageSummary(null);
         setUsageState("idle");
         setUsageError("");
@@ -582,6 +612,9 @@ export default function App() {
       setTaskAIConversations(null);
       setTaskAIConversationsState("idle");
       setTaskAIConversationsError("");
+      setTaskModelReport(null);
+      setTaskModelReportState("idle");
+      setTaskModelReportError("");
       setUsageSummary(null);
       setUsageState("idle");
       setUsageError("");
@@ -640,6 +673,23 @@ export default function App() {
       return;
     }
     void loadTaskAIConversations(selectedTask.id);
+  }, [
+    activeTeamId,
+    selectedTask?.id,
+    selectedTask?.updated_at,
+    selectedTask?.last_run?.output_dir,
+    selectedTask?.last_run_attempt?.output_dir,
+    session?.access_token,
+  ]);
+
+  useEffect(() => {
+    if (!selectedTask?.id || !session?.access_token || !activeTeamId) {
+      setTaskModelReport(null);
+      setTaskModelReportState("idle");
+      setTaskModelReportError("");
+      return;
+    }
+    void loadTaskModelReport(selectedTask.id);
   }, [
     activeTeamId,
     selectedTask?.id,
@@ -735,7 +785,13 @@ export default function App() {
     setTaskForm((current) => ({
       ...current,
       stage_routing: current.stage_routing.map((item) => (
-        item.stage === stage ? { ...item, [field]: value } : item
+        item.stage === stage
+          ? {
+              ...item,
+              [field]: value,
+              model_name: field === "connector_id" && !value ? "" : item.model_name,
+            }
+          : item
       )),
     }));
   }
@@ -767,19 +823,24 @@ export default function App() {
     event.preventDefault();
     if (!activeTeamId) return setTaskError("请先选择团队。");
     if (!taskFile) return setTaskError("请先选择 CSV 文件。");
+    const modelOnlyRoute = (taskForm.stage_routing ?? []).find((item) => item.model_name?.trim() && !item.connector_id);
+    if (modelOnlyRoute) {
+      return setTaskError("阶段 AI 覆盖中不能只填写模型名；请同时选择连接器，或清空该阶段覆盖。");
+    }
     setSubmittingTask(true);
     setTaskError("");
     setTaskMessage("");
+    let createdTaskId = "";
     try {
       const createdTask = await api.createTask({
         name: taskForm.name.trim(),
         description: taskForm.description.trim(),
         stage_routing: (taskForm.stage_routing ?? [])
-          .filter((item) => item.connector_id || item.model_name?.trim())
+          .filter((item) => item.connector_id)
           .map((item) => ({
             stage: item.stage,
             connector_id: item.connector_id || null,
-            model_name: item.model_name?.trim() || null,
+            model_name: item.connector_id ? item.model_name?.trim() || null : null,
           })),
         interaction_policies: (taskForm.interaction_policies ?? [])
           .map((item, index) => ({
@@ -798,15 +859,23 @@ export default function App() {
           }))
           .filter((item) => item.assignee_value && item.title && item.summary),
       }, requestContext);
+      createdTaskId = createdTask.id;
       const uploadedTask = await api.uploadDataset(createdTask.id, taskFile, requestContext);
       setTasks((current) => mergeTaskIntoList(current, uploadedTask));
       setSelectedTaskId(uploadedTask.id);
       setTaskForm(EMPTY_TASK_FORM);
       setTaskFile(null);
       setTaskUploadToken((current) => current + 1);
-      await Promise.all([loadUsageSummary(), loadTaskAIConversations(uploadedTask.id)]);
+      await Promise.all([loadUsageSummary(), loadTaskAIConversations(uploadedTask.id), loadTaskModelReport(uploadedTask.id)]);
       setTaskMessage(buildTaskCreationMessage(uploadedTask));
     } catch (error) {
+      await Promise.allSettled([
+        loadTasks(),
+        loadUsageSummary(),
+        createdTaskId ? loadTaskAIConversations(createdTaskId) : Promise.resolve(),
+        createdTaskId ? loadTaskModelReport(createdTaskId) : Promise.resolve(),
+      ]);
+      if (createdTaskId) setSelectedTaskId(createdTaskId);
       setTaskError(getErrorMessage(error));
     } finally {
       setSubmittingTask(false);
@@ -821,10 +890,10 @@ export default function App() {
       const updatedTask = await api.analyzeTask(taskId, requestContext);
       setTasks((current) => mergeTaskIntoList(current, updatedTask));
       setSelectedTaskId(updatedTask.id);
-      await Promise.all([loadUsageSummary(), loadTaskAIConversations(updatedTask.id)]);
+      await Promise.all([loadUsageSummary(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
       setTaskMessage(`任务“${updatedTask.name}”已通过当前运行时 AI 重新解析。`);
     } catch (error) {
-      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTaskAIConversations(taskId)]);
+      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
       setTaskError(getErrorMessage(error));
     } finally {
       setAnalyzingTaskId("");
@@ -839,7 +908,7 @@ export default function App() {
       const updatedTask = await api.runTask(taskId, DEFAULT_RUN_TIME_LIMIT, requestContext);
       setTasks((current) => mergeTaskIntoList(current, updatedTask));
       setSelectedTaskId(updatedTask.id);
-      await Promise.all([loadUsageSummary(), loadTaskAIConversations(updatedTask.id)]);
+      await Promise.all([loadUsageSummary(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
       if (updatedTask.status === "paused_for_review") {
         setTaskMessage("任务已根据人工参与策略自动暂停，等待处理协同节点。");
       } else if (updatedTask.last_run) {
@@ -848,7 +917,7 @@ export default function App() {
         setTaskMessage("任务状态已更新。");
       }
     } catch (error) {
-      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTaskAIConversations(taskId)]);
+      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
       setTaskError(getErrorMessage(error));
     } finally {
       setRunningTaskId("");
@@ -890,6 +959,9 @@ export default function App() {
         setTaskAIConversations(null);
         setTaskAIConversationsState("idle");
         setTaskAIConversationsError("");
+        setTaskModelReport(null);
+        setTaskModelReportState("idle");
+        setTaskModelReportError("");
       }
       setTaskMessage(`任务“${task.name}”已删除。`);
     } catch (error) {
@@ -1080,6 +1152,39 @@ export default function App() {
     }
   }
 
+  async function handlePublishAsset(assetId) {
+    setAssetPublishingId(assetId);
+    setAssetError("");
+    setAssetMessage("");
+    try {
+      await api.publishTeamAsset(assetId, {}, requestContext);
+      await Promise.all([loadAssets(), loadAuditLogs()]);
+      setAssetMessage("资产已发布到团队广场。");
+    } catch (error) {
+      setAssetError(getErrorMessage(error));
+    } finally {
+      setAssetPublishingId("");
+    }
+  }
+
+  async function handleForkAsset(asset) {
+    if (!asset?.id) return;
+    const title = window.prompt("Fork 后的新资产标题", `Fork of ${asset.title}`);
+    if (!title) return;
+    setAssetForkingId(asset.id);
+    setAssetError("");
+    setAssetMessage("");
+    try {
+      await api.forkTeamAsset(asset.id, { title: title.trim(), review_status: "private" }, requestContext);
+      await Promise.all([loadAssets(), loadAuditLogs()]);
+      setAssetMessage("资产 Fork 已创建。");
+    } catch (error) {
+      setAssetError(getErrorMessage(error));
+    } finally {
+      setAssetForkingId("");
+    }
+  }
+
   function renderTaskDetail() {
     if (!selectedTask) return <div className="empty-state">先从左侧任务列表选择一个任务，或先创建新任务。</div>;
     const analysis = getTaskAnalysis(selectedTask);
@@ -1109,6 +1214,7 @@ export default function App() {
             <button type="button" className="ghost-button" onClick={() => void handleAnalyzeTask(selectedTask.id)} disabled={!selectedTask.dataset_filename || analyzingTaskId === selectedTask.id || runningTaskId === selectedTask.id}>{analyzingTaskId === selectedTask.id ? "AI 解析中..." : "AI 解析"}</button>
             <button type="button" className="primary-button" onClick={() => void handleRunTask(selectedTask.id)} disabled={!selectedTask.dataset_filename || runningTaskId === selectedTask.id || ["waiting_human", "paused_for_review"].includes(selectedTask.status)}>{runningTaskId === selectedTask.id ? "MLZero 运行中..." : `运行 MLZero（${DEFAULT_RUN_TIME_LIMIT} 分钟）`}</button>
             <button type="button" className="chip-button" onClick={() => setActivePage("conversations")}>查看 AI 对话</button>
+            <button type="button" className="chip-button" onClick={() => setActivePage("demo")}>Web Demo</button>
             {teamCanDevelop ? <button type="button" className="chip-button" onClick={() => setActivePage("code")}>查看 AI 代码</button> : null}
             <button type="button" className="chip-button" onClick={() => setActivePage("human")}>人机协同</button>
           </div>
@@ -1382,22 +1488,46 @@ export default function App() {
                 <ModelReportPanel
                   tasks={tasks}
                   selectedTask={selectedTask}
+                  report={taskModelReport}
+                  reportState={taskModelReportState}
+                  reportError={taskModelReportError}
                   onSelectTask={setSelectedTaskId}
+                  onRefreshReport={() => selectedTask?.id ? void loadTaskModelReport(selectedTask.id) : undefined}
                   formatMetricName={formatMetricName}
+                />
+              </>
+            ) : null}
+
+            {activePage === "demo" ? (
+              <>
+                <section className="page-header">
+                  <div>
+                    <p className="eyebrow">Web Demo</p>
+                    <h1>在线预测 Demo</h1>
+                    <p className="page-copy">这里调用真实任务运行产物做单行预测。没有可加载模型或预测合约时，页面会明确说明暂不支持。</p>
+                  </div>
+                </section>
+
+                <PredictionDemoPanel
+                  tasks={tasks}
+                  tasksLoading={tasksState === "loading"}
+                  selectedTask={selectedTask}
+                  requestContext={requestContext}
+                  onSelectTask={setSelectedTaskId}
                 />
               </>
             ) : null}
 
             {activePage === "conversations" ? (
               <>
-                <section className="page-header">
+                <section className="page-header compact-page-header">
                   <div>
                     <p className="eyebrow">Conversations</p>
-                    <h1>AI 对话记录</h1>
-                    <p className="page-copy">这里按真正的聊天流展示任务分析和 MLZero 过程中的 prompt / response，页面主体会尽量把宽度留给连续对话本身。</p>
+                    <h1>AI 对话</h1>
                   </div>
-                  <div className="detail-stack">
-                    <div className="runtime-pill info">当前运行时：{activeConnector ? `${activeConnector.display_name} · ${activeConnector.model_name}` : health?.model_alias ?? "未读取"}</div>
+                  <div className="header-status-stack">
+                    <div className="runtime-pill info">运行时：{activeConnector ? `${activeConnector.display_name} · ${activeConnector.model_name}` : health?.model_alias ?? "未读取"}</div>
+                    <div className="runtime-pill">任务数：{tasks.length}</div>
                   </div>
                 </section>
 
@@ -1551,12 +1681,16 @@ export default function App() {
                   loading={assetState === "loading"}
                   creating={assetCreating}
                   reviewingAssetId={assetReviewingId}
+                  publishingAssetId={assetPublishingId}
+                  forkingAssetId={assetForkingId}
                   message={assetMessage}
                   error={assetError}
                   isAdmin={teamCanManage}
                   onRefresh={() => void loadAssets()}
                   onCreate={handleCreateAsset}
                   onReview={handleReviewAsset}
+                  onPublish={handlePublishAsset}
+                  onFork={handleForkAsset}
                 />
               </>
             ) : null}

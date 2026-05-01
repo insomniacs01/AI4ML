@@ -8,7 +8,7 @@ AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已�
 - 后端：FastAPI 服务，负责团队鉴权后的任务编排、AI 解析、MLZero 执行、人机协同、代码工件读取与 Token 记账。
 - 身份与团队：Supabase Auth + Postgres，作为用户、团队、成员、路由、配额、资产和审计的真实数据源。
 - 执行引擎：以 `MLZero / AutoGluon Assistant` 为基础，已做本地二次改造，支持 OpenAI-compatible 云模型提供方。
-- 当前优先完成的是 P0 能力闭环；更高层的工作流广场、模型广场、公开发布等仍处于后续阶段。
+- 当前优先完成的是 P0 能力闭环；资产发布/Fork 已有基础能力，更高层的工作流广场、模型广场运营仍处于后续阶段。
 
 ## 已实现的核心能力
 
@@ -25,12 +25,13 @@ AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已�
   - 测试连接器
   - 激活团队当前运行连接器
 - 团队默认 AI 路由
-  - 按阶段配置 primary / fallback 连接器与模型
+  - 按阶段配置显式连接器与模型；未配置或配置不完整时直接失败
 - 任务链路
   - 创建任务
   - 上传 CSV
   - AI 自动解析目标列、任务类型、指标等结构化信息
   - 触发 MLZero 运行
+  - 查看真实模型报告、在线预测 Demo、代码工件下载与 Python 工件重跑
 - 人机协同
   - 手动发起协同请求
   - 运行前 `before_run` 自动协同策略
@@ -38,12 +39,14 @@ AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已�
 - 代码工作区
   - 查看最新运行目录中的真实代码与日志工件
   - 开发成员可编辑可写文件
+  - 保存版本记录、下载工件、重跑可执行 Python 工件
 - 配额与 Token
   - 团队成员配额管理
   - 预警阈值拦截高开销阶段
   - Token ledger 记账
 - 资产与审计
   - 资产登记与基础审核状态流转
+  - 资产发布到团队广场视图与 Fork 派生
   - 审计日志记录团队治理动作
 
 ## 技术栈
@@ -91,14 +94,24 @@ AI4ML/
 - `POST /api/tasks/{task_id}/dataset`
 - `POST /api/tasks/{task_id}/analyze`
 - `POST /api/tasks/{task_id}/run`
+- `GET /api/tasks/{task_id}/report`
+- `POST /api/tasks/{task_id}/prediction-demo`
 - `PUT /api/tasks/{task_id}/workflow-config`
-- `GET/POST /api/tasks/{task_id}/human-requests`
-- `GET/PUT /api/tasks/{task_id}/code-workspace`
+- `POST /api/tasks/{task_id}/human-requests`
+- `POST /api/tasks/{task_id}/human-requests/{request_id}/decision`
+- `GET /api/tasks/{task_id}/human-collaboration`
+- `POST /api/tasks/{task_id}/resume`
+- `GET /api/tasks/{task_id}/code-workspace`
+- `GET/PUT /api/tasks/{task_id}/code-workspace/file`
+- `GET /api/tasks/{task_id}/code-workspace/download`
+- `POST /api/tasks/{task_id}/code-workspace/rerun`
 - `GET/POST /api/connectors`
 - `GET/PATCH /api/team/members`
 - `GET/POST /api/team/quotas`
 - `GET/PUT /api/team/routing`
 - `GET/POST /api/team/assets`
+- `POST /api/team/assets/{asset_id}/publish`
+- `POST /api/team/assets/{asset_id}/fork`
 - `GET /api/team/audit-logs`
 
 ## 环境准备
@@ -127,6 +140,7 @@ AI4ML_MLZERO_PROVIDER_WIRE_API=chat_completions
 AI4ML_MLZERO_EXECUTION_MODE=python
 AI4ML_MLZERO_PYTHON_EXECUTABLE=D:\333\AI4ML\.venv\Scripts\python.exe
 AI4ML_MLZERO_OPENAI_API_KEY=YOUR_REAL_API_KEY
+AI4ML_CONNECTOR_SECRET_KEY=replace-with-a-stable-random-secret-at-least-16-bytes
 AI4ML_MLZERO_MAX_ITERATIONS=6
 AI4ML_MLZERO_CONTINUOUS_IMPROVEMENT=true
 AI4ML_MLZERO_MIN_CANDIDATE_MODELS=3
@@ -136,6 +150,8 @@ AI4ML_MLZERO_MIN_CANDIDATE_MODELS=3
 
 - 后端会自动读取 `.env`、`.env.local`、`backend/.env.local`、`frontend/.env.local` 等文件。
 - 不要把真实密钥提交到仓库。
+- `AI4ML_CONNECTOR_SECRET_KEY` 用于加密新保存的连接器 API Key，必须保持稳定；更换后旧的加密连接器密钥将无法解密。历史明文连接器仍可读取，但新建或更新连接器必须配置该值。
+- 模型报告、在线预测 Demo、代码工作区重跑都只读取真实任务产物；如果缺少运行目录、缺少 AutoGluon predictor 或缺少可重跑的 Python 工件，会明确返回“不支持/缺少产物”，不会生成假结果。
 
 ### 3. Supabase 数据库初始化
 
@@ -217,7 +233,7 @@ npm run dev
 - 元数据
 - 审核状态
 
-当前版本更偏“资产登记与审核目录”，不是公开广场，也不是自动上传式文件中心。
+当前版本更偏“资产登记与审核目录”。已支持团队内发布与 Fork 派生，但仍不是完整文件托管系统，也不是跨团队公开市场。
 
 ## 验证方式
 
@@ -255,9 +271,9 @@ npm run build
 
 ## 当前限制
 
-- 更高层的工作流广场、模型广场、公开发布等仍未完全产品化。
-- 资产中心当前是登记台账，不是完整资产平台。
-- 代码工作区当前是运行工件编辑器，不是完整 IDE。
+- 更高层的工作流广场、模型广场运营仍未完全产品化。
+- 资产中心已有发布和 Fork，但仍是登记台账，不是完整资产平台。
+- 代码工作区已有下载、版本记录和 Python 工件重跑，但仍是运行工件编辑器，不是完整 IDE。
 - MLZero 长时多轮搜索虽然可配置，但实际稳定性仍依赖当前机器环境和所配置的云模型提供方。
 
 ## 重要文件

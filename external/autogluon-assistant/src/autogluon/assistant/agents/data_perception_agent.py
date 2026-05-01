@@ -1,9 +1,7 @@
-import csv
 import logging
 import os
 import random
 from collections import defaultdict
-from pathlib import Path
 
 from ..prompts import PythonReaderPrompt
 from .base_agent import BaseAgent
@@ -13,76 +11,6 @@ from .utils import init_llm
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-LOCAL_TABULAR_EXTENSIONS = {".csv", ".tsv"}
-LOCAL_TEXT_EXTENSIONS = {".txt", ".md", ".rst", ".log", ".json", ".yaml", ".yml"}
-
-
-def _truncate_text(content, max_chars):
-    if len(content) <= max_chars:
-        return content
-    return content[: max_chars - 3] + "..."
-
-
-def _truncate_cell(value, limit=50):
-    value = value.replace("\n", " ").replace("\r", " ").strip()
-    if len(value) <= limit:
-        return value
-    return value[: limit - 3] + "..."
-
-
-def _format_tabular_preview(file_path, max_chars):
-    suffix = Path(file_path).suffix.lower()
-    delimiter = "\t" if suffix == ".tsv" else ","
-
-    with open(file_path, encoding="utf-8", errors="replace", newline="") as infile:
-        reader = csv.reader(infile, delimiter=delimiter)
-        preview_rows = []
-        for _, row in zip(range(4), reader):
-            preview_rows.append(row)
-
-    if not preview_rows:
-        return "<empty file>"
-
-    header = preview_rows[0]
-    sample_rows = preview_rows[1:]
-
-    display_header = header
-    if len(header) > 20:
-        display_header = header[:10] + ["..."] + header[-10:]
-
-    lines = [f"Columns: {', '.join(display_header)}"]
-    if sample_rows:
-        lines.append("Preview:")
-        for index, row in enumerate(sample_rows, start=1):
-            display_row = row
-            if len(row) > 20:
-                display_row = row[:10] + ["..."] + row[-10:]
-            formatted_row = " | ".join(_truncate_cell(str(cell)) for cell in display_row)
-            lines.append(f"row_{index}: {formatted_row}")
-
-    return _truncate_text("\n".join(lines), max_chars)
-
-
-def _format_text_preview(file_path, max_chars):
-    with open(file_path, encoding="utf-8", errors="replace") as infile:
-        content = infile.read(max_chars + 1)
-    return _truncate_text(content, max_chars)
-
-
-def read_file_locally(file_path, max_chars):
-    suffix = Path(file_path).suffix.lower()
-
-    try:
-        if suffix in LOCAL_TABULAR_EXTENSIONS:
-            return _format_tabular_preview(file_path=file_path, max_chars=max_chars)
-        if suffix in LOCAL_TEXT_EXTENSIONS:
-            return _format_text_preview(file_path=file_path, max_chars=max_chars)
-    except Exception as err:  # noqa: BLE001
-        logger.warning(f"Local file preview failed for {file_path}: {err}")
-
-    return None
 
 
 def get_all_files(folder_path):
@@ -235,11 +163,6 @@ class DataPerceptionAgent(BaseAgent):
         )
 
     def read_file(self, file_path, max_chars):
-        local_result = read_file_locally(file_path=file_path, max_chars=max_chars)
-        if local_result is not None:
-            logger.info(f"Using local deterministic reader for file: {file_path}")
-            return local_result
-
         # 0. init llm
         if not self.reader_llm_config.multi_turn:
             self.reader_llm = init_llm(

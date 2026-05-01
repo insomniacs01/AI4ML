@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     mlzero_provider_wire_api: Literal["chat_completions", "responses"] = "chat_completions"
     mlzero_provider_user_agent: str = "Mozilla/5.0"
     mlzero_provider_request_timeout_seconds: int = 30
+    connector_secret_key: str = ""
 
     # ---- User / Auth settings ----
     jwt_secret_key: str = secrets.token_urlsafe(32)

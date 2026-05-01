@@ -16,7 +16,9 @@ from backend.app.models.governance import (
     AIRoutingPoliciesUpdateResponse,
     AuditLogsResponse,
     PlatformAssetCreateRequest,
+    PlatformAssetForkRequest,
     PlatformAssetMutationResponse,
+    PlatformAssetPublishRequest,
     PlatformAssetReviewRequest,
     PlatformAssetsResponse,
     TeamInviteRequest,
@@ -51,6 +53,21 @@ def _raise_governance_http_error(exc: RuntimeError | PermissionError | Connectio
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+def _validate_routing_update(payload: AIRoutingPoliciesUpdateRequest) -> None:
+    for item in payload.items:
+        stage = item.stage.strip()
+        if item.fallback_connector_id or (item.fallback_model_name and item.fallback_model_name.strip()):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{stage} 阶段仍提交了 fallback 路由。当前运行链路要求显式主路由失败即失败，不再保存备用路由。",
+            )
+        if item.model_name and item.model_name.strip() and not item.connector_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{stage} 阶段只填写了模型名但没有 connector_id。请显式选择连接器。",
+            )
 
 
 @router.get("/members", response_model=TeamMembersResponse)
@@ -215,6 +232,7 @@ def save_team_routing(
     payload: AIRoutingPoliciesUpdateRequest,
     team_access: TeamAccessContext = Depends(require_team_admin_access),
 ) -> AIRoutingPoliciesUpdateResponse:
+    _validate_routing_update(payload)
     store = get_governance_store()
     try:
         items = store.save_routing_policies(
@@ -235,8 +253,6 @@ def save_team_routing(
                         "stage": item.stage,
                         "connector_id": item.connector_id,
                         "model_name": item.model_name,
-                        "fallback_connector_id": item.fallback_connector_id,
-                        "fallback_model_name": item.fallback_model_name,
                     }
                     for item in payload.items
                 ]
@@ -321,6 +337,72 @@ def review_team_asset(
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产审核状态已更新。", asset=asset)
+
+
+@router.post("/assets/{asset_id}/publish", response_model=PlatformAssetMutationResponse)
+def publish_team_asset(
+    asset_id: str,
+    payload: PlatformAssetPublishRequest,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> PlatformAssetMutationResponse:
+    store = get_governance_store()
+    try:
+        asset = store.publish_asset(
+            team_access.team_id,
+            asset_id,
+            team_access.user.id,
+            payload,
+            access_token=team_access.access_token,
+        )
+        store.create_audit_log(
+            team_access.team_id,
+            team_access.user.id,
+            action="team.asset.publish",
+            resource_type=str(asset.asset_type),
+            resource_id=asset.id,
+            detail={"note": payload.note},
+            access_token=team_access.access_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return PlatformAssetMutationResponse(detail="资产已发布到团队广场。", asset=asset)
+
+
+@router.post("/assets/{asset_id}/fork", response_model=PlatformAssetMutationResponse, status_code=status.HTTP_201_CREATED)
+def fork_team_asset(
+    asset_id: str,
+    payload: PlatformAssetForkRequest,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> PlatformAssetMutationResponse:
+    store = get_governance_store()
+    try:
+        asset = store.fork_asset(
+            team_access.team_id,
+            team_access.user.id,
+            asset_id,
+            payload,
+            access_token=team_access.access_token,
+        )
+        store.create_audit_log(
+            team_access.team_id,
+            team_access.user.id,
+            action="team.asset.fork",
+            resource_type=str(asset.asset_type),
+            resource_id=asset.id,
+            detail={
+                "source_asset_id": asset_id,
+                "title": asset.title,
+                "review_status": asset.review_status,
+            },
+            access_token=team_access.access_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return PlatformAssetMutationResponse(detail="资产 Fork 已创建。", asset=asset)
 
 
 @router.get("/audit-logs", response_model=AuditLogsResponse)

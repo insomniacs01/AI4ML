@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +11,10 @@ from pathlib import Path
 from backend.app.models.task import (
     TaskCodeArtifactContentResponse,
     TaskCodeArtifactEntry,
+    TaskCodeArtifactRerunRequest,
+    TaskCodeArtifactRerunResponse,
     TaskCodeArtifactUpdateRequest,
+    TaskCodeArtifactVersionRecord,
     TaskCodeWorkspaceResponse,
     TaskRecord,
 )
@@ -34,6 +41,7 @@ TEXT_ARTIFACT_FILENAMES = {
 EDITABLE_LANGUAGES = {"python", "shell", "powershell", "batch", "sql"}
 MAX_ARTIFACT_SIZE_BYTES = 2 * 1024 * 1024
 MAX_SAVE_SIZE_BYTES = 2 * 1024 * 1024
+VERSION_MANIFEST_NAME = ".ai4ml_code_workspace_versions.json"
 GROUP_ORDER = {
     "generation": 0,
     "result": 1,
@@ -111,6 +119,7 @@ def read_task_code_artifact(task: TaskRecord, artifact_path: str) -> TaskCodeArt
         run_output_dir=str(run_output_dir),
         artifact=entry,
         content=artifact.read_text(encoding="utf-8", errors="replace"),
+        version_history=_read_version_history(run_output_dir, relative_path=entry.path),
     )
 
 
@@ -134,10 +143,19 @@ def save_task_code_artifact(
             f"Limit: {MAX_SAVE_SIZE_BYTES} bytes."
         )
 
+    previous_hash = _sha256_file(artifact)
     artifact.write_text(payload.content, encoding="utf-8")
+    next_hash = _sha256_file(artifact)
     refreshed_entry = _artifact_entry_from_path(run_output_dir, artifact)
     if refreshed_entry is None:
         raise RuntimeError(f"Saved artifact could not be reloaded: {payload.path}")
+    version = _append_version_record(
+        run_output_dir,
+        relative_path=refreshed_entry.path,
+        size_bytes=len(encoded),
+        previous_sha256=previous_hash,
+        sha256=next_hash,
+    )
 
     return TaskCodeArtifactContentResponse(
         task_id=task.id,
@@ -145,6 +163,83 @@ def save_task_code_artifact(
         run_output_dir=str(run_output_dir),
         artifact=refreshed_entry,
         content=payload.content,
+        version_id=version.version_id,
+        version_history=_read_version_history(run_output_dir, relative_path=refreshed_entry.path),
+    )
+
+
+def resolve_task_code_artifact_file(task: TaskRecord, artifact_path: str) -> tuple[Path, TaskCodeArtifactEntry]:
+    run_output_dir = _require_existing_run_output_dir(task)
+    artifact = _resolve_artifact_path(run_output_dir, artifact_path)
+    entry = _artifact_entry_from_path(run_output_dir, artifact)
+    if entry is None:
+        raise FileNotFoundError(f"Unsupported artifact type: {artifact_path}")
+    return artifact, entry
+
+
+def rerun_task_code_artifact(
+    task: TaskRecord,
+    payload: TaskCodeArtifactRerunRequest,
+) -> TaskCodeArtifactRerunResponse:
+    run_output_dir = _require_existing_run_output_dir(task)
+    requested_path = payload.path or _find_default_rerun_path(run_output_dir)
+    if not requested_path:
+        raise FileNotFoundError("No generated_code.py artifact is available to rerun.")
+
+    artifact = _resolve_artifact_path(run_output_dir, requested_path)
+    entry = _artifact_entry_from_path(run_output_dir, artifact)
+    if entry is None:
+        raise FileNotFoundError(f"Unsupported artifact type: {requested_path}")
+    if entry.language != "python":
+        raise RuntimeError("Only Python code artifacts can be rerun from the code workspace.")
+    if entry.category != "code":
+        raise RuntimeError("Only code artifacts can be rerun from the code workspace.")
+
+    started_at = datetime.now(timezone.utc)
+    run_id = started_at.strftime("%Y%m%dT%H%M%SZ")
+    log_dir = run_output_dir / "code_workspace_reruns"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = entry.path.replace("/", "__").replace("\\", "__")
+    stdout_path = log_dir / f"{run_id}_{safe_name}.stdout.log"
+    stderr_path = log_dir / f"{run_id}_{safe_name}.stderr.log"
+
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [sys.executable, str(artifact)],
+            cwd=str(artifact.parent),
+            capture_output=True,
+            text=True,
+            timeout=payload.time_limit_seconds,
+            check=False,
+        )
+        stdout_path.write_text(completed.stdout or "", encoding="utf-8")
+        stderr_path.write_text(completed.stderr or "", encoding="utf-8")
+        exit_code = int(completed.returncode)
+        success = exit_code == 0
+        detail = "代码工作区工件已真实重跑完成。" if success else f"代码工作区工件重跑失败，退出码 {exit_code}。"
+    except subprocess.TimeoutExpired as exc:
+        stdout_path.write_text(exc.stdout or "", encoding="utf-8")
+        stderr_path.write_text(exc.stderr or f"Rerun timed out after {payload.time_limit_seconds} seconds.", encoding="utf-8")
+        exit_code = -1
+        success = False
+        detail = f"代码工作区工件重跑超时：{payload.time_limit_seconds} 秒。"
+
+    finished_at = datetime.now(timezone.utc)
+    version_history = _read_version_history(run_output_dir, relative_path=entry.path)
+    latest_version = version_history[-1].version_id if version_history else None
+    return TaskCodeArtifactRerunResponse(
+        task_id=task.id,
+        task_name=task.name,
+        run_output_dir=str(run_output_dir),
+        path=entry.path,
+        success=success,
+        exit_code=exit_code,
+        detail=detail,
+        stdout_path=str(stdout_path.relative_to(run_output_dir).as_posix()),
+        stderr_path=str(stderr_path.relative_to(run_output_dir).as_posix()),
+        version_id=latest_version,
+        started_at=started_at,
+        finished_at=finished_at,
     )
 
 
@@ -171,6 +266,8 @@ def _collect_workspace_entries(run_output_dir: Path) -> list[TaskCodeArtifactEnt
     entries: list[TaskCodeArtifactEntry] = []
     for path in sorted(run_output_dir.rglob("*")):
         if not path.is_file():
+            continue
+        if path.name == VERSION_MANIFEST_NAME:
             continue
         if "best_run" in path.parts:
             continue
@@ -709,3 +806,91 @@ def _resolve_artifact_path(run_output_dir: Path, artifact_path: str) -> Path:
         raise FileNotFoundError(f"Artifact not found: {artifact_path}")
 
     return resolved_path
+
+
+def _find_default_rerun_path(run_output_dir: Path) -> str | None:
+    candidates = sorted(
+        (
+            path
+            for path in run_output_dir.rglob("generated_code.py")
+            if path.is_file() and "best_run" not in path.parts
+        ),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return None
+    return candidates[0].relative_to(run_output_dir).as_posix()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _version_manifest_path(run_output_dir: Path) -> Path:
+    return run_output_dir / VERSION_MANIFEST_NAME
+
+
+def _read_all_version_records(run_output_dir: Path) -> list[TaskCodeArtifactVersionRecord]:
+    manifest = _version_manifest_path(run_output_dir)
+    if not manifest.exists():
+        return []
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    rows = payload.get("versions") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return []
+    records: list[TaskCodeArtifactVersionRecord] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            records.append(TaskCodeArtifactVersionRecord.model_validate(row))
+        except Exception:
+            continue
+    return records
+
+
+def _read_version_history(run_output_dir: Path, *, relative_path: str) -> list[TaskCodeArtifactVersionRecord]:
+    return [
+        record
+        for record in _read_all_version_records(run_output_dir)
+        if record.path == relative_path
+    ]
+
+
+def _write_version_records(run_output_dir: Path, records: list[TaskCodeArtifactVersionRecord]) -> None:
+    manifest = _version_manifest_path(run_output_dir)
+    manifest.write_text(
+        json.dumps({"versions": [record.model_dump(mode="json") for record in records]}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _append_version_record(
+    run_output_dir: Path,
+    *,
+    relative_path: str,
+    size_bytes: int,
+    previous_sha256: str,
+    sha256: str,
+) -> TaskCodeArtifactVersionRecord:
+    now = datetime.now(timezone.utc)
+    version = TaskCodeArtifactVersionRecord(
+        version_id=f"{now.strftime('%Y%m%dT%H%M%SZ')}-{sha256[:12]}",
+        path=relative_path,
+        saved_at=now,
+        size_bytes=size_bytes,
+        previous_sha256=previous_sha256,
+        sha256=sha256,
+    )
+    records = _read_all_version_records(run_output_dir)
+    records.append(version)
+    _write_version_records(run_output_dir, records)
+    return version

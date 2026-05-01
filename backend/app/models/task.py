@@ -41,6 +41,57 @@ class RunAttempt(BaseModel):
     token_usage: Optional[TokenUsageReport] = None
 
 
+class DatasetColumnProfile(BaseModel):
+    name: str
+    inferred_type: Literal["integer", "number", "datetime", "text", "empty", "mixed"]
+    non_empty_count: int
+    missing_count: int
+    missing_ratio: float
+    sample_values: list[str] = Field(default_factory=list)
+
+
+class DatasetProfile(BaseModel):
+    filename: Optional[str] = None
+    path: Optional[str] = None
+    row_count: int = 0
+    column_count: int = 0
+    columns: list[DatasetColumnProfile] = Field(default_factory=list)
+    preview_rows: list[dict[str, str]] = Field(default_factory=list)
+    target_column: Optional[str] = None
+    generated_at: datetime
+
+
+class FeatureImportanceEntry(BaseModel):
+    feature: str
+    importance: float
+    source: Optional[str] = None
+
+
+class TaskModelReportResponse(BaseModel):
+    task_id: str
+    task_name: str
+    generated_at: datetime
+    dataset_profile: Optional[DatasetProfile] = None
+    feature_importance: list[FeatureImportanceEntry] = Field(default_factory=list)
+    result_summary: list[str] = Field(default_factory=list)
+    data_quality_notes: list[str] = Field(default_factory=list)
+    limitation_notes: list[str] = Field(default_factory=list)
+    artifact_paths: list[str] = Field(default_factory=list)
+    report_markdown: str = ""
+
+
+class TaskPredictionDemoRequest(BaseModel):
+    features: dict[str, Any]
+
+
+class TaskPredictionDemoResponse(BaseModel):
+    task_id: str
+    supported: bool
+    detail: str
+    prediction: Optional[Any] = None
+    command_hint: Optional[str] = None
+
+
 class WorkflowStage(str, Enum):
     requirement_analysis = "requirement_analysis"
     data_analysis = "data_analysis"
@@ -92,7 +143,14 @@ class WorkflowStageStatus(str, Enum):
 
 
 class HumanInteractionRequestStatus(str, Enum):
+    pending = "pending"
     open = "open"
+    confirmed = "confirmed"
+    modified = "modified"
+    rejected = "rejected"
+    reassigned = "reassigned"
+    expired = "expired"
+    skipped = "skipped"
     resolved = "resolved"
 
 
@@ -100,6 +158,9 @@ class HumanInteractionDecisionAction(str, Enum):
     approve = "approve"
     revise = "revise"
     block = "block"
+    reject = "reject"
+    reassign = "reassign"
+    skip = "skip"
 
 
 class InteractionTriggerMode(str, Enum):
@@ -212,7 +273,7 @@ class TaskHumanRequestRecord(BaseModel):
     team_id: str
     task_id: str
     stage: WorkflowStage | str
-    status: HumanInteractionRequestStatus = HumanInteractionRequestStatus.open
+    status: HumanInteractionRequestStatus = HumanInteractionRequestStatus.pending
     requested_by: Optional[str] = None
     assigned_to: Optional[str] = None
     assignee_type: Optional[InteractionAssigneeType] = None
@@ -244,6 +305,10 @@ class TaskHumanRequestDecisionRequest(BaseModel):
     decision_summary: str = Field(min_length=1, max_length=4000)
     artifact_paths: list[str] = Field(default_factory=list)
     resume_task: bool = True
+    reassign_assignee_type: Optional[InteractionAssigneeType] = None
+    reassign_assignee_value: Optional[str] = Field(default=None, max_length=200)
+    reassign_assigned_to: Optional[str] = Field(default=None, max_length=64)
+    reassign_timeout_minutes: Optional[int] = Field(default=None, ge=5, le=10080)
     details: Optional[dict[str, Any]] = None
 
 
@@ -259,6 +324,10 @@ class TaskHumanDecisionHistoryEntry(BaseModel):
     artifact_paths: list[str] = Field(default_factory=list)
     decision_details: Optional[dict[str, Any]] = None
     resume_task: Optional[bool] = None
+    requires_rerun: Optional[bool] = None
+    reassign_assignee_type: Optional[str] = None
+    reassign_assignee_value: Optional[str] = None
+    reassign_assigned_to: Optional[str] = None
     decided_by: Optional[str] = None
     decided_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -425,17 +494,48 @@ class TaskCodeWorkspaceResponse(BaseModel):
     items: list[TaskCodeArtifactEntry] = Field(default_factory=list)
 
 
+class TaskCodeArtifactVersionRecord(BaseModel):
+    version_id: str
+    path: str
+    saved_at: datetime
+    size_bytes: int
+    previous_sha256: Optional[str] = None
+    sha256: str
+
+
 class TaskCodeArtifactContentResponse(BaseModel):
     task_id: str
     task_name: str
     run_output_dir: str
     artifact: TaskCodeArtifactEntry
     content: str
+    version_id: Optional[str] = None
+    version_history: list[TaskCodeArtifactVersionRecord] = Field(default_factory=list)
 
 
 class TaskCodeArtifactUpdateRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4000)
     content: str
+
+
+class TaskCodeArtifactRerunRequest(BaseModel):
+    path: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    time_limit_seconds: int = Field(default=300, ge=5, le=1800)
+
+
+class TaskCodeArtifactRerunResponse(BaseModel):
+    task_id: str
+    task_name: str
+    run_output_dir: str
+    path: str
+    success: bool
+    exit_code: int
+    detail: str
+    stdout_path: str
+    stderr_path: str
+    version_id: Optional[str] = None
+    started_at: datetime
+    finished_at: datetime
 
 
 class TaskDeleteResponse(BaseModel):

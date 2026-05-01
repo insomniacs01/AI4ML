@@ -77,26 +77,21 @@ class RerankerAgent(BaseAgent):
         max_length: int,
     ) -> str:
         """Format a single tutorial's content with truncation if needed."""
-        try:
-            with open(tutorial.path, "r", encoding="utf-8") as f:
-                content = f.read()
+        with open(tutorial.path, "r", encoding="utf-8") as f:
+            content = f.read()
 
-            # Truncate if needed
-            if len(content) > max_length:
-                content = content[:max_length] + "\n...(truncated)"
+        if len(content) > max_length:
+            content = content[:max_length] + "\n...(truncated)"
 
-            formatted = f"""### {tutorial.title}
+        formatted = f"""### {tutorial.title}
 {content}
 """
-            return formatted
-        except Exception as e:
-            logger.warning(f"Error formatting tutorial {getattr(tutorial, 'path', 'unknown')}: {e}")
-            return ""
+        return formatted
 
     def _generate_tutorial_prompt(self, selected_tutorials: List[TutorialInfo]) -> str:
         """Generate formatted tutorial prompt from selected tutorials."""
         if not selected_tutorials:
-            return ""
+            raise ValueError("Reranker selected no tutorials while tutorial candidates were available.")
 
         # Get max tutorial length from config if available
         max_tutorial_length = self.config.max_tutorial_length
@@ -106,11 +101,10 @@ class RerankerAgent(BaseAgent):
         for tutorial in selected_tutorials:
             per_tutorial_max_length = max_tutorial_length // len(selected_tutorials)
             formatted = self._format_tutorial_content(tutorial, per_tutorial_max_length)
-            if formatted:
-                formatted_tutorials.append(formatted)
+            formatted_tutorials.append(formatted)
 
         if not formatted_tutorials:
-            return ""
+            raise RuntimeError("Reranker selected tutorials but no tutorial content could be formatted.")
 
         return "\n\n".join(formatted_tutorials)
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const PHASE_LABELS = {
   analysis: "任务解析",
@@ -21,7 +21,7 @@ const ORIGIN_LABELS = {
 };
 
 const ORIGIN_TONES = {
-  ai_model: "info",
+  ai_model: "success",
   local_runtime: "warning",
   unknown: "warning",
 };
@@ -39,20 +39,36 @@ const INTERNAL_STATE_CATEGORY_LABELS = {
 };
 
 const PROMPT_EXPLANATIONS = {
-  task_analysis: "这是任务解析阶段发给模型的提示词，用来识别目标列、任务类型和建议指标。",
-  python_coder: "这是让模型生成或修复训练脚本的提示词。",
-  bash_coder: "这是生成执行包装脚本的提示词，用来真正把代码在本机跑起来。",
-  executer: "这是执行评估阶段的提示词，用来判断本轮运行是否成功。",
-  error_analyzer: "这是错误分析阶段的提示词，用来总结失败原因，指导下一轮修复。",
-  chat: "这是补充说明或辅助对话阶段的提示词。",
+  task_analysis: "识别目标列、任务类型和建议指标。",
+  python_coder: "生成或修复训练脚本。",
+  bash_coder: "生成本机执行包装脚本。",
+  executer: "判断本轮运行是否成功。",
+  error_analyzer: "总结失败原因并指导下一轮修复。",
+  chat: "补充说明或辅助对话。",
 };
 
 const TASK_STATUS_LABELS = {
   draft: "草稿",
   uploaded: "已上传数据集",
+  planning: "规划中",
   running: "运行中",
+  paused_for_review: "等待复核",
+  waiting_human: "等待人工协同",
   completed: "已完成",
   failed: "失败",
+  published: "已发布",
+};
+
+const TASK_STATUS_TONES = {
+  draft: "warning",
+  uploaded: "info",
+  planning: "info",
+  running: "info",
+  paused_for_review: "warning",
+  waiting_human: "warning",
+  completed: "success",
+  failed: "danger",
+  published: "success",
 };
 
 const PROBLEM_TYPE_LABELS = {
@@ -88,6 +104,10 @@ function formatTaskStatus(value) {
   return TASK_STATUS_LABELS[value] ?? value ?? "未知状态";
 }
 
+function formatTaskStatusTone(value) {
+  return TASK_STATUS_TONES[value] ?? "warning";
+}
+
 function formatInternalStateCategory(value) {
   return INTERNAL_STATE_CATEGORY_LABELS[value] ?? value ?? "其他";
 }
@@ -111,16 +131,16 @@ function getOriginAvatar(value) {
 }
 
 function getResponseNote(value) {
-  if (value === "local_runtime") return "这条回复来自本地运行逻辑，不是远端模型直接返回。";
-  if (value === "ai_model") return "这是一条真实的模型调用记录。";
-  return "当前无法完全确定这条响应的来源。";
+  if (value === "local_runtime") return "本地运行逻辑";
+  if (value === "ai_model") return "真实模型调用";
+  return "来源未确认";
 }
 
-function getTurnMeta(item) {
-  const segments = [formatPhase(item.phase)];
-  if (item.node) segments.push(item.node);
-  if (item.stage) segments.push(item.stage);
-  return segments.join(" / ");
+function getTurnMeta(item, index) {
+  const stageLabel = STAGE_LABELS[item.stage] ?? item.stage ?? "未命名阶段";
+  const segments = [`Round ${index + 1}`, formatPhase(item.phase), stageLabel];
+  if (item.node) segments.splice(2, 0, item.node);
+  return segments.filter(Boolean).join(" / ");
 }
 
 function formatEntryTitle(item) {
@@ -148,18 +168,15 @@ function buildResultSummary(task) {
 }
 
 function getConversationCountLabel(count) {
-  if (!count) return "还没有系统问答";
-  return `${count} 组系统问答`;
+  return count ? `${count} 组` : "0 组";
 }
 
 function getInternalStateCountLabel(count) {
-  if (!count) return "还没有内部状态";
-  return `${count} 条内部状态`;
+  return count ? `${count} 条` : "0 条";
 }
 
 function getInteractiveCountLabel(count) {
-  if (!count) return "还没有手动聊天";
-  return `${count} 条手动消息`;
+  return count ? `${count} 条` : "0 条";
 }
 
 function formatTokenUsage(usage) {
@@ -201,54 +218,10 @@ function buildHumanRequestPresetFromConversation(task, prompt, assistantMessage)
   };
 }
 
-function buildConversationStream(items) {
-  return items.flatMap((item, index) => {
-    const marker = {
-      type: "marker",
-      id: `${item.id}-marker`,
-      title: formatEntryTitle(item),
-      meta: getTurnMeta(item),
-      time: formatDateTime(item.created_at),
-    };
-
-    const prompt = {
-      type: "message",
-      id: `${item.id}-prompt`,
-      align: "prompt",
-      avatar: "P",
-      title: "系统 Prompt",
-      subtitle: `发送到 ${formatPhase(item.phase)}`,
-      body: getMessageText(item.prompt),
-      explanation: PROMPT_EXPLANATIONS[item.stage] ?? "这是当前阶段发给模型或运行时的原始提示词。",
-      bubbleTone: "prompt",
-      markerLabel: `Round ${index + 1}`,
-    };
-
-    const response = {
-      type: "message",
-      id: `${item.id}-response`,
-      align: "response",
-      avatar: getOriginAvatar(item.origin),
-      title: formatOrigin(item.origin),
-      subtitle: getResponseNote(item.origin),
-      body: getMessageText(item.response),
-      bubbleTone: item.origin === "local_runtime" ? "runtime" : "response",
-      files: [
-        item.prompt_path ? `Prompt file: ${item.prompt_path}` : null,
-        item.response_path ? `Response file: ${item.response_path}` : null,
-      ].filter(Boolean),
-      originTone: getOriginTone(item.origin),
-      time: formatDateTime(item.created_at),
-    };
-
-    return [marker, prompt, response];
-  });
-}
-
 function getInteractiveMessageMeta(message) {
-  if (message.role === "user") return "你手动输入的 prompt";
-  if (message.status === "error") return "系统把连接器调用错误直接暴露出来，方便你排查";
-  return "当前激活连接器返回的真实回复";
+  if (message.role === "user") return "你的 prompt";
+  if (message.status === "error") return "连接器错误";
+  return "当前连接器回复";
 }
 
 function getInteractiveBubbleTone(message) {
@@ -261,6 +234,15 @@ function getInteractiveAvatar(message) {
   if (message.role === "user") return "你";
   if (message.origin === "local_runtime" || message.status === "error") return "RT";
   return "AI";
+}
+
+function ConversationMetric({ label, value }) {
+  return (
+    <article className="ai-chat-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
 }
 
 export default function AIConversationPanel({
@@ -279,6 +261,7 @@ export default function AIConversationPanel({
   onOpenTaskDetails,
 }) {
   const [draftPrompt, setDraftPrompt] = useState("");
+  const [activeView, setActiveView] = useState("chat");
 
   useEffect(() => {
     setDraftPrompt("");
@@ -289,8 +272,10 @@ export default function AIConversationPanel({
   const internalStates = Array.isArray(conversationData?.internal_states) ? conversationData.internal_states : [];
   const warnings = Array.isArray(conversationData?.warnings) ? conversationData.warnings : [];
   const taskItems = Array.isArray(tasks) ? tasks : [];
-  const streamItems = buildConversationStream(items);
-  const latestAssistantMessage = [...interactiveMessages].reverse().find((message) => message.role === "assistant") ?? null;
+  const latestAssistantMessage = useMemo(
+    () => [...interactiveMessages].reverse().find((message) => message.role === "assistant") ?? null,
+    [interactiveMessages],
+  );
 
   async function handleSendPrompt(event) {
     event.preventDefault();
@@ -309,319 +294,258 @@ export default function AIConversationPanel({
     );
   }
 
+  if (!taskItems.length && !tasksLoading) {
+    return (
+      <section className="conversation-page-card ai-chat-workspace">
+        <div className="empty-state ai-chat-empty">当前团队还没有任务。先去任务页创建并上传 CSV。</div>
+      </section>
+    );
+  }
+
   return (
-    <section className="section-card conversation-page-card">
-      {!taskItems.length && !tasksLoading ? (
-        <div className="empty-state">当前团队还没有任务。先去任务页创建并上传 CSV。</div>
-      ) : null}
+    <section className="conversation-page-card ai-chat-workspace">
+      <div className="ai-chat-layout">
+        <aside className="ai-chat-sidebar">
+          <div className="ai-chat-sidebar-head">
+            <p className="eyebrow">Conversation</p>
+            <h3>{selectedTask?.name ?? "选择任务"}</h3>
+            {selectedTask ? (
+              <span className={`runtime-pill ${formatTaskStatusTone(selectedTask.status)}`}>
+                {formatTaskStatus(selectedTask.status)}
+              </span>
+            ) : null}
+          </div>
 
-      {taskItems.length ? (
-        <div className="conversation-page-shell">
-          <div className="conversation-page-toolbar">
-            <div className="conversation-page-intro">
-              <p className="eyebrow">Interactive Chat</p>
-              <h3>{selectedTask?.name ?? "选择一个任务"}</h3>
-              <p>这里分成两层：上面是你可以自己写 prompt 的真实聊天区，下面是系统内部的 MLZero prompt / response 日志。</p>
+          <label className="conversation-task-picker ai-chat-task-picker">
+            <span>当前任务</span>
+            <select
+              value={selectedTask?.id ?? ""}
+              onChange={(event) => onSelectTask?.(event.target.value)}
+              disabled={tasksLoading}
+            >
+              {taskItems.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selectedTask ? (
+            <div className="ai-chat-metrics">
+              <ConversationMetric label="数据集" value={selectedTask.dataset_filename ?? "未上传"} />
+              <ConversationMetric label="任务类型" value={formatProblemType(selectedTask.problem_type)} />
+              <ConversationMetric label="最近结果" value={buildResultSummary(selectedTask)} />
+              <ConversationMetric label="系统日志" value={getConversationCountLabel(items.length)} />
+              <ConversationMetric label="手动聊天" value={getInteractiveCountLabel(interactiveMessages.length)} />
+              <ConversationMetric label="内部状态" value={getInternalStateCountLabel(internalStates.length)} />
             </div>
+          ) : null}
 
-            <div className="conversation-page-actions">
-              <label className="conversation-task-picker">
-                <span>当前任务</span>
-                <select
-                  value={selectedTask?.id ?? ""}
-                  onChange={(event) => onSelectTask?.(event.target.value)}
-                  disabled={tasksLoading}
-                >
-                  {taskItems.map((task) => (
-                    <option key={task.id} value={task.id}>
-                      {task.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+          <div className="ai-chat-sidebar-actions">
+            {onOpenTaskDetails ? (
+              <button type="button" className="ghost-button" onClick={onOpenTaskDetails}>
+                回到任务详情
+              </button>
+            ) : null}
+            <button type="button" className="primary-button" onClick={onRefresh} disabled={loading || !selectedTask}>
+              {loading ? "刷新中..." : "刷新"}
+            </button>
+          </div>
 
-              {selectedTask ? (
-                <span className={`runtime-pill ${selectedTask.status === "failed" ? "danger" : selectedTask.status === "completed" ? "success" : "info"}`}>
-                  {formatTaskStatus(selectedTask.status)}
-                </span>
-              ) : null}
+          {warnings.length ? (
+            <div className="ai-chat-warning">
+              <strong>读取提醒</strong>
+              {warnings.map((warning, index) => (
+                <p key={`${warning}-${index}`}>{warning}</p>
+              ))}
+            </div>
+          ) : null}
+        </aside>
 
-              {onOpenTaskDetails ? (
-                <button type="button" className="ghost-button" onClick={onOpenTaskDetails}>
-                  回到任务详情
-                </button>
-              ) : null}
-
-              <button type="button" className="primary-button" onClick={onRefresh} disabled={loading}>
-                {loading ? "刷新中..." : "刷新对话"}
+        <div className="ai-chat-main">
+          <div className="ai-chat-mainbar">
+            <div className="ai-chat-tabs" role="tablist" aria-label="AI 对话视图">
+              <button
+                type="button"
+                className={cx("ai-chat-tab", activeView === "chat" && "active")}
+                onClick={() => setActiveView("chat")}
+              >
+                手动对话 <span>{getInteractiveCountLabel(interactiveMessages.length)}</span>
+              </button>
+              <button
+                type="button"
+                className={cx("ai-chat-tab", activeView === "system" && "active")}
+                onClick={() => setActiveView("system")}
+              >
+                系统日志 <span>{getConversationCountLabel(items.length)}</span>
+              </button>
+              <button
+                type="button"
+                className={cx("ai-chat-tab", activeView === "states" && "active")}
+                onClick={() => setActiveView("states")}
+              >
+                内部状态 <span>{getInternalStateCountLabel(internalStates.length)}</span>
               </button>
             </div>
           </div>
 
-          {selectedTask ? (
-            <div className="conversation-context-strip">
-              <span className="conversation-context-pill">
-                <strong>数据集</strong>
-                <em>{selectedTask.dataset_filename ?? "未上传"}</em>
-              </span>
-              <span className="conversation-context-pill">
-                <strong>任务类型</strong>
-                <em>{formatProblemType(selectedTask.problem_type)}</em>
-              </span>
-              <span className="conversation-context-pill">
-                <strong>最近结果</strong>
-                <em>{buildResultSummary(selectedTask)}</em>
-              </span>
-              <span className="conversation-context-pill">
-                <strong>系统日志</strong>
-                <em>{getConversationCountLabel(items.length)}</em>
-              </span>
-              <span className="conversation-context-pill">
-                <strong>手动聊天</strong>
-                <em>{getInteractiveCountLabel(interactiveMessages.length)}</em>
-              </span>
-              <span className="conversation-context-pill">
-                <strong>内部状态</strong>
-                <em>{getInternalStateCountLabel(internalStates.length)}</em>
-              </span>
-            </div>
-          ) : null}
-
-          {error ? <div className="error-banner">{error}</div> : null}
-
-          {warnings.length ? (
-            <div className="callout conversation-warning">
-              <strong>读取提醒</strong>
-              <div className="conversation-warning-list">
-                {warnings.map((warning, index) => (
-                  <p key={`${warning}-${index}`}>{warning}</p>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          {error ? <div className="error-banner ai-chat-inline-error">{error}</div> : null}
 
           {!selectedTask ? (
-            <div className="empty-state">先在上方选择一个任务，再查看它的 AI 对话记录。</div>
-          ) : (
-            <>
-              <div className="conversation-window conversation-interactive-board">
-                <div className="conversation-window-head">
-                  <div>
-                    <strong>与你自己的 AI 对话</strong>
-                    <p>你可以直接写 prompt。系统会附带当前任务上下文和最近几轮聊天，再发送给当前激活的连接器。</p>
-                  </div>
-                  <span className="runtime-pill success">{getInteractiveCountLabel(interactiveMessages.length)}</span>
-                </div>
+            <div className="empty-state ai-chat-empty">先选择一个任务。</div>
+          ) : null}
 
-                <form className="conversation-chat-form" onSubmit={handleSendPrompt}>
-                  <textarea
-                    className="conversation-chat-input"
-                    rows={6}
-                    value={draftPrompt}
-                    onChange={(event) => setDraftPrompt(event.target.value)}
-                    disabled={!selectedTask || chatSending}
-                    placeholder="在这里直接写你的 prompt，例如：请根据当前任务，帮我判断目标列是否合理，并给出一版更好的训练提示词。"
-                  />
-                  <div className="conversation-chat-form-footer">
-                    <p className="conversation-chat-helper">
-                      这里输入的是你自己的 prompt。助手回复后，你还能展开查看系统实际发给模型的完整上下文。
-                    </p>
-                    <div className="conversation-chat-actions">
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={handleOpenHumanRequestDraft}
-                        disabled={!selectedTask || chatSending || !draftPrompt.trim()}
-                      >
-                        转成人机协同
-                      </button>
-                      <button
-                        type="submit"
-                        className="primary-button"
-                        disabled={!selectedTask || chatSending || !draftPrompt.trim()}
-                      >
-                        {chatSending ? "发送中..." : "发送 prompt"}
-                      </button>
-                    </div>
-                  </div>
-                </form>
-
-                {chatError ? <div className="error-banner conversation-inline-banner">{chatError}</div> : null}
-
+          {selectedTask && activeView === "chat" ? (
+            <div className="ai-chat-panel ai-chat-thread-panel">
+              <div className="ai-chat-thread" aria-live="polite">
                 {!interactiveMessages.length ? (
-                  <div className="empty-state conversation-inline-empty">
-                    {chatSending ? "正在等待 AI 回复..." : "还没有手动聊天记录。你现在就可以自己写 prompt。"}
+                  <div className="empty-state ai-chat-empty">
+                    {chatSending ? "正在等待 AI 回复..." : "还没有手动聊天记录。"}
                   </div>
                 ) : (
-                  <div className="conversation-window-scroll conversation-chat-scroll">
-                    <div className="conversation-stream">
-                      {interactiveMessages.map((message) => {
-                        const align = message.role === "user" ? "prompt" : "response";
-                        return (
-                          <div key={message.id} className={cx("conversation-message-row", align)}>
-                            <div className={cx("conversation-avatar", align === "prompt" ? "prompt" : "response")}>
-                              {getInteractiveAvatar(message)}
-                            </div>
-
-                            <div className="conversation-message-shell">
-                              <div className="conversation-message-meta">
-                                <span>{formatDateTime(message.created_at)}</span>
-                                <span className={`runtime-pill ${message.origin === "local_runtime" || message.status === "error" ? "warning" : align === "prompt" ? "info" : "success"}`}>
-                                  {message.role === "user" ? "你的 prompt" : formatInteractiveOrigin(message.origin)}
-                                </span>
-                              </div>
-
-                              <div className={cx("conversation-message-bubble", getInteractiveBubbleTone(message))}>
-                                <div className="conversation-bubble-head">
-                                  <strong>{message.role === "user" ? "你发出的 prompt" : formatInteractiveOrigin(message.origin)}</strong>
-                                  <span>{getInteractiveMessageMeta(message)}</span>
-                                </div>
-                                <pre className="conversation-message-body">{getMessageText(message.content)}</pre>
-                                {message.composed_prompt ? (
-                                  <details className="conversation-raw-block">
-                                    <summary>查看系统实际发送给模型的完整 prompt</summary>
-                                    <pre className="conversation-message-body raw">{getMessageText(message.composed_prompt)}</pre>
-                                  </details>
-                                ) : null}
-                              </div>
-
-                              {message.role === "assistant" ? (
-                                <div className="conversation-message-files">
-                                  {message.model_name ? <p className="mono-text">Model: {message.model_name}</p> : null}
-                                  <p className="mono-text">Token: {formatTokenUsage(message.token_usage)}</p>
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="conversation-window">
-                <div className="conversation-window-head">
-                  <div>
-                    <strong>系统内部 Prompt / Response 日志</strong>
-                    <p>这里展示 MLZero 和任务解析过程里保存下来的系统日志。提示词默认先显示中文解释，原始英文放在折叠区。</p>
-                  </div>
-                  <span className="runtime-pill info">{getConversationCountLabel(items.length)}</span>
-                </div>
-
-                {!items.length ? (
-                  <div className="empty-state conversation-inline-empty">
-                    {loading ? "正在读取这个任务的系统对话日志..." : "这个任务暂时还没有保存下来的系统 prompt / response 记录。"}
-                  </div>
-                ) : (
-                  <div className="conversation-window-scroll">
-                    <div className="conversation-stream">
-                      {streamItems.map((entry) => {
-                        if (entry.type === "marker") {
-                          return (
-                            <div key={entry.id} className="conversation-marker">
-                              <span className="conversation-marker-line" />
-                              <div className="conversation-marker-content">
-                                <strong>{entry.title}</strong>
-                                <span>{entry.meta}</span>
-                                <small>{entry.time}</small>
-                              </div>
-                              <span className="conversation-marker-line" />
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div key={entry.id} className={cx("conversation-message-row", entry.align)}>
-                            <div className={cx("conversation-avatar", entry.align === "prompt" ? "prompt" : "response")}>
-                              {entry.avatar}
-                            </div>
-
-                            <div className="conversation-message-shell">
-                              <div className="conversation-message-meta">
-                                {entry.markerLabel ? <span>{entry.markerLabel}</span> : null}
-                                {entry.time ? <span>{entry.time}</span> : null}
-                                {entry.originTone ? <span className={`runtime-pill ${entry.originTone}`}>{entry.title}</span> : null}
-                              </div>
-
-                              <div className={cx("conversation-message-bubble", entry.bubbleTone)}>
-                                <div className="conversation-bubble-head">
-                                  <strong>{entry.title}</strong>
-                                  <span>{entry.subtitle}</span>
-                                </div>
-                                {entry.explanation ? <p className="conversation-message-explanation">{entry.explanation}</p> : null}
-                                {entry.align === "prompt" ? (
-                                  <details className="conversation-raw-block">
-                                    <summary>查看原始英文提示词</summary>
-                                    <pre className="conversation-message-body raw">{entry.body}</pre>
-                                  </details>
-                                ) : (
-                                  <pre className="conversation-message-body">{entry.body}</pre>
-                                )}
-                              </div>
-
-                              {entry.files?.length ? (
-                                <div className="conversation-message-files">
-                                  {entry.files.map((file) => (
-                                    <p key={file} className="mono-text">{file}</p>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="conversation-state-board">
-                <div className="conversation-state-board-head">
-                  <div>
-                    <strong>内部状态</strong>
-                    <p>这里展示 MLZero 在检索、执行、修复和汇总过程中落盘的内部状态文件。</p>
-                  </div>
-                  <span className="runtime-pill warning">{getInternalStateCountLabel(internalStates.length)}</span>
-                </div>
-
-                {!internalStates.length ? (
-                  <div className="empty-state compact">当前运行目录里还没有可展示的内部状态文件。</div>
-                ) : (
-                  <div className="conversation-state-list">
-                    {internalStates.map((item) => (
-                      <details key={item.id} className="conversation-state-card">
-                        <summary className="conversation-state-summary">
-                          <div className="conversation-state-summary-copy">
-                            <strong>{item.title}</strong>
-                            <span>
-                              {[
-                                item.node ?? "runtime",
-                                formatInternalStateCategory(item.category),
-                                formatDateTime(item.created_at),
-                              ].join(" / ")}
+                  interactiveMessages.map((message) => {
+                    const isUser = message.role === "user";
+                    return (
+                      <article key={message.id} className={cx("ai-chat-message", isUser ? "is-user" : "is-assistant")}>
+                        <div className="ai-chat-avatar">{getInteractiveAvatar(message)}</div>
+                        <div className="ai-chat-message-content">
+                          <div className="ai-chat-message-meta">
+                            <span>{formatDateTime(message.created_at)}</span>
+                            <span className={`runtime-pill ${message.origin === "local_runtime" || message.status === "error" ? "warning" : isUser ? "info" : "success"}`}>
+                              {isUser ? "你的 prompt" : formatInteractiveOrigin(message.origin)}
                             </span>
                           </div>
-                          <div className="conversation-state-summary-meta">
-                            <span className="runtime-pill warning">{formatInternalStateCategory(item.category)}</span>
-                            {item.node ? <span className="runtime-pill info">{item.node}</span> : null}
+                          <div className={cx("ai-chat-bubble", getInteractiveBubbleTone(message))}>
+                            <div className="ai-chat-bubble-head">
+                              <strong>{isUser ? "你发出的 prompt" : formatInteractiveOrigin(message.origin)}</strong>
+                              <span>{getInteractiveMessageMeta(message)}</span>
+                            </div>
+                            <pre>{getMessageText(message.content)}</pre>
+                            {message.composed_prompt ? (
+                              <details className="ai-chat-raw">
+                                <summary>完整上下文</summary>
+                                <pre>{getMessageText(message.composed_prompt)}</pre>
+                              </details>
+                            ) : null}
                           </div>
-                        </summary>
-
-                        <div className="conversation-state-content">
-                          {item.description ? <p className="conversation-state-description">{item.description}</p> : null}
-                          <p className="mono-text">{item.path}</p>
-                          <pre className="conversation-state-body">{getMessageText(item.content)}</pre>
+                          {!isUser ? (
+                            <div className="ai-chat-tokenline">
+                              {message.model_name ? <span>Model: {message.model_name}</span> : null}
+                              <span>Token: {formatTokenUsage(message.token_usage)}</span>
+                            </div>
+                          ) : null}
                         </div>
-                      </details>
-                    ))}
-                  </div>
+                      </article>
+                    );
+                  })
                 )}
               </div>
-            </>
-          )}
+
+              {chatError ? <div className="error-banner ai-chat-inline-error">{chatError}</div> : null}
+
+              <form className="ai-chat-composer" onSubmit={handleSendPrompt}>
+                <textarea
+                  value={draftPrompt}
+                  onChange={(event) => setDraftPrompt(event.target.value)}
+                  disabled={!selectedTask || chatSending}
+                  placeholder="输入 prompt..."
+                  rows={3}
+                />
+                <div className="ai-chat-composer-actions">
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={handleOpenHumanRequestDraft}
+                    disabled={!selectedTask || chatSending || !draftPrompt.trim()}
+                  >
+                    转成人机协同
+                  </button>
+                  <button
+                    type="submit"
+                    className="primary-button"
+                    disabled={!selectedTask || chatSending || !draftPrompt.trim()}
+                  >
+                    {chatSending ? "发送中..." : "发送"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : null}
+
+          {selectedTask && activeView === "system" ? (
+            <div className="ai-chat-panel ai-log-panel">
+              {!items.length ? (
+                <div className="empty-state ai-chat-empty">
+                  {loading ? "正在读取系统日志..." : "这个任务暂时还没有系统 prompt / response 记录。"}
+                </div>
+              ) : (
+                <div className="ai-system-turn-list">
+                  {items.map((item, index) => (
+                    <details key={item.id} className="ai-system-turn" open={index === 0}>
+                      <summary>
+                        <div>
+                          <strong>{formatEntryTitle(item)}</strong>
+                          <span>{getTurnMeta(item, index)}</span>
+                        </div>
+                        <time>{formatDateTime(item.created_at)}</time>
+                      </summary>
+                      <div className="ai-system-turn-grid">
+                        <article className="ai-system-block prompt">
+                          <div className="ai-system-block-head">
+                            <strong>Prompt</strong>
+                            <span>{PROMPT_EXPLANATIONS[item.stage] ?? "当前阶段原始提示词。"}</span>
+                          </div>
+                          <pre>{getMessageText(item.prompt)}</pre>
+                          {item.prompt_path ? <p className="ai-filepath">{item.prompt_path}</p> : null}
+                        </article>
+                        <article className="ai-system-block response">
+                          <div className="ai-system-block-head">
+                            <strong>{formatOrigin(item.origin)}</strong>
+                            <span>{getResponseNote(item.origin)}</span>
+                          </div>
+                          <pre>{getMessageText(item.response)}</pre>
+                          {item.response_path ? <p className="ai-filepath">{item.response_path}</p> : null}
+                          <span className={`runtime-pill ${getOriginTone(item.origin)}`}>{formatOrigin(item.origin)}</span>
+                        </article>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {selectedTask && activeView === "states" ? (
+            <div className="ai-chat-panel ai-state-panel">
+              {!internalStates.length ? (
+                <div className="empty-state ai-chat-empty">当前运行目录里还没有可展示的内部状态文件。</div>
+              ) : (
+                <div className="ai-state-list">
+                  {internalStates.map((item) => (
+                    <details key={item.id} className="ai-state-card">
+                      <summary>
+                        <div>
+                          <strong>{item.title}</strong>
+                          <span>
+                            {[item.node ?? "runtime", formatInternalStateCategory(item.category), formatDateTime(item.created_at)].join(" / ")}
+                          </span>
+                        </div>
+                        <span className="runtime-pill warning">{formatInternalStateCategory(item.category)}</span>
+                      </summary>
+                      <div className="ai-state-content">
+                        {item.description ? <p>{item.description}</p> : null}
+                        <p className="ai-filepath">{item.path}</p>
+                        <pre>{getMessageText(item.content)}</pre>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }

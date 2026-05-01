@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.core.supabase_auth import (
@@ -14,13 +15,15 @@ from backend.app.core.supabase_auth import (
     require_team_developer_access,
 )
 from backend.app.models.connector import StoredConnectorRecord
-from backend.app.models.governance import AIRoutingPolicyRecord, TeamQuotaRecord
+from backend.app.models.governance import AIRoutingPolicyRecord, TeamMemberRecord, TeamQuotaRecord
 from backend.app.models.task import (
     PRIMARY_WORKFLOW_STAGES,
     InteractionTriggerMode,
     RunAttempt,
     TaskAIConversationResponse,
     TaskCodeArtifactContentResponse,
+    TaskCodeArtifactRerunRequest,
+    TaskCodeArtifactRerunResponse,
     TaskCodeArtifactUpdateRequest,
     TaskCodeWorkspaceResponse,
     TaskCreateRequest,
@@ -32,13 +35,18 @@ from backend.app.models.task import (
     TaskInteractiveChatRequest,
     TaskInteractiveChatResponse,
     TaskListResponse,
+    TaskModelReportResponse,
+    TaskPredictionDemoRequest,
+    TaskPredictionDemoResponse,
     TaskRecord,
     TaskRunRequest,
+    TaskStageRoutingOverrideInput,
     TaskStageRoutingRecord,
     TaskStatus,
     TokenUsageResponse,
     TaskWorkflowConfigUpdateRequest,
     WorkflowStage,
+    WorkflowStageStatus,
     normalize_workflow_stage,
 )
 from backend.app.services.ai_task_analyzer import analyze_task_with_ai, apply_analysis_to_task
@@ -51,10 +59,13 @@ from backend.app.services.task_chat import send_task_chat_message
 from backend.app.services.task_code_workspace import (
     build_task_code_workspace,
     read_task_code_artifact,
+    rerun_task_code_artifact,
+    resolve_task_code_artifact_file,
     save_task_code_artifact,
 )
 from backend.app.services.task_human_collaboration import TaskHumanCollaborationService
 from backend.app.services.task_human_context import ensure_task_human_loop, get_task_human_loop
+from backend.app.services.task_reporting import build_prediction_demo_response, build_task_model_report
 from backend.app.services.task_store import TaskStore
 from backend.app.services.token_usage import read_token_usage
 
@@ -73,7 +84,6 @@ class _ResolvedStageSelection:
 
 @dataclass
 class _RoutingRuntimeContext:
-    active_connector: StoredConnectorRecord | None
     team_policies: dict[str, AIRoutingPolicyRecord]
     connector_cache: dict[str, StoredConnectorRecord | None]
 
@@ -122,6 +132,59 @@ def _raise_governance_http_error(exc: RuntimeError | PermissionError | Connectio
     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
+def _load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMemberRecord]:
+    try:
+        return get_governance_store().list_members(
+            team_access.team_id,
+            access_token=team_access.access_token,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+
+
+def _write_task_audit(
+    team_access: TeamAccessContext,
+    *,
+    action: str,
+    task_id: str,
+    detail: dict | None = None,
+    resource_type: str = "ai_task",
+) -> None:
+    try:
+        get_governance_store().create_audit_log(
+            team_access.team_id,
+            team_access.user.id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=task_id,
+            detail=detail or {},
+            access_token=team_access.access_token,
+        )
+    except (RuntimeError, PermissionError, ConnectionError):
+        pass
+
+
+def _validate_interaction_policy_assignees(
+    policies: list[TaskInteractionPolicyRecord],
+    team_access: TeamAccessContext,
+) -> None:
+    if not policies:
+        return
+    team_members = _load_team_members_for_human(team_access)
+    service = get_task_human_collaboration_service()
+    for policy in policies:
+        try:
+            service.resolve_assignee(
+                assignee_type=policy.assignee_type,
+                assignee_value=policy.assignee_value,
+                assigned_to=policy.assignee_value if policy.assignee_type.value == "member" else None,
+                default_member_id=team_access.user.id,
+                team_members=team_members,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
 def _raise_code_workspace_http_error(exc: Exception) -> None:
     if isinstance(exc, FileNotFoundError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -134,28 +197,7 @@ def _raise_code_workspace_http_error(exc: Exception) -> None:
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
-def _get_active_connector(team_access: TeamAccessContext) -> StoredConnectorRecord | None:
-    try:
-        return get_connector_store().get_active_connector(
-            team_access.team_id,
-            access_token=team_access.access_token,
-        )
-    except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
-
-
-def _require_active_connector(team_access: TeamAccessContext) -> StoredConnectorRecord:
-    active_connector = _get_active_connector(team_access)
-    if active_connector is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="当前团队还没有激活可用的 AI 连接器，无法执行 AI 解析或 MLZero 运行。",
-        )
-    return active_connector
-
-
 def _build_runtime_context(team_access: TeamAccessContext) -> _RoutingRuntimeContext:
-    active_connector = _get_active_connector(team_access)
     team_policies: dict[str, AIRoutingPolicyRecord] = {}
     try:
         items = get_governance_store().list_routing_policies(
@@ -166,9 +208,8 @@ def _build_runtime_context(team_access: TeamAccessContext) -> _RoutingRuntimeCon
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return _RoutingRuntimeContext(
-        active_connector=active_connector,
         team_policies=team_policies,
-        connector_cache={active_connector.id: active_connector} if active_connector is not None else {},
+        connector_cache={},
     )
 
 
@@ -195,13 +236,31 @@ def _build_stage_override_map(task: TaskRecord) -> dict[str, TaskStageRoutingRec
     return {normalize_workflow_stage(item.stage).value: item for item in task.stage_routing}
 
 
+def _raise_incomplete_stage_route(stage: WorkflowStage, selection_source: str) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"{stage.value} 阶段的 {selection_source} 路由只配置了模型名但没有 connector_id。"
+            "请显式选择连接器；系统不会再用当前激活连接器兜底。"
+        ),
+    )
+
+
+def _validate_task_stage_routing_overrides(items: list[TaskStageRoutingOverrideInput]) -> None:
+    for item in items:
+        stage = normalize_workflow_stage(item.stage)
+        if item.model_name and item.model_name.strip() and not item.connector_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{stage.value} 阶段只填写了模型名但没有 connector_id。请显式选择连接器。",
+            )
+
+
 def _resolve_stage_selection(
     task: TaskRecord,
     team_access: TeamAccessContext,
     runtime_context: _RoutingRuntimeContext,
     stage: WorkflowStage,
-    *,
-    allow_active_fallback: bool,
 ) -> _ResolvedStageSelection | None:
     normalized_stage = normalize_workflow_stage(stage)
     stage_key = normalized_stage.value
@@ -214,34 +273,30 @@ def _resolve_stage_selection(
         candidate_specs.append(("task_override", task_override.connector_id, task_override.model_name))
     if team_policy and (team_policy.connector_id or team_policy.model_name):
         candidate_specs.append(("team_policy", team_policy.connector_id, team_policy.model_name))
-    if team_policy and (team_policy.fallback_connector_id or team_policy.fallback_model_name):
-        candidate_specs.append(("team_policy_fallback", team_policy.fallback_connector_id, team_policy.fallback_model_name))
-    if allow_active_fallback:
-        candidate_specs.append(("active_connector", runtime_context.active_connector.id if runtime_context.active_connector else None, None))
 
     for selection_source, connector_id, model_name_override in candidate_specs:
-        connector: StoredConnectorRecord | None
-        if connector_id:
-            connector = _get_connector_by_id(team_access, runtime_context, connector_id)
-        elif runtime_context.active_connector is not None:
-            connector = runtime_context.active_connector
-        else:
-            connector = None
+        if not connector_id:
+            _raise_incomplete_stage_route(normalized_stage, selection_source)
+
+        connector = _get_connector_by_id(team_access, runtime_context, connector_id)
         if connector is None:
-            continue
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{normalized_stage.value} 阶段的 {selection_source} 路由引用了不存在的连接器：{connector_id}",
+            )
 
         resolved_model_name = (model_name_override or connector.model_name or "").strip()
         if not resolved_model_name:
-            continue
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{normalized_stage.value} 阶段的 {selection_source} 路由没有可用模型名。",
+            )
 
         stage_record = TaskStageRoutingRecord(
             stage=normalized_stage,
             connector_id=connector.id,
             connector_display_name=connector.display_name,
             model_name=resolved_model_name,
-            fallback_connector_id=team_policy.fallback_connector_id if team_policy else None,
-            fallback_connector_display_name=team_policy.fallback_connector_display_name if team_policy else None,
-            fallback_model_name=team_policy.fallback_model_name if team_policy else None,
             selection_source=selection_source,
         )
         return _ResolvedStageSelection(
@@ -267,7 +322,6 @@ def _build_stage_selection_map(
             team_access,
             runtime_context,
             stage,
-            allow_active_fallback=True,
         )
         if selection is not None:
             resolved[stage.value] = selection.stage_record
@@ -286,25 +340,14 @@ def _resolve_preferred_selection(
             team_access,
             runtime_context,
             stage,
-            allow_active_fallback=False,
         )
         if selection is not None:
             return selection
 
-    fallback_stage = stages[0]
-    fallback_selection = _resolve_stage_selection(
-        task,
-        team_access,
-        runtime_context,
-        fallback_stage,
-        allow_active_fallback=True,
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="当前任务没有可用的阶段 AI 路由。请先在默认 AI 页面保存阶段路由，或在任务表单中显式选择阶段连接器。",
     )
-    if fallback_selection is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="当前团队没有可用的阶段路由或激活连接器，无法启动这一阶段。",
-        )
-    return fallback_selection
 
 
 def _build_runtime_settings_for_selection(settings: Settings, selection: _ResolvedStageSelection) -> Settings:
@@ -323,6 +366,52 @@ def _sync_task_human_collaboration(
         access_token=team_access.access_token,
         stage_selection_map=stage_selection_map,
     )
+
+
+def _record_workflow_stage(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    *,
+    stage: WorkflowStage,
+    stage_status: WorkflowStageStatus,
+    summary: str,
+    selection: TaskStageRoutingRecord | _ResolvedStageSelection | None = None,
+    artifact_refs: list[str] | dict | None = None,
+) -> None:
+    stage_record = selection.stage_record if isinstance(selection, _ResolvedStageSelection) else selection
+    get_task_store().upsert_stage_record(
+        team_id=task.team_id,
+        task_id=task.id,
+        stage=stage,
+        status=stage_status,
+        access_token=team_access.access_token,
+        selected_connector_id=stage_record.connector_id if stage_record else None,
+        model_name=stage_record.model_name if stage_record else None,
+        selection_source=stage_record.selection_source if stage_record else None,
+        summary=summary,
+        artifact_refs=artifact_refs,
+    )
+
+
+def _record_stage_selection_map(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    *,
+    stage_selection_map: dict[str, TaskStageRoutingRecord],
+    status_by_stage: dict[WorkflowStage, WorkflowStageStatus],
+    summary_by_stage: dict[WorkflowStage, str],
+    artifact_refs: list[str] | dict | None = None,
+) -> None:
+    for stage, stage_status in status_by_stage.items():
+        _record_workflow_stage(
+            task,
+            team_access,
+            stage=stage,
+            stage_status=stage_status,
+            summary=summary_by_stage[stage],
+            selection=stage_selection_map.get(stage.value),
+            artifact_refs=artifact_refs,
+        )
 
 
 def _assert_quota_allows_action(
@@ -396,6 +485,7 @@ def _apply_interaction_policies(
     task_store = get_task_store()
     existing_requests = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
     existing_version_ids = {item.version_id for item in existing_requests if item.version_id}
+    team_members: list[TeamMemberRecord] | None = None
 
     created_count = 0
     for policy in task.interaction_policies:
@@ -411,15 +501,27 @@ def _apply_interaction_policies(
         timeout_at = None
         if policy.timeout_minutes is not None:
             timeout_at = task.updated_at + timedelta(minutes=policy.timeout_minutes)
+        if team_members is None:
+            team_members = _load_team_members_for_human(team_access)
+        try:
+            assignee_type, assignee_value, assigned_to = get_task_human_collaboration_service().resolve_assignee(
+                assignee_type=policy.assignee_type,
+                assignee_value=policy.assignee_value,
+                assigned_to=policy.assignee_value if policy.assignee_type.value == "member" else None,
+                default_member_id=team_access.user.id,
+                team_members=team_members,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
         task_store.create_human_request(
             team_id=task.team_id,
             task_id=task.id,
             stage=normalized_stage,
             requested_by=team_access.user.id,
-            assigned_to=policy.assignee_value if policy.assignee_type.value == "member" else None,
-            assignee_type=policy.assignee_type.value,
-            assignee_value=policy.assignee_value,
+            assigned_to=assigned_to,
+            assignee_type=assignee_type.value,
+            assignee_value=assignee_value,
             timeout_at=timeout_at,
             version_id=version_id,
             payload={
@@ -476,12 +578,39 @@ def _run_ai_analysis(
         )
         runtime_settings = _build_runtime_settings_for_selection(get_settings(), selection)
         stage_selection_map = _build_stage_selection_map(task, team_access, runtime_context)
+        _record_workflow_stage(
+            task,
+            team_access,
+            stage=WorkflowStage.requirement_analysis,
+            stage_status=WorkflowStageStatus.completed,
+            summary="任务描述和 CSV 数据已进入 AI 解析流程。",
+            selection=stage_selection_map.get(WorkflowStage.requirement_analysis.value),
+            artifact_refs=[task.dataset_path],
+        )
+        _record_workflow_stage(
+            task,
+            team_access,
+            stage=WorkflowStage.data_analysis,
+            stage_status=WorkflowStageStatus.running,
+            summary="当前运行时 AI 正在读取 CSV 表头和样例行，解析目标列、任务类型和指标。",
+            selection=selection,
+            artifact_refs=[task.dataset_path],
+        )
         analysis = analyze_task_with_ai(task, Path(task.dataset_path), runtime_settings)
     except HTTPException as exc:
         task.status = TaskStatus.planning
         task.notes = f"AI 解析失败：{exc.detail}"
         saved_task = task_store.save_task(task, access_token=team_access.access_token)
         _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
+        _record_workflow_stage(
+            saved_task,
+            team_access,
+            stage=WorkflowStage.data_analysis,
+            stage_status=WorkflowStageStatus.failed,
+            summary=f"AI 解析失败：{exc.detail}",
+            selection=stage_selection_map.get(WorkflowStage.data_analysis.value),
+            artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+        )
         if fail_on_error:
             raise
         return saved_task
@@ -490,6 +619,15 @@ def _run_ai_analysis(
         task.notes = f"AI 解析失败：{exc}"
         saved_task = task_store.save_task(task, access_token=team_access.access_token)
         _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
+        _record_workflow_stage(
+            saved_task,
+            team_access,
+            stage=WorkflowStage.data_analysis,
+            stage_status=WorkflowStageStatus.failed,
+            summary=f"AI 解析失败：{exc}",
+            selection=stage_selection_map.get(WorkflowStage.data_analysis.value),
+            artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+        )
         if fail_on_error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         return saved_task
@@ -512,6 +650,18 @@ def _run_ai_analysis(
         calculation_method="provider_reported_usage",
     )
     _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
+    _record_workflow_stage(
+        saved_task,
+        team_access,
+        stage=WorkflowStage.data_analysis,
+        stage_status=WorkflowStageStatus.completed,
+        summary=(
+            f"AI 已完成数据理解：目标列 {analysis.label_column}，"
+            f"任务类型 {analysis.problem_type}，指标 {analysis.metric_name}。"
+        ),
+        selection=selection,
+        artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+    )
     return saved_task
 
 
@@ -525,6 +675,8 @@ def create_task(
     payload: TaskCreateRequest,
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> TaskRecord:
+    _validate_task_stage_routing_overrides(payload.stage_routing)
+    _validate_interaction_policy_assignees(payload.interaction_policies, team_access)
     task = get_task_store().create_task(
         payload,
         team_id=team_access.team_id,
@@ -532,6 +684,17 @@ def create_task(
         access_token=team_access.access_token,
     )
     _sync_task_human_collaboration(task, team_access, stage_selection_map={})
+    _write_task_audit(
+        team_access,
+        action="task.create",
+        task_id=task.id,
+        detail={
+            "name": task.name,
+            "status": task.status.value,
+            "stage_routing_count": len(task.stage_routing),
+            "interaction_policy_count": len(task.interaction_policies),
+        },
+    )
     return task
 
 
@@ -587,6 +750,8 @@ def update_task_workflow_config(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
 
+    _validate_task_stage_routing_overrides(payload.stage_routing)
+    _validate_interaction_policy_assignees(payload.interaction_policies, team_access)
     task.stage_routing = [
         TaskStageRoutingRecord(
             stage=normalize_workflow_stage(item.stage),
@@ -595,6 +760,7 @@ def update_task_workflow_config(
             selection_source="task_override",
         )
         for item in payload.stage_routing
+        if item.connector_id
     ]
     task.interaction_policies = [
         TaskInteractionPolicyRecord(
@@ -617,6 +783,15 @@ def update_task_workflow_config(
     runtime_context = _build_runtime_context(team_access)
     stage_selection_map = _build_stage_selection_map(saved_task, team_access, runtime_context)
     _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
+    _write_task_audit(
+        team_access,
+        action="task.workflow_config.update",
+        task_id=saved_task.id,
+        detail={
+            "stage_routing_count": len(saved_task.stage_routing),
+            "interaction_policy_count": len(saved_task.interaction_policies),
+        },
+    )
     return saved_task
 
 
@@ -645,12 +820,28 @@ def create_task_human_request(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     try:
-        return get_task_human_collaboration_service().create_request(
+        team_members = _load_team_members_for_human(team_access)
+        snapshot = get_task_human_collaboration_service().create_request(
             task,
             payload,
             requested_by=team_access.user.id,
+            actor_role=team_access.role,
+            team_members=team_members,
             access_token=team_access.access_token,
         )
+        _write_task_audit(
+            team_access,
+            action="task.human_request.create",
+            task_id=task.id,
+            detail={
+                "request_type": payload.request_type,
+                "stage": normalize_workflow_stage(payload.stage).value,
+                "assigned_to": payload.assigned_to,
+                "assignee_type": payload.assignee_type.value if payload.assignee_type else None,
+                "assignee_value": payload.assignee_value,
+            },
+        )
+        return snapshot
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -666,15 +857,33 @@ def decide_task_human_request(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     try:
-        return get_task_human_collaboration_service().submit_decision(
+        team_members = _load_team_members_for_human(team_access)
+        snapshot = get_task_human_collaboration_service().submit_decision(
             task,
             request_id,
             payload,
             decided_by=team_access.user.id,
+            actor_role=team_access.role,
+            team_members=team_members,
             access_token=team_access.access_token,
         )
+        _write_task_audit(
+            team_access,
+            action="task.human_request.decide",
+            task_id=task.id,
+            detail={
+                "request_id": request_id,
+                "action": payload.action.value,
+                "reassign_assignee_type": payload.reassign_assignee_type.value if payload.reassign_assignee_type else None,
+                "reassign_assignee_value": payload.reassign_assignee_value,
+                "reassign_assigned_to": payload.reassign_assigned_to,
+            },
+        )
+        return snapshot
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -688,7 +897,14 @@ def resume_task_after_human_collaboration(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     try:
-        return get_task_human_collaboration_service().resume_task(task, access_token=team_access.access_token)
+        snapshot = get_task_human_collaboration_service().resume_task(task, access_token=team_access.access_token)
+        _write_task_audit(
+            team_access,
+            action="task.resume",
+            task_id=task.id,
+            detail={"status": snapshot.task.status.value},
+        )
+        return snapshot
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -702,6 +918,40 @@ def get_task_ai_conversations(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     return build_task_ai_conversations(task)
+
+
+@router.get("/{task_id}/report", response_model=TaskModelReportResponse)
+def get_task_model_report(
+    task_id: str,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskModelReportResponse:
+    task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    return build_task_model_report(task)
+
+
+@router.post("/{task_id}/prediction-demo", response_model=TaskPredictionDemoResponse)
+def run_task_prediction_demo(
+    task_id: str,
+    payload: TaskPredictionDemoRequest,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskPredictionDemoResponse:
+    task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    response = build_prediction_demo_response(task, payload)
+    _write_task_audit(
+        team_access,
+        action="task.prediction_demo.run",
+        task_id=task.id,
+        detail={
+            "supported": response.supported,
+            "feature_count": len(payload.features),
+            "detail": response.detail,
+        },
+    )
+    return response
 
 
 @router.post("/{task_id}/chat", response_model=TaskInteractiveChatResponse)
@@ -725,6 +975,8 @@ def send_task_chat(
         chat_result = send_task_chat_message(task, prompt=payload.prompt, settings=runtime_settings)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     saved_task = task_store.save_task(chat_result.task, access_token=team_access.access_token)
     task_store.upsert_token_ledger(
@@ -773,6 +1025,36 @@ def get_task_code_workspace_file(
         _raise_code_workspace_http_error(exc)
 
 
+@router.get("/{task_id}/code-workspace/download")
+def download_task_code_workspace_file(
+    task_id: str,
+    path: str = Query(..., min_length=1),
+    team_access: TeamAccessContext = Depends(require_team_developer_access),
+) -> FileResponse:
+    task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    try:
+        artifact_path, entry = resolve_task_code_artifact_file(task, path)
+        _write_task_audit(
+            team_access,
+            action="task.code_workspace.download",
+            task_id=task.id,
+            detail={
+                "path": entry.path,
+                "size_bytes": entry.size_bytes,
+                "run_output_dir": str(artifact_path.parent),
+            },
+        )
+        return FileResponse(
+            path=str(artifact_path),
+            filename=entry.name,
+            media_type="application/octet-stream",
+        )
+    except Exception as exc:  # noqa: BLE001
+        _raise_code_workspace_http_error(exc)
+
+
 @router.put("/{task_id}/code-workspace/file", response_model=TaskCodeArtifactContentResponse)
 def update_task_code_workspace_file(
     task_id: str,
@@ -783,7 +1065,45 @@ def update_task_code_workspace_file(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     try:
-        return save_task_code_artifact(task, payload)
+        result = save_task_code_artifact(task, payload)
+        _write_task_audit(
+            team_access,
+            action="task.code_workspace.save",
+            task_id=task.id,
+            detail={
+                "path": result.artifact.path,
+                "size_bytes": result.artifact.size_bytes,
+                "version_id": result.version_id,
+            },
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001
+        _raise_code_workspace_http_error(exc)
+
+
+@router.post("/{task_id}/code-workspace/rerun", response_model=TaskCodeArtifactRerunResponse)
+def rerun_task_code_workspace_file(
+    task_id: str,
+    payload: TaskCodeArtifactRerunRequest,
+    team_access: TeamAccessContext = Depends(require_team_developer_access),
+) -> TaskCodeArtifactRerunResponse:
+    task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    try:
+        result = rerun_task_code_artifact(task, payload)
+        _write_task_audit(
+            team_access,
+            action="task.code_workspace.rerun",
+            task_id=task.id,
+            detail={
+                "path": result.path,
+                "success": result.success,
+                "exit_code": result.exit_code,
+                "version_id": result.version_id,
+            },
+        )
+        return result
     except Exception as exc:  # noqa: BLE001
         _raise_code_workspace_http_error(exc)
 
@@ -814,8 +1134,18 @@ async def upload_dataset(
     task.structured_requirements = None
     task.notes = "CSV 已上传，系统会根据当前阶段路由自动执行 AI 解析。"
     task = task_store.save_task(task, access_token=team_access.access_token)
+    _write_task_audit(
+        team_access,
+        action="task.dataset.upload",
+        task_id=task.id,
+        detail={
+            "filename": file.filename,
+            "size_bytes": len(content),
+            "status": task.status.value,
+        },
+    )
 
-    return _run_ai_analysis(task, task_store, team_access, fail_on_error=False)
+    return _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
 
 
 @router.post("/{task_id}/analyze", response_model=TaskRecord)
@@ -827,7 +1157,27 @@ def analyze_task(
     task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    return _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
+    try:
+        result = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
+    except HTTPException as exc:
+        _write_task_audit(
+            team_access,
+            action="task.analyze",
+            task_id=task.id,
+            detail={"status": "failed", "detail": exc.detail},
+        )
+        raise
+    _write_task_audit(
+        team_access,
+        action="task.analyze",
+        task_id=result.id,
+        detail={
+            "status": "completed",
+            "label_column": result.label_column,
+            "problem_type": result.problem_type,
+        },
+    )
+    return result
 
 
 @router.post("/{task_id}/run", response_model=TaskRecord)
@@ -865,6 +1215,16 @@ def run_task(
     )
     if created_policy_requests:
         _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
+        _write_task_audit(
+            team_access,
+            action="task.run",
+            task_id=task.id,
+            detail={
+                "status": "waiting_human",
+                "created_human_requests": created_policy_requests,
+                "cycle_id": cycle_id,
+            },
+        )
         return task
 
     selection = _resolve_preferred_selection(
@@ -893,6 +1253,24 @@ def run_task(
         }
     )
     _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
+    _record_stage_selection_map(
+        task,
+        team_access,
+        stage_selection_map=stage_selection_map,
+        status_by_stage={
+            WorkflowStage.feature_engineering: WorkflowStageStatus.running,
+            WorkflowStage.model_selection: WorkflowStageStatus.running,
+            WorkflowStage.training_validation: WorkflowStageStatus.running,
+            WorkflowStage.report_generation: WorkflowStageStatus.pending,
+        },
+        summary_by_stage={
+            WorkflowStage.feature_engineering: "MLZero 已开始生成和修正特征处理 / 训练代码。",
+            WorkflowStage.model_selection: "MLZero 已开始选择并比较候选模型。",
+            WorkflowStage.training_validation: "MLZero 正在训练和验证候选模型。",
+            WorkflowStage.report_generation: "等待训练验证结束后生成报告摘要。",
+        },
+        artifact_refs=[task.dataset_path] if task.dataset_path else None,
+    )
 
     try:
         summary = MLZeroExecutor(runtime_settings).run(task, Path(task.dataset_path), payload.time_limit)
@@ -935,6 +1313,37 @@ def run_task(
             stage_selection_map=stage_selection_map,
         )
         _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
+        _record_stage_selection_map(
+            saved_task,
+            team_access,
+            stage_selection_map=stage_selection_map,
+            status_by_stage={
+                WorkflowStage.feature_engineering: WorkflowStageStatus.failed,
+                WorkflowStage.model_selection: WorkflowStageStatus.failed,
+                WorkflowStage.training_validation: WorkflowStageStatus.failed,
+                WorkflowStage.report_generation: WorkflowStageStatus.pending,
+            },
+            summary_by_stage={
+                WorkflowStage.feature_engineering: f"本次 MLZero 运行失败，代码生成或修正链路未完成：{exc}",
+                WorkflowStage.model_selection: f"本次 MLZero 运行失败，未得到完整候选模型比较：{exc}",
+                WorkflowStage.training_validation: f"训练或验证失败：{exc}",
+                WorkflowStage.report_generation: "训练验证失败，报告暂未生成。",
+            },
+            artifact_refs=[exc.output_dir] if isinstance(exc, MLZeroRunError) and exc.output_dir else None,
+        )
+        _write_task_audit(
+            team_access,
+            action="task.run",
+            task_id=saved_task.id,
+            detail={
+                "status": "failed",
+                "detail": str(exc),
+                "output_dir": exc.output_dir if isinstance(exc, MLZeroRunError) else None,
+                "model_name": selection.model_name,
+                "connector_id": selection.connector.id,
+                "cycle_id": cycle_id,
+            },
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
     task.status = TaskStatus.completed
@@ -968,6 +1377,39 @@ def run_task(
         stage_selection_map=stage_selection_map,
     )
     _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
+    _record_stage_selection_map(
+        saved_task,
+        team_access,
+        stage_selection_map=stage_selection_map,
+        status_by_stage={
+            WorkflowStage.feature_engineering: WorkflowStageStatus.completed,
+            WorkflowStage.model_selection: WorkflowStageStatus.completed,
+            WorkflowStage.training_validation: WorkflowStageStatus.completed,
+            WorkflowStage.report_generation: WorkflowStageStatus.completed,
+        },
+        summary_by_stage={
+            WorkflowStage.feature_engineering: "MLZero 已产出可查看的代码和中间工件。",
+            WorkflowStage.model_selection: f"已解析 {len(summary.leaderboard)} 个候选模型结果，最佳模型为 {summary.best_model}。",
+            WorkflowStage.training_validation: f"训练验证完成：{summary.metric_name} = {summary.metric_value:.6g}。",
+            WorkflowStage.report_generation: "模型报告摘要已可基于真实任务、数据集画像和运行产物生成。",
+        },
+        artifact_refs=[summary.output_dir],
+    )
+    _write_task_audit(
+        team_access,
+        action="task.run",
+        task_id=saved_task.id,
+        detail={
+            "status": "completed",
+            "output_dir": summary.output_dir,
+            "best_model": summary.best_model,
+            "metric_name": summary.metric_name,
+            "metric_value": summary.metric_value,
+            "model_name": selection.model_name,
+            "connector_id": selection.connector.id,
+            "cycle_id": cycle_id,
+        },
+    )
     return saved_task
 
 
@@ -987,4 +1429,10 @@ def delete_task(task_id: str, team_access: TeamAccessContext = Depends(require_t
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
 
+    _write_task_audit(
+        team_access,
+        action="task.delete",
+        task_id=task_id,
+        detail={"name": task.name, "status": task.status.value},
+    )
     return TaskDeleteResponse(deleted=True, task_id=task_id)

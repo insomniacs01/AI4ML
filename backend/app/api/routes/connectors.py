@@ -17,6 +17,7 @@ from backend.app.models.connector import (
 )
 from backend.app.services.connector_runtime import normalize_provider_config, probe_provider
 from backend.app.services.connector_store import ConnectorStore
+from backend.app.services.governance_store import GovernanceStore
 
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -25,6 +26,11 @@ router = APIRouter(prefix="/connectors", tags=["connectors"])
 @lru_cache
 def get_connector_store() -> ConnectorStore:
     return ConnectorStore(get_settings())
+
+
+@lru_cache
+def get_governance_store() -> GovernanceStore:
+    return GovernanceStore(get_settings())
 
 
 def _raise_connector_store_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
@@ -37,6 +43,27 @@ def _raise_connector_store_http_error(exc: RuntimeError | PermissionError | Conn
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+def _write_connector_audit(
+    team_access: TeamAccessContext,
+    *,
+    action: str,
+    connector_id: str,
+    detail: dict,
+) -> None:
+    try:
+        get_governance_store().create_audit_log(
+            team_access.team_id,
+            team_access.user.id,
+            action=action,
+            resource_type="ai_connector",
+            resource_id=connector_id,
+            detail=detail,
+            access_token=team_access.access_token,
+        )
+    except (RuntimeError, PermissionError, ConnectionError):
+        pass
 
 
 @router.get("", response_model=ConnectorListResponse)
@@ -77,6 +104,18 @@ def create_connector(
             normalized_wire_api=normalized_wire_api,
             access_token=team_access.access_token,
         )
+        _write_connector_audit(
+            team_access,
+            action="connector.create",
+            connector_id=connector.id,
+            detail={
+                "display_name": connector.display_name,
+                "base_url": connector.base_url,
+                "model_name": connector.model_name,
+                "wire_api": connector.wire_api.value,
+                "api_key_storage": "encrypted",
+            },
+        )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_connector_store_http_error(exc)
     return connector.to_public()
@@ -111,6 +150,17 @@ def test_connector(
         connector.last_test_detail = result.detail
         connector.last_tested_at = datetime.now(timezone.utc)
         connector = connector_store.save_connector(connector, access_token=team_access.access_token)
+        _write_connector_audit(
+            team_access,
+            action="connector.test",
+            connector_id=connector.id,
+            detail={
+                "ok": result.ok,
+                "model_listed": result.model_listed,
+                "inference_ok": result.inference_ok,
+                "status": connector.last_test_status.value,
+            },
+        )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_connector_store_http_error(exc)
 
@@ -133,6 +183,12 @@ def set_connector_as_runtime(
             team_access.team_id,
             connector_id,
             access_token=team_access.access_token,
+        )
+        _write_connector_audit(
+            team_access,
+            action="connector.activate",
+            connector_id=connector.id,
+            detail={"display_name": connector.display_name, "model_name": connector.model_name},
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_connector_store_http_error(exc)

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from backend.app.core.config import Settings
 from backend.app.models.task import TaskRecord, TokenUsageReport
+from backend.app.services.dataset_profile import build_dataset_profile, dataset_profile_to_plain
 from backend.app.services.mlzero_runtime import LocalOpenAIProvider
 from backend.app.services.openai_compatible_provider import (
     ProviderCallResult,
@@ -49,6 +50,8 @@ def analyze_task_with_ai(task: TaskRecord, dataset_path: Path, settings: Setting
         preview_rows=preview_rows,
     )
     provider_result = _call_provider(prompt=prompt, settings=settings)
+    if provider_result.token_usage is None:
+        raise RuntimeError("AI Provider 响应中缺少 usage token 信息，无法记录本次 AI 解析消耗。")
     payload = _parse_analysis_payload(provider_result.text)
 
     label_column = str(payload.get("label_column", "")).strip()
@@ -104,6 +107,13 @@ def apply_analysis_to_task(task: TaskRecord, analysis: TaskAnalysisResult) -> Ta
     task.problem_type = analysis.problem_type
     task.analysis_token_usage = analysis.token_usage
     structured_requirements = dict(task.structured_requirements) if isinstance(task.structured_requirements, dict) else {}
+    if task.dataset_path:
+        dataset_profile = build_dataset_profile(
+            Path(task.dataset_path),
+            filename=task.dataset_filename,
+            target_column=analysis.label_column,
+        )
+        structured_requirements["dataset_profile"] = dataset_profile_to_plain(dataset_profile)
     structured_requirements.update({
         "analysis_source": "ai_connector",
         "analysis_model": analysis.analysis_model,

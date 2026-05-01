@@ -1314,3 +1314,39 @@
   2. 让任务创建表单支持折叠“高级配置”
   3. 把阶段 AI 覆盖默认收起，只在需要覆盖默认路由时展开
   4. 对连接器页面做真实空态和错误态视觉 polish
+
+## 2026-04-30 strict no-fallback runtime cleanup
+
+- 用户继续明确要求：不要为了避免报错保留兜底成功路径；真实 bug 必须可观察、可定位。
+- 本轮后端阶段 AI 路由已改为严格显式选择：
+  - 不再把当前 active connector 当作缺失 `connector_id` 时的隐式补位。
+  - 不再把团队路由里的 fallback connector/model 当作运行时候选。
+  - 只填模型名但没有 `connector_id` 时直接返回 409/422。
+  - 路由引用不存在的连接器或无法解析模型名时直接失败。
+- 默认 AI 前端页面已去掉 fallback 连接器/模型表单；保存时会清空旧 fallback 字段。
+- 任务创建表单已禁止“只填模型覆盖、不选连接器”的配置。
+- CSV 上传后的 AI 解析失败现在会让请求失败，不再把失败写进 notes 后继续展示上传成功。
+- 交互式 AI 对话、任务 AI 解析和 MLZero 摘要解析现在都要求真实 provider token usage / `token_usage.json`，缺失即失败。
+- AutoGluon Assistant 中会伪装成功或吞掉内部错误的分支已继续收紧：
+  - executer 启动/监控异常会抛出 RuntimeError。
+  - retriever/reranker 不再跳过格式错误的检索结果、重复/越界索引、不可读教程文件。
+  - embedding 结果出现 NaN/Inf 不再替换成 0，而是直接失败。
+- 注意：数据库 schema 中历史 fallback 字段暂时保留以兼容旧表结构，但当前 API/UI/运行时不再使用它作为执行兜底。
+
+## 2026-05-01 requirements gap implementation pass
+
+- 本轮按需求缺口顺序继续补齐真实能力，继续遵守“不伪造结果、不静默 fallback”的约束。
+- 已补齐工作流阶段事件落库：AI 解析、MLZero 运行开始、失败、成功都会写入 `workflow_stage_records`。
+- 已新增模型报告与在线预测 Demo：
+  - `GET /api/tasks/{task_id}/report`
+  - `POST /api/tasks/{task_id}/prediction-demo`
+  - 报告和 Demo 只读取真实数据集画像、真实运行摘要、真实 AutoGluon predictor；缺少产物时明确返回不支持。
+- 已增强人机协同：支持确认、修改、驳回、转交、跳过、过期等状态/动作，并在 reject/revise 后标记任务需要重跑。
+- 已增强资产中心：支持团队广场筛选、发布、Fork 派生，发布/Fork 信息写入 asset metadata。
+- 已增强代码工作区：保存版本记录、下载工件、重跑 Python 工件，重跑 stdout/stderr 写入真实运行目录。
+- 已增强连接器密钥安全和审计：
+  - 新增 `AI4ML_CONNECTOR_SECRET_KEY`。
+  - 新保存/更新的连接器 API Key 会以 `enc:v1:` 前缀加密存储。
+  - 历史明文仍可读取；已加密密钥若缺少原 secret key 会明确失败。
+  - 连接器 create/test/activate 和任务 create/update/analyze/run/delete、人机协同、代码工作区、在线预测等操作会写审计日志。
+- 文档已补充新接口、连接器密钥环境变量、真实产物限制说明。

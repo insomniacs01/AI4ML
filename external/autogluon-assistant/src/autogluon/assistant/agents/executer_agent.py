@@ -1,5 +1,4 @@
 import logging
-import re
 
 from rich.progress import (
     Progress,
@@ -12,9 +11,6 @@ from .base_agent import BaseAgent
 from .utils import init_llm
 
 logger = logging.getLogger(__name__)
-
-
-VALIDATION_SCORE_RE = re.compile(r"(?:validation[_ ]score|Validation score)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)")
 
 
 def execute_code(code, language, timeout):
@@ -47,7 +43,7 @@ def execute_code(code, language, timeout):
             else:
                 cmd = ["bash", "-c", code]
         else:
-            return False, "", f"Unsupported language: {language}. Use 'python' or 'bash'."
+            raise ValueError(f"Unsupported language: {language}. Use 'python' or 'bash'.")
 
         process = subprocess.Popen(
             cmd,
@@ -157,7 +153,7 @@ def execute_code(code, language, timeout):
         return success, "".join(stdout_chunks), "".join(stderr_chunks)
 
     except Exception as e:
-        return False, "", f"Error executing {language} code: {str(e)}"
+        raise RuntimeError(f"ExecuterAgent failed to launch or monitor {language} code: {e}") from e
 
 
 class ExecuterAgent(BaseAgent):
@@ -204,43 +200,10 @@ class ExecuterAgent(BaseAgent):
 
         success, stdout, stderr = execute_code(code=code_to_execute, language=self.language, timeout=self.timeout)
 
-        local_score = self._extract_validation_score(stdout)
-        if local_score is not None and success:
-            prompt_text = "Local deterministic execution evaluation."
-            self.manager.save_and_log_states(content=stdout, save_name="stdout.txt", per_iteration=True, add_uuid=True)
-            self.manager.save_and_log_states(content=stderr, save_name="stderr.txt", per_iteration=True, add_uuid=True)
-            self.manager.save_and_log_states(
-                content=stdout, save_name="stdout.orig.txt", per_iteration=True, add_uuid=True
-            )
-            self.manager.save_and_log_states(
-                content=stderr, save_name="stderr.orig.txt", per_iteration=True, add_uuid=True
-            )
-            self.manager.save_and_log_states(
-                content=prompt_text,
-                save_name="executer_prompt.txt",
-                per_iteration=True,
-                add_uuid=True,
-            )
-            self.manager.save_and_log_states(
-                content="DECISION: SUCCESS\nERROR_SUMMARY: None\nVALIDATION_SCORE: "
-                + str(local_score),
-                save_name="executer_response.txt",
-                per_iteration=True,
-                add_uuid=True,
-            )
-            self.manager.save_and_log_states(
-                content="SUCCESS", save_name="decision.txt", per_iteration=True, add_uuid=True
-            )
-            self.manager.save_and_log_states(
-                content=None, save_name="error_summary.txt", per_iteration=True, add_uuid=True
-            )
-            self.manager.save_and_log_states(
-                content=str(local_score), save_name="validation_score.txt", per_iteration=True, add_uuid=True
-            )
-            logger.brief("Planner decision: SUCCESS")
-            logger.info(f"Validation score: {local_score}")
-            self.manager.log_agent_end("ExecuterAgent: execution finished; planner decision logged.")
-            return "SUCCESS", None, local_score, prompt_text, stderr, stdout
+        self.manager.save_and_log_states(content=stdout, save_name="stdout.txt", per_iteration=True, add_uuid=True)
+        self.manager.save_and_log_states(content=stderr, save_name="stderr.txt", per_iteration=True, add_uuid=True)
+        self.manager.save_and_log_states(content=stdout, save_name="stdout.orig.txt", per_iteration=True, add_uuid=True)
+        self.manager.save_and_log_states(content=stderr, save_name="stderr.orig.txt", per_iteration=True, add_uuid=True)
 
         if not self.executer_llm_config.multi_turn:
             self.executer_llm = init_llm(
@@ -275,12 +238,3 @@ class ExecuterAgent(BaseAgent):
 
         return decision, error_summary, validation_score, prompt, stderr, stdout
 
-    @staticmethod
-    def _extract_validation_score(stdout: str) -> float | None:
-        match = VALIDATION_SCORE_RE.search(stdout or "")
-        if not match:
-            return None
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None

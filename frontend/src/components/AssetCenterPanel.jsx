@@ -7,6 +7,22 @@ const ASSET_TYPE_OPTIONS = [
   { value: "report", label: "报告" },
 ];
 
+const STATUS_OPTIONS = [
+  { value: "all", label: "全部" },
+  { value: "marketplace", label: "广场" },
+  { value: "private", label: "私有" },
+  { value: "pending_review", label: "待审核" },
+  { value: "forked", label: "Fork" },
+];
+
+const STATUS_LABELS = {
+  private: "私有",
+  pending_review: "待审核",
+  approved: "已通过",
+  published: "已发布",
+  rejected: "已驳回",
+};
+
 function formatDateTime(value) {
   if (!value) return "暂无";
   const date = new Date(value);
@@ -26,18 +42,38 @@ export default function AssetCenterPanel({
   loading,
   creating,
   reviewingAssetId,
+  publishingAssetId,
+  forkingAssetId,
   message,
   error,
   isAdmin,
   onRefresh,
   onCreate,
   onReview,
+  onPublish,
+  onFork,
 }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [activeType, setActiveType] = useState("all");
+  const [activeStatus, setActiveStatus] = useState("all");
   const visibleAssets = useMemo(
-    () => (Array.isArray(assets) ? assets : []).filter((item) => activeType === "all" ? true : item.asset_type === activeType),
-    [activeType, assets],
+    () => (Array.isArray(assets) ? assets : []).filter((item) => {
+      const typeMatched = activeType === "all" ? true : item.asset_type === activeType;
+      if (!typeMatched) return false;
+      if (activeStatus === "all") return true;
+      if (activeStatus === "marketplace") return item.review_status === "published";
+      if (activeStatus === "forked") return Boolean(item.metadata?.fork?.forked_from_asset_id);
+      return item.review_status === activeStatus;
+    }),
+    [activeStatus, activeType, assets],
+  );
+  const marketplaceCount = useMemo(
+    () => (Array.isArray(assets) ? assets : []).filter((item) => item.review_status === "published").length,
+    [assets],
+  );
+  const forkedCount = useMemo(
+    () => (Array.isArray(assets) ? assets : []).filter((item) => item.metadata?.fork?.forked_from_asset_id).length,
+    [assets],
   );
 
   function handleSubmit(event) {
@@ -57,8 +93,8 @@ export default function AssetCenterPanel({
       <section className="section-card">
         <div className="section-head">
           <div>
-            <h3>资产中心</h3>
-            <p>这里统一管理数据集、模型、工作流和报告记录。当前版本先提供真实元数据登记和审核状态流转。</p>
+            <h3>资产广场</h3>
+            <p>这里统一管理数据集、模型、工作流和报告记录，已支持团队内发布和 Fork 派生。</p>
           </div>
           <button type="button" className="chip-button" onClick={onRefresh} disabled={loading}>
             {loading ? "刷新中..." : "刷新资产"}
@@ -67,6 +103,13 @@ export default function AssetCenterPanel({
 
         {message ? <div className="notice-banner">{message}</div> : null}
         {error ? <div className="error-banner">{error}</div> : null}
+
+        <div className="summary-grid">
+          <article className="summary-item"><span>资产总数</span><strong>{Array.isArray(assets) ? assets.length : 0}</strong></article>
+          <article className="summary-item"><span>广场发布</span><strong>{marketplaceCount}</strong></article>
+          <article className="summary-item"><span>Fork 资产</span><strong>{forkedCount}</strong></article>
+          <article className="summary-item"><span>当前筛选</span><strong>{visibleAssets.length}</strong></article>
+        </div>
 
         <form className="task-form" onSubmit={handleSubmit}>
           <div className="form-row">
@@ -108,14 +151,21 @@ export default function AssetCenterPanel({
       <section className="section-card">
         <div className="section-head">
           <div>
-            <h3>资产列表</h3>
-            <p>这里显示的是已经写入平台资产表的真实记录。</p>
+            <h3>数据 / 模型 / 工作流广场</h3>
+            <p>列表展示已经写入平台资产表的真实记录；Fork 会保留来源资产 ID 和来源元数据。</p>
           </div>
           <div className="toolbar">
             <div className="segmented-control">
               <button type="button" className={activeType === "all" ? "segment-button active" : "segment-button"} onClick={() => setActiveType("all")}>全部</button>
               {ASSET_TYPE_OPTIONS.map((option) => (
                 <button key={option.value} type="button" className={activeType === option.value ? "segment-button active" : "segment-button"} onClick={() => setActiveType(option.value)}>
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div className="segmented-control">
+              {STATUS_OPTIONS.map((option) => (
+                <button key={option.value} type="button" className={activeStatus === option.value ? "segment-button active" : "segment-button"} onClick={() => setActiveStatus(option.value)}>
                   {option.label}
                 </button>
               ))}
@@ -129,7 +179,7 @@ export default function AssetCenterPanel({
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>标题</th><th>类型</th><th>创建人</th><th>状态</th><th>更新时间</th><th>操作</th></tr>
+                <tr><th>标题</th><th>类型</th><th>来源</th><th>状态</th><th>更新时间</th><th>操作</th></tr>
               </thead>
               <tbody>
                 {visibleAssets.map((asset) => (
@@ -141,22 +191,33 @@ export default function AssetCenterPanel({
                       </div>
                     </td>
                     <td>{asset.asset_type}</td>
-                    <td>{asset.creator_display_name || asset.creator_email || asset.created_by || "-"}</td>
-                    <td>{asset.review_status}</td>
+                    <td>
+                      <div className="table-cell-stack">
+                        <strong>{asset.creator_display_name || asset.creator_email || asset.created_by || "-"}</strong>
+                        <span>{asset.metadata?.fork?.forked_from_asset_id ? `Fork 自 ${asset.metadata.fork.forked_from_asset_id}` : "原始登记"}</span>
+                      </div>
+                    </td>
+                    <td>{STATUS_LABELS[asset.review_status] ?? asset.review_status}</td>
                     <td>{formatDateTime(asset.updated_at)}</td>
                     <td>
-                      {isAdmin ? (
-                        <div className="button-row">
+                      <div className="button-row">
+                        <button type="button" className="ghost-button" disabled={forkingAssetId === asset.id} onClick={() => onFork?.(asset)}>
+                          {forkingAssetId === asset.id ? "Fork 中..." : "Fork"}
+                        </button>
+                        <button type="button" className="ghost-button" disabled={publishingAssetId === asset.id || asset.review_status === "published"} onClick={() => onPublish?.(asset.id)}>
+                          {publishingAssetId === asset.id ? "发布中..." : "发布"}
+                        </button>
+                        {isAdmin ? (
+                          <>
                           <button type="button" className="ghost-button" disabled={reviewingAssetId === asset.id} onClick={() => onReview?.(asset.id, { review_status: "approved" })}>
                             {reviewingAssetId === asset.id ? "处理中..." : "通过"}
                           </button>
                           <button type="button" className="ghost-button" disabled={reviewingAssetId === asset.id} onClick={() => onReview?.(asset.id, { review_status: "rejected" })}>
                             驳回
                           </button>
-                        </div>
-                      ) : (
-                        <span className="meta-note">仅管理员可审核</span>
-                      )}
+                          </>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -327,10 +327,11 @@ class MLZeroExecutor(BaseExecutor):
         for summary_path in self._find_run_summary_paths(output_dir):
             try:
                 payload = json.loads(summary_path.read_text(encoding="utf-8", errors="replace"))
-            except (OSError, json.JSONDecodeError):
-                continue
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"Unreadable run_summary.json at {summary_path}: {exc}") from exc
             if isinstance(payload, dict):
                 return payload, summary_path
+            raise RuntimeError(f"run_summary.json at {summary_path} must contain a JSON object.")
         return None, None
 
     def _require_run_summary_payload(self, output_dir: Path) -> tuple[dict[str, Any], Path]:
@@ -413,14 +414,14 @@ class MLZeroExecutor(BaseExecutor):
         index: int,
         default_metric_name: str,
         default_tool_name: str | None,
-    ) -> dict[str, object] | None:
+    ) -> dict[str, object]:
         validation_score = self._coerce_float(row.get("validation_score"))
         if validation_score is None:
-            return None
+            raise RuntimeError(f"Leaderboard row {index + 1} is missing numeric validation_score.")
 
         model_name = self._coerce_str(row.get("model"))
         if model_name is None:
-            return None
+            raise RuntimeError(f"Leaderboard row {index + 1} is missing non-empty model.")
 
         metric_name = self._coerce_str(row.get("metric_name")) or default_metric_name
         metric_value = self._coerce_float(row.get("metric_value"))
@@ -463,8 +464,7 @@ class MLZeroExecutor(BaseExecutor):
                 default_metric_name=default_metric_name,
                 default_tool_name=default_tool_name,
             )
-            if normalized is not None:
-                leaderboard.append(normalized)
+            leaderboard.append(normalized)
         return leaderboard
 
     def _load_leaderboard_entries(
@@ -497,8 +497,11 @@ class MLZeroExecutor(BaseExecutor):
                 else:
                     with leaderboard_path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
                         rows = list(csv.DictReader(handle))
-            except (OSError, json.JSONDecodeError, csv.Error):
-                continue
+            except (OSError, json.JSONDecodeError, csv.Error) as exc:
+                raise RuntimeError(f"Failed to read leaderboard artifact {leaderboard_path}: {exc}") from exc
+
+            if not rows:
+                raise RuntimeError(f"Leaderboard artifact {leaderboard_path} did not contain any candidate rows.")
 
             parsed_rows = self._parse_leaderboard_rows(
                 rows,
@@ -578,13 +581,17 @@ class MLZeroExecutor(BaseExecutor):
                 f"run_summary={validation_score}, leaderboard={best_entry_score}"
             )
 
+        token_usage = read_mlzero_token_usage(output_dir)
+        if token_usage is None:
+            raise RuntimeError(f"MLZero completed but did not persist a readable token_usage.json in {output_dir}")
+
         return RunSummary(
             best_model=best_model,
             metric_name=metric_name,
             metric_value=metric_value,
             leaderboard=leaderboard,
             output_dir=str(output_dir),
-            token_usage=read_mlzero_token_usage(output_dir),
+            token_usage=token_usage,
         )
 
     def unavailability_reason(self) -> str | None:

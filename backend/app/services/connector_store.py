@@ -7,6 +7,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from backend.app.core.config import Settings
+from backend.app.core.secret_box import decrypt_secret, encrypt_secret, is_encrypted_secret
 from backend.app.models.connector import ConnectorCreateRequest, ConnectorWireApi, StoredConnectorRecord
 
 
@@ -25,7 +26,7 @@ class ConnectorStore:
         )
         if not isinstance(payload, list):
             raise ConnectionError("Unexpected connector list response from Supabase.")
-        return [StoredConnectorRecord.model_validate(item) for item in payload]
+        return [self._connector_from_payload(item) for item in payload]
 
     def create_connector(
         self,
@@ -50,11 +51,11 @@ class ConnectorStore:
                 "base_url": normalized_base_url,
                 "model_name": payload.model_name.strip(),
                 "wire_api": normalized_wire_api.value,
-                "api_key": payload.api_key.strip(),
+                "api_key": self._encrypt_api_key(payload.api_key),
                 "is_active": False,
             },
         )
-        return StoredConnectorRecord.model_validate(self._unwrap_single_record(created_payload, "connector create"))
+        return self._connector_from_payload(self._unwrap_single_record(created_payload, "connector create"))
 
     def get_connector(self, team_id: str, connector_id: str, *, access_token: str) -> StoredConnectorRecord | None:
         payload = self._request_json(
@@ -70,7 +71,7 @@ class ConnectorStore:
             raise ConnectionError("Unexpected connector detail response from Supabase.")
         if not payload:
             return None
-        return StoredConnectorRecord.model_validate(payload[0])
+        return self._connector_from_payload(payload[0])
 
     def get_active_connector(self, team_id: str, *, access_token: str) -> StoredConnectorRecord | None:
         payload = self._request_json(
@@ -87,7 +88,7 @@ class ConnectorStore:
             raise ConnectionError("Unexpected active-connector response from Supabase.")
         if not payload:
             return None
-        return StoredConnectorRecord.model_validate(payload[0])
+        return self._connector_from_payload(payload[0])
 
     def save_connector(self, connector: StoredConnectorRecord, *, access_token: str) -> StoredConnectorRecord:
         updated_payload = self._request_json(
@@ -105,14 +106,14 @@ class ConnectorStore:
                 "base_url": connector.base_url,
                 "model_name": connector.model_name,
                 "wire_api": connector.wire_api.value,
-                "api_key": connector.api_key,
+                "api_key": self._encrypt_api_key(connector.api_key),
                 "is_active": connector.is_active,
                 "last_tested_at": connector.last_tested_at.isoformat() if connector.last_tested_at else None,
                 "last_test_status": connector.last_test_status.value,
                 "last_test_detail": connector.last_test_detail,
             },
         )
-        return StoredConnectorRecord.model_validate(self._unwrap_single_record(updated_payload, "connector update"))
+        return self._connector_from_payload(self._unwrap_single_record(updated_payload, "connector update"))
 
     def activate_connector(self, team_id: str, connector_id: str, *, access_token: str) -> StoredConnectorRecord:
         activated_payload = self._request_json(
@@ -124,7 +125,22 @@ class ConnectorStore:
                 "target_connector_id": connector_id,
             },
         )
-        return StoredConnectorRecord.model_validate(self._unwrap_single_record(activated_payload, "connector activate"))
+        return self._connector_from_payload(self._unwrap_single_record(activated_payload, "connector activate"))
+
+    def _connector_from_payload(self, payload: dict[str, Any]) -> StoredConnectorRecord:
+        record = StoredConnectorRecord.model_validate(payload)
+        if is_encrypted_secret(record.api_key):
+            try:
+                record.api_key = decrypt_secret(record.api_key, self.settings.connector_secret_key)
+            except Exception as exc:
+                raise RuntimeError("Could not decrypt stored connector API key. Check AI4ML_CONNECTOR_SECRET_KEY.") from exc
+        return record
+
+    def _encrypt_api_key(self, api_key: str) -> str:
+        normalized = api_key.strip()
+        if is_encrypted_secret(normalized):
+            return normalized
+        return encrypt_secret(normalized, self.settings.connector_secret_key)
 
     def _request_json(
         self,

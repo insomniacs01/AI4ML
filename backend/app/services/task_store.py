@@ -219,7 +219,7 @@ class TaskStore:
         return sorted(
             requests,
             key=lambda item: (
-                0 if item.status == HumanInteractionRequestStatus.open else 1,
+                0 if item.status in {HumanInteractionRequestStatus.pending, HumanInteractionRequestStatus.open} else 1,
                 -item.updated_at.timestamp(),
             ),
         )
@@ -247,7 +247,7 @@ class TaskStore:
                 "team_id": team_id,
                 "task_id": task_id,
                 "stage": self._enum_value(normalize_workflow_stage(stage)),
-                "status": HumanInteractionRequestStatus.open.value,
+                "status": HumanInteractionRequestStatus.pending.value,
                 "requested_by": requested_by,
                 "assigned_to": assigned_to,
                 "assignee_type": assignee_type,
@@ -640,6 +640,7 @@ class TaskStore:
                 "selection_source": "task_override",
             }
             for item in items
+            if item.connector_id
         ]
 
     @staticmethod
@@ -650,9 +651,9 @@ class TaskStore:
                 "connector_id": item.connector_id,
                 "connector_display_name": item.connector_display_name,
                 "model_name": item.model_name,
-                "fallback_connector_id": item.fallback_connector_id,
-                "fallback_connector_display_name": item.fallback_connector_display_name,
-                "fallback_model_name": item.fallback_model_name,
+                "fallback_connector_id": None,
+                "fallback_connector_display_name": None,
+                "fallback_model_name": None,
                 "selection_source": item.selection_source,
             }
             for item in items

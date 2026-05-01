@@ -96,67 +96,50 @@ class RetrieverAgent(BaseAgent):
         """Convert search results to TutorialInfo objects."""
         tutorials = []
 
-        for result in search_results:
-            try:
-                # Extract relevant information from search result
-                file_path = result["file_path"]
-                content = result["content"]
-                score = result["score"]
+        for index, result in enumerate(search_results):
+            file_path = result.get("file_path")
+            content = result.get("content")
+            score = result.get("score")
+            if not isinstance(file_path, str) or not file_path.strip():
+                raise RuntimeError(f"Retriever result {index + 1} is missing a non-empty file_path.")
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError(f"Retriever result {index + 1} for {file_path} is missing tutorial content.")
+            if not isinstance(score, (int, float)):
+                raise RuntimeError(f"Retriever result {index + 1} for {file_path} is missing a numeric score.")
 
-                # Extract title and summary from content (similar to existing pattern)
-                title = self._extract_title_from_content(content, file_path)
-                summary = self._extract_summary_from_content(content)
+            title = self._extract_title_from_content(content, file_path)
+            summary = self._extract_summary_from_content(content)
 
-                # Create TutorialInfo object following the existing pattern
-                tutorial = TutorialInfo(
-                    path=file_path,
-                    title=title,
-                    summary=summary,
-                    score=score,
-                    content=content,
-                )
+            tutorial = TutorialInfo(
+                path=file_path,
+                title=title,
+                summary=summary,
+                score=score,
+                content=content,
+            )
 
-                tutorials.append(tutorial)
-
-            except Exception as e:
-                logger.warning(f"Error converting search result to TutorialInfo: {e}")
-                print(result)
-                continue
+            tutorials.append(tutorial)
 
         return tutorials
 
     def _extract_title_from_content(self, content: str, file_path: str) -> str:
         """Extract title from content, similar to existing get_all_tutorials logic."""
-        try:
-            lines = content.split("\n")
-            # Find title (first line starting with #)
-            title = next(
-                (line.lstrip("#").strip() for line in lines if line.strip().startswith("#")),
-                "",
-            )
-            if title:
-                return title
-        except Exception:
-            pass
-
-        # Fallback: extract from file path
-        import os
-
-        filename = os.path.splitext(os.path.basename(file_path))[0]
-        return filename.replace("_", " ").replace("-", " ").title()
+        lines = content.split("\n")
+        title = next(
+            (line.lstrip("#").strip() for line in lines if line.strip().startswith("#")),
+            "",
+        )
+        if not title:
+            raise RuntimeError(f"Tutorial content at {file_path} is missing a markdown title.")
+        return title
 
     def _extract_summary_from_content(self, content: str) -> str:
         """Extract summary from content, similar to existing get_all_tutorials logic."""
-        try:
-            lines = content.split("\n")
-            # Find summary (line starting with "Summary: ")
-            summary = next(
-                (line.replace("Summary:", "").strip() for line in lines if line.strip().startswith("Summary:")),
-                "",
-            )
-            return summary
-        except Exception:
-            return ""
+        lines = content.split("\n")
+        return next(
+            (line.replace("Summary:", "").strip() for line in lines if line.strip().startswith("Summary:")),
+            "",
+        )
 
     def _format_retriever_results(self, results: List[Dict[str, Any]], search_query: str) -> str:
         """Format retriever results for logging."""

@@ -32,14 +32,24 @@ const TASK_STATUS_LABELS = {
 };
 
 const REQUEST_STATUS_LABELS = {
+  pending: "待处理",
   open: "待处理",
+  confirmed: "已确认",
+  modified: "要求修改",
+  rejected: "已驳回",
+  reassigned: "已转交",
+  expired: "已超时",
+  skipped: "已跳过",
   resolved: "已处理",
 };
 
 const DECISION_LABELS = {
   approve: "通过",
-  revise: "继续修改",
+  revise: "要求修改并重跑",
   block: "阻塞",
+  reject: "驳回并重跑",
+  reassign: "转交",
+  skip: "跳过",
 };
 
 const REQUEST_TYPE_OPTIONS = [
@@ -96,10 +106,10 @@ function formatStageStatus(status) {
 }
 
 function getStatusTone(status) {
-  if (status === "completed" || status === "approve") return "success";
-  if (status === "running") return "info";
-  if (status === "waiting_human") return "warning";
-  if (status === "failed" || status === "block") return "danger";
+  if (["completed", "approve", "confirmed", "skipped"].includes(status)) return "success";
+  if (["running", "modified", "reassigned"].includes(status)) return "info";
+  if (["waiting_human", "pending", "open"].includes(status)) return "warning";
+  if (["failed", "block", "reject", "rejected", "expired"].includes(status)) return "danger";
   return "info";
 }
 
@@ -138,6 +148,10 @@ function buildDecisionDraft(request) {
     decision_summary: summary,
     artifact_paths: Array.isArray(request?.payload?.artifact_paths) ? request.payload.artifact_paths.join("\n") : "",
     resume_task: true,
+    reassign_assignee_type: request?.assignee_type ?? "member",
+    reassign_assignee_value: "",
+    reassign_assigned_to: "",
+    reassign_timeout_minutes: "",
   };
 }
 
@@ -154,6 +168,10 @@ function getRequestSummary(request) {
 function getRequestSuggestedAction(request) {
   if (typeof request?.payload?.suggested_action === "string" && request.payload.suggested_action.trim()) return request.payload.suggested_action.trim();
   return "";
+}
+
+function isActiveRequest(request) {
+  return request?.status === "pending" || request?.status === "open";
 }
 
 export default function HumanCollaborationPanel({
@@ -182,7 +200,7 @@ export default function HumanCollaborationPanel({
     return [...items].sort((left, right) => STAGE_ORDER.indexOf(left.stage) - STAGE_ORDER.indexOf(right.stage));
   }, [snapshot?.stages]);
   const requestItems = Array.isArray(snapshot?.requests) ? snapshot.requests : [];
-  const openRequests = requestItems.filter((item) => item.status === "open");
+  const openRequests = requestItems.filter((item) => isActiveRequest(item));
   const decisionHistory = useMemo(() => {
     const items = Array.isArray(snapshot?.decision_history) ? snapshot.decision_history : [];
     return [...items].sort((left, right) => {
@@ -307,6 +325,10 @@ export default function HumanCollaborationPanel({
       setError("请先填写决策说明。");
       return;
     }
+    if (draft.action === "reassign" && !draft.reassign_assignee_value?.trim() && !draft.reassign_assigned_to?.trim()) {
+      setError("转交请求需要填写新的指派值或指定成员 ID。");
+      return;
+    }
 
     setDecisionBusyId(requestId);
     setError("");
@@ -320,6 +342,10 @@ export default function HumanCollaborationPanel({
           decision_summary: draft.decision_summary.trim(),
           artifact_paths: normalizeArtifactPaths(draft.artifact_paths),
           resume_task: Boolean(draft.resume_task),
+          reassign_assignee_type: draft.action === "reassign" ? draft.reassign_assignee_type : null,
+          reassign_assignee_value: draft.action === "reassign" ? draft.reassign_assignee_value?.trim() || null : null,
+          reassign_assigned_to: draft.action === "reassign" ? draft.reassign_assigned_to?.trim() || null : null,
+          reassign_timeout_minutes: draft.action === "reassign" && draft.reassign_timeout_minutes ? Number.parseInt(draft.reassign_timeout_minutes, 10) || null : null,
         },
         requestContext,
       );
@@ -708,6 +734,43 @@ export default function HumanCollaborationPanel({
                               placeholder="明确说明这次人工判断的结论，以及接下来应该怎么做。"
                             />
                           </label>
+
+                          {draft.action === "reassign" ? (
+                            <div className="form-row">
+                              <label className="field">
+                                <span>新指派方式</span>
+                                <select
+                                  value={draft.reassign_assignee_type}
+                                  onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, reassign_assignee_type: event.target.value } }))}
+                                >
+                                  {ASSIGNEE_TYPE_OPTIONS.map((item) => (
+                                    <option key={item.value} value={item.value}>{item.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+
+                              <label className="field">
+                                <span>新指派值</span>
+                                <input
+                                  value={draft.reassign_assignee_value}
+                                  onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, reassign_assignee_value: event.target.value } }))}
+                                  placeholder="成员 ID、角色或候选池"
+                                />
+                              </label>
+
+                              <label className="field">
+                                <span>新超时（分钟）</span>
+                                <input
+                                  type="number"
+                                  min="5"
+                                  step="5"
+                                  value={draft.reassign_timeout_minutes}
+                                  onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, reassign_timeout_minutes: event.target.value } }))}
+                                  placeholder="留空则沿用原超时"
+                                />
+                              </label>
+                            </div>
+                          ) : null}
 
                           <label className="field">
                             <span>决策后关联工件</span>

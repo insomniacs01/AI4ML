@@ -41,47 +41,36 @@ def send_task_chat_message(task: TaskRecord, *, prompt: str, settings: Settings)
     history.append(user_message)
 
     composed_prompt = _build_chat_prompt(task, history)
-    try:
-        provider = LocalOpenAIProvider(settings)
-        reason = provider.unavailability_reason()
-        if reason is not None:
-            raise RuntimeError(f"当前 AI 连接器不可用：{reason}")
+    provider = LocalOpenAIProvider(settings)
+    reason = provider.unavailability_reason()
+    if reason is not None:
+        raise RuntimeError(f"当前 AI 连接器不可用：{reason}")
 
-        provider_result = call_openai_compatible_provider(
-            prompt=composed_prompt,
-            settings=settings,
-            system_message=(
-                "You are the interactive AI collaborator inside AI4ML. "
-                "Help the user discuss the task, data, prompt design, code ideas, and debugging steps. "
-                "Do not claim to have executed code or changed task state unless the user has explicitly run those actions. "
-                "Prefer answering in Chinese unless the user explicitly requests another language."
-            ),
-            temperature=0.2,
-            max_tokens=1200,
-        )
-        assistant_message = TaskInteractiveChatMessage(
-            id=f"chat_{uuid4().hex}",
-            role="assistant",
-            origin="ai_model",
-            content=provider_result.text,
-            model_name=settings.mlzero_model_alias,
-            composed_prompt=composed_prompt,
-            token_usage=provider_result.token_usage,
-            created_at=datetime.now(timezone.utc),
-        )
-        token_usage = provider_result.token_usage
-    except Exception as exc:  # noqa: BLE001
-        assistant_message = TaskInteractiveChatMessage(
-            id=f"chat_{uuid4().hex}",
-            role="assistant",
-            origin="local_runtime",
-            status="error",
-            content=f"当前 AI 连接器调用失败：{exc}",
-            model_name=settings.mlzero_model_alias,
-            composed_prompt=composed_prompt,
-            created_at=datetime.now(timezone.utc),
-        )
-        token_usage = None
+    provider_result = call_openai_compatible_provider(
+        prompt=composed_prompt,
+        settings=settings,
+        system_message=(
+            "You are the interactive AI collaborator inside AI4ML. "
+            "Help the user discuss the task, data, prompt design, code ideas, and debugging steps. "
+            "Do not claim to have executed code or changed task state unless the user has explicitly run those actions. "
+            "Prefer answering in Chinese unless the user explicitly requests another language."
+        ),
+        temperature=0.2,
+        max_tokens=1200,
+    )
+    if provider_result.token_usage is None:
+        raise RuntimeError("AI Provider 响应中缺少 usage token 信息，无法记录本次对话消耗。")
+    assistant_message = TaskInteractiveChatMessage(
+        id=f"chat_{uuid4().hex}",
+        role="assistant",
+        origin="ai_model",
+        content=provider_result.text,
+        model_name=settings.mlzero_model_alias,
+        composed_prompt=composed_prompt,
+        token_usage=provider_result.token_usage,
+        created_at=datetime.now(timezone.utc),
+    )
+    token_usage = provider_result.token_usage
 
     history.append(assistant_message)
     structured_requirements[INTERACTIVE_CHAT_HISTORY_KEY] = [message.model_dump(mode="json") for message in history]
