@@ -238,6 +238,28 @@
   - `phone_autoconfirm = false`
   - `email_provider_enabled = true`
 - This means the hosted project no longer requires email confirmation before first login.
+
+## 2026-05-02 P0 strict incremental rerun closure
+
+- The previous P0 tail was real: "rerun from stage" used to be only status/guidance while the runtime still called a full `MLZeroExecutor.run(...)`.
+- This has now been closed at backend level:
+  - `requirement_analysis` / `data_analysis` reruns re-run AI analysis first, then continue downstream.
+  - `feature_engineering` reruns create a new incremental run directory, generate new code directly from the reviewed task context, execute it, and persist real `run_summary.json` / `leaderboard` artifacts.
+  - `model_selection` / `training_validation` reruns reuse existing `generated_code.py`, rewrite old absolute run paths to the new run directory, execute it, and parse real artifacts.
+  - `report_generation` reruns do not train or call MLZero; they copy real prior result artifacts and rebuild `report_snapshot.md`.
+- Every strict incremental rerun writes `incremental_rerun_manifest.json` with:
+  - `strict_incremental: true`
+  - source output directory
+  - start stage
+  - reused stages
+  - rerun stages
+  - mode and generated-code lineage
+- Missing required artifacts now fail explicitly with `409 Conflict` before the task is marked running, for example missing previous output directory or missing `generated_code.py`.
+- `POST /api/tasks/{task_id}/run` also accepts optional `rerun_from_stage` and `force_full_run`; the default still reads `structured_requirements.human_loop.rerun_requested`.
+- Frontend task detail now shows when the next run will start from a specific stage and changes the run button label accordingly.
+- Verification added:
+  - `backend/tests/test_incremental_rerun.py`
+  - `python -m unittest discover backend/tests` now includes strict incremental rerun coverage.
 - Exact frontend SDK behavior was revalidated with `@supabase/supabase-js` using the same signup path as the app:
   - `signUp()` now returns a session immediately
   - the new session is stored immediately
@@ -1350,3 +1372,30 @@
   - 历史明文仍可读取；已加密密钥若缺少原 secret key 会明确失败。
   - 连接器 create/test/activate 和任务 create/update/analyze/run/delete、人机协同、代码工作区、在线预测等操作会写审计日志。
 - 文档已补充新接口、连接器密钥环境变量、真实产物限制说明。
+
+## 2026-05-02 P0 closed-loop completion pass
+
+- 本轮继续把 P0 中“后端已有能力但前端不可操作”的缺口补成闭环。
+- 团队治理闭环：
+  - 新增团队所有者专属设置入口，可维护团队名称、说明和状态。
+  - 新增所有权转移入口，只能转给 active 成员；转移后当前所有者降为管理员。
+  - 成员表不再把 `team_owner` 当作普通角色可直接分配，团队所有者变更必须走所有权转移。
+- 连接器生命周期闭环：
+  - 前端已支持连接器编辑、保留旧 API Key、替换新 API Key、停用、删除、批量健康检查。
+  - 批量健康检查会真实调用每个连接器并写回测试状态，不使用假成功。
+  - 删除和停用会同步刷新运行时状态与审计日志。
+- 工作流进度闭环：
+  - 阶段面板现在展示 `workflow_stage_records.artifact_refs` 中的真实关键产物路径。
+  - MLZero 运行成功/失败后，前端可以按阶段看到代码、leaderboard、run summary、日志等入口。
+- 人机协同重跑语义：
+  - reject/revise 决策会记录 `rerun_from_stage`。
+  - 阶段快照会把该阶段及下游阶段标记为待重跑，用户能看到明确的恢复边界。
+- 本轮验证：
+  - `python -m compileall backend\app`
+  - `python -m unittest discover backend\tests`
+  - `npm run build`
+- 当前注意事项：
+  - “从某阶段重跑”已不再只是状态与指引闭环；当前后端已经接入 `backend/app/services/task_incremental_rerun.py` 的严格增量实现。
+  - `requirement_analysis` / `data_analysis` 会先重新执行 AI 解析再继续下游阶段；`feature_engineering` 会重新生成并执行代码；`model_selection` / `training_validation` 会复用既有 `generated_code.py` 并改写运行路径后执行；`report_generation` 不训练，只复用真实产物并重建报告快照。
+  - 增量重跑缺少必要历史产物时必须明确失败，例如缺少上一次 output directory 或缺少 `generated_code.py`，不能静默退回整次 MLZero 运行。
+  - Supabase 上线环境必须应用最新 `supabase/schema.sql`，否则团队设置字段、连接器增删改、阶段产物记录、严格增量重跑相关状态可能缺表/缺字段/缺策略。

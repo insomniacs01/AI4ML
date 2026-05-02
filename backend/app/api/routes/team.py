@@ -9,6 +9,7 @@ from backend.app.core.supabase_auth import (
     TeamAccessContext,
     require_team_access,
     require_team_admin_access,
+    require_team_owner_access,
 )
 from backend.app.models.governance import (
     AIRoutingPoliciesResponse,
@@ -23,6 +24,8 @@ from backend.app.models.governance import (
     PlatformAssetsResponse,
     TeamInviteRequest,
     TeamInviteResponse,
+    TeamOwnershipTransferRequest,
+    TeamOwnershipTransferResponse,
     TeamMemberRoleUpdateRequest,
     TeamMemberRoleUpdateResponse,
     TeamMembersResponse,
@@ -31,6 +34,8 @@ from backend.app.models.governance import (
     TeamQuotaAdjustRequest,
     TeamQuotaAdjustResponse,
     TeamQuotasResponse,
+    TeamSettingsResponse,
+    TeamSettingsUpdateRequest,
 )
 from backend.app.services.governance_store import GovernanceStore
 
@@ -79,6 +84,87 @@ def list_team_members(team_access: TeamAccessContext = Depends(require_team_acce
     return TeamMembersResponse(team_id=team_access.team_id, items=items)
 
 
+@router.get("/settings", response_model=TeamSettingsResponse)
+def get_team_settings(team_access: TeamAccessContext = Depends(require_team_access)) -> TeamSettingsResponse:
+    try:
+        team = get_governance_store().get_team_settings(
+            team_access.team_id,
+            access_token=team_access.access_token,
+        )
+        if team is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team not found")
+    except HTTPException:
+        raise
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return TeamSettingsResponse(team=team)
+
+
+@router.patch("/settings", response_model=TeamSettingsResponse)
+def update_team_settings(
+    payload: TeamSettingsUpdateRequest,
+    team_access: TeamAccessContext = Depends(require_team_owner_access),
+) -> TeamSettingsResponse:
+    store = get_governance_store()
+    try:
+        team = store.update_team_settings(
+            team_access.team_id,
+            payload,
+            access_token=team_access.access_token,
+        )
+        store.create_audit_log(
+            team_access.team_id,
+            team_access.user.id,
+            action="team.settings.update",
+            resource_type="team",
+            resource_id=team_access.team_id,
+            detail=payload.model_dump(exclude_none=True),
+            access_token=team_access.access_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return TeamSettingsResponse(team=team)
+
+
+@router.post("/owner/transfer", response_model=TeamOwnershipTransferResponse)
+def transfer_team_ownership(
+    payload: TeamOwnershipTransferRequest,
+    team_access: TeamAccessContext = Depends(require_team_owner_access),
+) -> TeamOwnershipTransferResponse:
+    store = get_governance_store()
+    try:
+        team, previous_owner, new_owner = store.transfer_ownership(
+            team_access.team_id,
+            current_owner_id=team_access.user.id,
+            new_owner_user_id=payload.new_owner_user_id,
+            access_token=team_access.access_token,
+        )
+        store.create_audit_log(
+            team_access.team_id,
+            team_access.user.id,
+            action="team.owner.transfer",
+            resource_type="team",
+            resource_id=team_access.team_id,
+            detail={
+                "previous_owner_user_id": previous_owner.user_id,
+                "new_owner_user_id": new_owner.user_id,
+            },
+            access_token=team_access.access_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return TeamOwnershipTransferResponse(
+        detail="团队所有权已转移。",
+        team=team,
+        previous_owner=previous_owner,
+        new_owner=new_owner,
+    )
+
+
 @router.post("/members/invite", response_model=TeamInviteResponse)
 def get_team_invite_details(
     payload: TeamInviteRequest,
@@ -122,6 +208,16 @@ def update_team_member_role(
     payload: TeamMemberRoleUpdateRequest,
     team_access: TeamAccessContext = Depends(require_team_admin_access),
 ) -> TeamMemberRoleUpdateResponse:
+    if payload.role == "team_owner":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="team_owner must be assigned through the ownership transfer endpoint.",
+        )
+    if member_id == team_access.user.id and team_access.role == "team_owner":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="team_owner cannot demote themselves through member role update. Use ownership transfer instead.",
+        )
     store = get_governance_store()
     try:
         member = store.update_member_role(

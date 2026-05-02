@@ -74,6 +74,20 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  updateConnector(connectorId, payload, context = {}) {
+    return request(`/connectors/${connectorId}`, {
+      ...context,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  healthCheckConnectors(context = {}) {
+    return request("/connectors/health-check", {
+      ...context,
+      method: "POST",
+    });
+  },
   testConnector(connectorId, context = {}) {
     return request(`/connectors/${connectorId}/test`, {
       ...context,
@@ -84,6 +98,37 @@ export const api = {
     return request(`/connectors/${connectorId}/activate`, {
       ...context,
       method: "POST",
+    });
+  },
+  deactivateConnector(connectorId, context = {}) {
+    return request(`/connectors/${connectorId}/deactivate`, {
+      ...context,
+      method: "POST",
+    });
+  },
+  deleteConnector(connectorId, context = {}) {
+    return request(`/connectors/${connectorId}`, {
+      ...context,
+      method: "DELETE",
+    });
+  },
+  teamSettings(context = {}) {
+    return request("/team/settings", context);
+  },
+  updateTeamSettings(payload, context = {}) {
+    return request("/team/settings", {
+      ...context,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  transferTeamOwnership(payload, context = {}) {
+    return request("/team/owner/transfer", {
+      ...context,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
   },
   teamMembers(context = {}) {

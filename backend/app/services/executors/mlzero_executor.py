@@ -594,6 +594,9 @@ class MLZeroExecutor(BaseExecutor):
             token_usage=token_usage,
         )
 
+    def build_summary_from_output(self, output_dir: Path | str) -> RunSummary:
+        return self._build_summary(Path(output_dir))
+
     def unavailability_reason(self) -> str | None:
         provider_reason = self.provider_unavailability_reason()
         if provider_reason is not None:

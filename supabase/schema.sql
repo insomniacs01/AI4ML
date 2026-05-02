@@ -66,6 +66,8 @@ create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   invite_code text not null unique,
+  description text,
+  status text not null default 'active' check (status in ('active', 'disabled', 'archived')),
   created_by uuid not null references public.profiles(user_id) on delete restrict,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
@@ -88,6 +90,20 @@ $$;
 
 alter table public.teams
 alter column invite_code set default public.generate_team_invite_code();
+alter table public.teams
+  add column if not exists description text;
+alter table public.teams
+  add column if not exists status text not null default 'active';
+
+do $$
+begin
+  alter table public.teams
+    drop constraint if exists teams_status_check;
+  alter table public.teams
+    add constraint teams_status_check
+    check (status in ('active', 'disabled', 'archived'));
+end;
+$$;
 
 drop trigger if exists teams_set_updated_at on public.teams;
 create trigger teams_set_updated_at
@@ -655,6 +671,14 @@ on public.teams
 for select
 to authenticated
 using (public.is_member_of_team(id));
+
+drop policy if exists teams_update_if_admin on public.teams;
+create policy teams_update_if_admin
+on public.teams
+for update
+to authenticated
+using (public.is_team_admin(id))
+with check (public.is_team_admin(id));
 
 drop policy if exists team_members_select_if_member on public.team_members;
 create policy team_members_select_if_member

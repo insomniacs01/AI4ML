@@ -218,6 +218,7 @@ class TaskHumanCollaborationService:
 
         request.status = self._status_for_decision_action(payload.action)
         requires_rerun = payload.action in RERUN_DECISION_ACTIONS
+        rerun_from_stage = self._stage_key(request.stage) if requires_rerun else None
         request.decision = {
             "action": payload.action.value,
             "summary": payload.decision_summary,
@@ -227,6 +228,7 @@ class TaskHumanCollaborationService:
             "decided_by_role": actor_role,
             "decided_at": datetime.now(timezone.utc).isoformat(),
             "requires_rerun": requires_rerun,
+            "rerun_from_stage": rerun_from_stage,
         }
         self.task_store.update_human_request(request, access_token=access_token)
 
@@ -241,9 +243,10 @@ class TaskHumanCollaborationService:
                 task,
                 access_token=access_token,
                 reason=payload.decision_summary,
+                rerun_from_stage=rerun_from_stage,
             )
         elif requires_rerun:
-            self._mark_task_rerun_requested(task, reason=payload.decision_summary)
+            self._mark_task_rerun_requested(task, reason=payload.decision_summary, rerun_from_stage=rerun_from_stage)
             saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
         elif payload.resume_task:
             saved_task = self._resume_task_record(task, access_token=access_token)
@@ -459,7 +462,7 @@ class TaskHumanCollaborationService:
             report_status = WorkflowStageStatus.pending
             report_summary = "Report generation has not started yet."
 
-        return [
+        blueprints = [
             _StageBlueprint(
                 stage=WorkflowStage.requirement_analysis,
                 status=requirement_status,
@@ -491,6 +494,41 @@ class TaskHumanCollaborationService:
                 summary=report_summary,
             ),
         ]
+        return self._apply_rerun_stage_hint(task, blueprints)
+
+    def _apply_rerun_stage_hint(self, task: TaskRecord, blueprints: list[_StageBlueprint]) -> list[_StageBlueprint]:
+        human_loop = self._read_human_loop(task)
+        if not human_loop.get("rerun_requested"):
+            return blueprints
+        raw_stage = human_loop.get("rerun_from_stage")
+        if not isinstance(raw_stage, str) or not raw_stage:
+            return blueprints
+        try:
+            rerun_stage = normalize_workflow_stage(raw_stage)
+        except ValueError:
+            return blueprints
+        order_index = {stage.value: index for index, stage in enumerate(STAGE_ORDER)}
+        rerun_index = order_index.get(rerun_stage.value)
+        if rerun_index is None:
+            return blueprints
+        reason = human_loop.get("rerun_reason")
+        next_blueprints: list[_StageBlueprint] = []
+        for blueprint in blueprints:
+            current_index = order_index.get(blueprint.stage.value, len(order_index))
+            if current_index >= rerun_index:
+                next_blueprints.append(
+                    _StageBlueprint(
+                        stage=blueprint.stage,
+                        status=WorkflowStageStatus.pending,
+                        summary=(
+                            f"人工协同要求从“{blueprint.stage.value}”所在链路重新运行。"
+                            + (f"原因：{reason}" if isinstance(reason, str) and reason else "")
+                        ),
+                    )
+                )
+            else:
+                next_blueprints.append(blueprint)
+        return next_blueprints
 
     @staticmethod
     def _build_generation_stage_status(task: TaskRecord, effective_status: TaskStatus) -> WorkflowStageStatus:
@@ -626,10 +664,12 @@ class TaskHumanCollaborationService:
         task.status = TaskStatus.paused_for_review
         return self.task_store.save_task(task, access_token=access_token)
 
-    def _mark_task_rerun_requested(self, task: TaskRecord, *, reason: str) -> None:
+    def _mark_task_rerun_requested(self, task: TaskRecord, *, reason: str, rerun_from_stage: str | None = None) -> None:
         human_loop = self._ensure_human_loop(task)
         human_loop["rerun_requested"] = True
         human_loop["rerun_reason"] = reason
+        if rerun_from_stage:
+            human_loop["rerun_from_stage"] = rerun_from_stage
         human_loop["rerun_requested_at"] = datetime.now(timezone.utc).isoformat()
         human_loop["manual_hold"] = False
         human_loop["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -640,8 +680,9 @@ class TaskHumanCollaborationService:
         *,
         access_token: str,
         reason: str,
+        rerun_from_stage: str | None = None,
     ) -> TaskRecord:
-        self._mark_task_rerun_requested(task, reason=reason)
+        self._mark_task_rerun_requested(task, reason=reason, rerun_from_stage=rerun_from_stage)
         task.status = TaskStatus.uploaded if task.dataset_filename else TaskStatus.draft
         task.notes = f"人工协同要求重新运行：{reason}"
         return self.task_store.save_task(task, access_token=access_token)

@@ -34,6 +34,7 @@ class TeamAccessContext:
 
 TEAM_ADMIN_ROLES = {"admin", "team_owner"}
 TEAM_DEVELOPER_ROLES = {"admin", "team_owner", "developer_user"}
+TEAM_OWNER_ROLES = {"team_owner"}
 
 
 class SupabaseClient:
@@ -186,6 +187,17 @@ def require_team_admin_access(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This operation requires a team admin role.",
+        )
+    return team_access
+
+
+def require_team_owner_access(
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TeamAccessContext:
+    if team_access.role not in TEAM_OWNER_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This operation requires the team owner role.",
         )
     return team_access
 

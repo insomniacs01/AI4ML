@@ -9,6 +9,7 @@ from backend.app.core.supabase_auth import (
     TeamAccessContext,
     require_team_admin_access,
     require_team_developer_access,
+    require_team_owner_access,
 )
 
 
@@ -38,4 +39,13 @@ class TeamAccessRoleTests(TestCase):
     def test_team_developer_access_rejects_plain_member(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             require_team_developer_access(_build_team_access("member"))
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_team_owner_access_allows_owner(self) -> None:
+        context = _build_team_access("team_owner")
+        self.assertIs(require_team_owner_access(context), context)
+
+    def test_team_owner_access_rejects_admin(self) -> None:
+        with self.assertRaises(HTTPException) as raised:
+            require_team_owner_access(_build_team_access("admin"))
         self.assertEqual(raised.exception.status_code, 403)

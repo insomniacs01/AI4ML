@@ -5311,6 +5311,31 @@ table tbody tr:hover td {
   background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
 }
 
+.compact-section-head {
+  margin-bottom: 8px;
+}
+
+.owner-transfer-form {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.owner-transfer-action {
+  align-content: end;
+}
+
+.connector-edit-form {
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.workflow-artifact-list {
+  margin-top: 14px;
+}
+
 .audit-page-layout code.mono-text {
   display: block;
   max-width: 520px;

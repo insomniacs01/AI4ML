@@ -65,6 +65,15 @@ from backend.app.services.task_code_workspace import (
 )
 from backend.app.services.task_human_collaboration import TaskHumanCollaborationService
 from backend.app.services.task_human_context import ensure_task_human_loop, get_task_human_loop
+from backend.app.services.task_incremental_rerun import (
+    IncrementalRerunError,
+    IncrementalRerunPlan,
+    IncrementalRerunPreconditionError,
+    IncrementalRerunResult,
+    build_incremental_rerun_plan,
+    is_strict_incremental_stage,
+    run_task_incrementally,
+)
 from backend.app.services.task_reporting import build_prediction_demo_response, build_task_model_report
 from backend.app.services.task_store import TaskStore
 from backend.app.services.token_usage import read_token_usage
@@ -401,6 +410,7 @@ def _record_stage_selection_map(
     status_by_stage: dict[WorkflowStage, WorkflowStageStatus],
     summary_by_stage: dict[WorkflowStage, str],
     artifact_refs: list[str] | dict | None = None,
+    artifact_refs_by_stage: dict[WorkflowStage, list[str] | dict] | None = None,
 ) -> None:
     for stage, stage_status in status_by_stage.items():
         _record_workflow_stage(
@@ -410,8 +420,187 @@ def _record_stage_selection_map(
             stage_status=stage_status,
             summary=summary_by_stage[stage],
             selection=stage_selection_map.get(stage.value),
-            artifact_refs=artifact_refs,
+            artifact_refs=artifact_refs_by_stage.get(stage, artifact_refs) if artifact_refs_by_stage else artifact_refs,
         )
+
+
+def _collect_stage_artifacts_by_stage(output_dir: str | None) -> dict[WorkflowStage, list[str]]:
+    if not output_dir:
+        return {}
+    root = Path(output_dir)
+    if not root.exists():
+        return {}
+
+    stage_patterns: dict[WorkflowStage, tuple[str, ...]] = {
+        WorkflowStage.feature_engineering: (
+            "generated_code.py",
+            "python_code.py",
+            "python_coder_prompt.txt",
+            "python_coder_response.txt",
+            "execution_script.sh",
+        ),
+        WorkflowStage.model_selection: (
+            "leaderboard.csv",
+            "leaderboard.json",
+            "run_summary.json",
+            "tool_selector_prompt.txt",
+            "tool_selector_response.txt",
+        ),
+        WorkflowStage.training_validation: (
+            "run_summary.json",
+            "validation_predictions.csv",
+            "results.csv",
+            "stdout",
+            "stderr",
+            "execution_stdout.txt",
+            "execution_stderr.txt",
+        ),
+        WorkflowStage.report_generation: (
+            "summary.txt",
+            "run_summary.json",
+            "feature_importance.csv",
+            "feature_importance.json",
+            "feature_importances.csv",
+            "feature_importances.json",
+        ),
+    }
+
+    collected: dict[WorkflowStage, list[str]] = {}
+    files = [path for path in root.rglob("*") if path.is_file()]
+    for stage, names in stage_patterns.items():
+        matched: list[str] = []
+        wanted = {name.lower() for name in names}
+        for path in files:
+            if path.name.lower() in wanted:
+                matched.append(str(path))
+            if len(matched) >= 12:
+                break
+        if matched:
+            collected[stage] = matched
+    return collected
+
+
+def _resolve_requested_rerun_stage(task: TaskRecord, payload: TaskRunRequest) -> WorkflowStage | None:
+    if payload.force_full_run:
+        return None
+    if payload.rerun_from_stage is not None:
+        return normalize_workflow_stage(payload.rerun_from_stage)
+    human_loop = get_task_human_loop(task)
+    if not human_loop.get("rerun_requested"):
+        return None
+    raw_stage = human_loop.get("rerun_from_stage")
+    if not isinstance(raw_stage, str) or not raw_stage.strip():
+        return None
+    try:
+        return normalize_workflow_stage(raw_stage)
+    except ValueError:
+        return None
+
+
+def _generation_stage_statuses_for_incremental_running(
+    plan: IncrementalRerunPlan,
+) -> tuple[dict[WorkflowStage, WorkflowStageStatus], dict[WorkflowStage, str], dict[WorkflowStage, list[str]]]:
+    status_by_stage: dict[WorkflowStage, WorkflowStageStatus] = {}
+    summary_by_stage: dict[WorkflowStage, str] = {}
+    artifact_refs_by_stage: dict[WorkflowStage, list[str]] = {}
+    manifest_path = str(plan.run_output_dir / "incremental_rerun_manifest.json")
+    for stage in PRIMARY_WORKFLOW_STAGES:
+        if stage in plan.reused_stages:
+            status_by_stage[stage] = WorkflowStageStatus.completed
+            summary_by_stage[stage] = (
+                f"Reused from previous run for strict incremental rerun from {plan.start_stage.value}."
+            )
+            artifact_refs_by_stage[stage] = [str(plan.source_output_dir), manifest_path]
+        elif stage == WorkflowStage.report_generation and plan.start_stage != WorkflowStage.report_generation:
+            status_by_stage[stage] = WorkflowStageStatus.pending
+            summary_by_stage[stage] = (
+                f"Waiting for downstream outputs from strict incremental rerun from {plan.start_stage.value}."
+            )
+            artifact_refs_by_stage[stage] = [str(plan.run_output_dir), manifest_path]
+        else:
+            status_by_stage[stage] = WorkflowStageStatus.running
+            summary_by_stage[stage] = f"Strict incremental rerun is executing from {plan.start_stage.value}."
+            artifact_refs_by_stage[stage] = [str(plan.run_output_dir), manifest_path]
+    return status_by_stage, summary_by_stage, artifact_refs_by_stage
+
+
+def _stage_records_for_incremental_success(
+    result: IncrementalRerunResult,
+) -> tuple[dict[WorkflowStage, WorkflowStageStatus], dict[WorkflowStage, str], dict[WorkflowStage, list[str]]]:
+    summary = result.summary
+    status_by_stage: dict[WorkflowStage, WorkflowStageStatus] = {}
+    summary_by_stage: dict[WorkflowStage, str] = {}
+    artifact_refs_by_stage: dict[WorkflowStage, list[str]] = {}
+    collected = _collect_stage_artifacts_by_stage(summary.output_dir)
+    for stage in PRIMARY_WORKFLOW_STAGES:
+        status_by_stage[stage] = WorkflowStageStatus.completed
+        if stage in result.plan.reused_stages:
+            summary_by_stage[stage] = (
+                f"Reused unchanged from {result.plan.source_output_dir} for strict incremental rerun."
+            )
+            artifact_refs_by_stage[stage] = result.reused_artifacts_by_stage.get(stage, [str(result.plan.source_output_dir)])
+        elif stage == WorkflowStage.model_selection:
+            summary_by_stage[stage] = (
+                f"Strict incremental rerun parsed {len(summary.leaderboard)} candidate model results; "
+                f"best model is {summary.best_model}."
+            )
+            artifact_refs_by_stage[stage] = collected.get(stage, result.rerun_artifacts_by_stage.get(stage, [summary.output_dir]))
+        elif stage == WorkflowStage.training_validation:
+            summary_by_stage[stage] = (
+                f"Strict incremental rerun completed training/validation: "
+                f"{summary.metric_name} = {summary.metric_value:.6g}."
+            )
+            artifact_refs_by_stage[stage] = collected.get(stage, result.rerun_artifacts_by_stage.get(stage, [summary.output_dir]))
+        elif stage == WorkflowStage.report_generation:
+            summary_by_stage[stage] = "Strict incremental rerun refreshed report-ready artifacts and manifest."
+            artifact_refs_by_stage[stage] = collected.get(stage, result.rerun_artifacts_by_stage.get(stage, [summary.output_dir]))
+        else:
+            summary_by_stage[stage] = f"Strict incremental rerun completed stage {stage.value}."
+            artifact_refs_by_stage[stage] = collected.get(stage, result.rerun_artifacts_by_stage.get(stage, [summary.output_dir]))
+        if str(result.manifest_path) not in artifact_refs_by_stage[stage]:
+            artifact_refs_by_stage[stage] = [*artifact_refs_by_stage[stage], str(result.manifest_path)]
+    return status_by_stage, summary_by_stage, artifact_refs_by_stage
+
+
+def _stage_records_for_incremental_failure(
+    plan: IncrementalRerunPlan,
+    error: Exception,
+) -> tuple[dict[WorkflowStage, WorkflowStageStatus], dict[WorkflowStage, str], dict[WorkflowStage, list[str]]]:
+    status_by_stage: dict[WorkflowStage, WorkflowStageStatus] = {}
+    summary_by_stage: dict[WorkflowStage, str] = {}
+    artifact_refs_by_stage: dict[WorkflowStage, list[str]] = {}
+    manifest_path = str(plan.run_output_dir / "incremental_rerun_manifest.json")
+    for stage in PRIMARY_WORKFLOW_STAGES:
+        if stage in plan.reused_stages:
+            status_by_stage[stage] = WorkflowStageStatus.completed
+            summary_by_stage[stage] = (
+                f"Reused unchanged from {plan.source_output_dir}; downstream incremental rerun failed."
+            )
+            artifact_refs_by_stage[stage] = [str(plan.source_output_dir), manifest_path]
+        else:
+            status_by_stage[stage] = WorkflowStageStatus.failed
+            summary_by_stage[stage] = f"Strict incremental rerun from {plan.start_stage.value} failed: {error}"
+            artifact_refs_by_stage[stage] = [str(plan.run_output_dir), manifest_path]
+    return status_by_stage, summary_by_stage, artifact_refs_by_stage
+
+
+def _mark_rerun_completed(
+    task: TaskRecord,
+    *,
+    start_stage: WorkflowStage | None,
+    mode: str,
+    output_dir: str,
+) -> None:
+    current_human_loop = get_task_human_loop(task)
+    if not current_human_loop.get("rerun_requested") and start_stage is None:
+        return
+    human_loop = ensure_task_human_loop(task)
+    human_loop["rerun_requested"] = False
+    human_loop["last_rerun_from_stage"] = start_stage.value if start_stage else None
+    human_loop["last_rerun_mode"] = mode
+    human_loop["last_rerun_output_dir"] = output_dir
+    human_loop["last_rerun_completed_at"] = datetime.now(timezone.utc).isoformat()
+    human_loop["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 
 def _assert_quota_allows_action(
@@ -1199,7 +1388,10 @@ def run_task(
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    if not task.label_column or not task.problem_type:
+    requested_rerun_stage_before_analysis = _resolve_requested_rerun_stage(task, payload)
+    if requested_rerun_stage_before_analysis in {WorkflowStage.requirement_analysis, WorkflowStage.data_analysis}:
+        task = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
+    elif not task.label_column or not task.problem_type:
         task = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
 
     runtime_context = _build_runtime_context(team_access)
@@ -1239,9 +1431,33 @@ def run_task(
         block_at_warning_threshold=True,
     )
     runtime_settings = _build_runtime_settings_for_selection(get_settings(), selection)
+    requested_rerun_stage = requested_rerun_stage_before_analysis or _resolve_requested_rerun_stage(task, payload)
+    incremental_plan: IncrementalRerunPlan | None = None
+    if requested_rerun_stage is not None and is_strict_incremental_stage(requested_rerun_stage):
+        try:
+            incremental_plan = build_incremental_rerun_plan(
+                task,
+                settings=runtime_settings,
+                start_stage=requested_rerun_stage,
+            )
+        except IncrementalRerunPreconditionError as exc:
+            _write_task_audit(
+                team_access,
+                action="task.run",
+                task_id=task.id,
+                detail={
+                    "status": "blocked",
+                    "detail": str(exc),
+                    "rerun_from_stage": requested_rerun_stage.value,
+                    "cycle_id": cycle_id,
+                },
+            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     task.status = TaskStatus.running
     task.notes = "MLZero 正在运行。"
+    if incremental_plan is not None:
+        task.notes = f"Strict incremental rerun from {incremental_plan.start_stage.value} is running."
     task = task_store.save_task(task, access_token=team_access.access_token)
 
     stage_selection_map.update(
@@ -1272,21 +1488,48 @@ def run_task(
         artifact_refs=[task.dataset_path] if task.dataset_path else None,
     )
 
+    if incremental_plan is not None:
+        running_statuses, running_summaries, running_artifacts = _generation_stage_statuses_for_incremental_running(
+            incremental_plan
+        )
+        _record_stage_selection_map(
+            task,
+            team_access,
+            stage_selection_map=stage_selection_map,
+            status_by_stage=running_statuses,
+            summary_by_stage=running_summaries,
+            artifact_refs_by_stage=running_artifacts,
+        )
+
+    incremental_result: IncrementalRerunResult | None = None
     try:
-        summary = MLZeroExecutor(runtime_settings).run(task, Path(task.dataset_path), payload.time_limit)
+        if incremental_plan is not None and requested_rerun_stage is not None:
+            incremental_result = run_task_incrementally(
+                task,
+                Path(task.dataset_path),
+                settings=runtime_settings,
+                start_stage=requested_rerun_stage,
+                time_limit=payload.time_limit,
+                plan=incremental_plan,
+            )
+            summary = incremental_result.summary
+        else:
+            summary = MLZeroExecutor(runtime_settings).run(task, Path(task.dataset_path), payload.time_limit)
     except Exception as exc:  # noqa: BLE001
         task.status = TaskStatus.failed
         task.notes = str(exc)
-        if isinstance(exc, MLZeroRunError) and exc.output_dir:
+        run_error_output_dir = exc.output_dir if isinstance(exc, (MLZeroRunError, IncrementalRerunError)) else None
+        run_error_token_usage = exc.token_usage if isinstance(exc, (MLZeroRunError, IncrementalRerunError)) else None
+        if run_error_output_dir:
             task.last_run_attempt = RunAttempt(
-                output_dir=exc.output_dir,
-                token_usage=exc.token_usage,
+                output_dir=run_error_output_dir,
+                token_usage=run_error_token_usage,
             )
             task_store.upsert_run_attempt(
                 task,
-                output_dir=exc.output_dir,
+                output_dir=run_error_output_dir,
                 status="failed",
-                token_usage=exc.token_usage,
+                token_usage=run_error_token_usage,
                 notes=str(exc),
                 access_token=team_access.access_token,
             )
@@ -1294,15 +1537,15 @@ def run_task(
                 team_id=task.team_id,
                 task_id=task.id,
                 phase="mlzero",
-                stage_key=selection.stage.value,
-                source_key=exc.output_dir,
-                usage=exc.token_usage,
+                stage_key=requested_rerun_stage.value if requested_rerun_stage else selection.stage.value,
+                source_key=run_error_output_dir,
+                usage=run_error_token_usage,
                 access_token=team_access.access_token,
                 user_id=team_access.user.id,
                 connector_id=selection.connector.id,
                 connector_display_name=selection.connector.display_name,
                 model_name=selection.model_name,
-                calculation_method="mlzero_token_usage_json",
+                calculation_method="strict_incremental_token_usage_json" if incremental_plan else "mlzero_token_usage_json",
             )
         saved_task = task_store.save_task(task, access_token=team_access.access_token)
         saved_task, _ = _apply_interaction_policies(
@@ -1329,8 +1572,22 @@ def run_task(
                 WorkflowStage.training_validation: f"训练或验证失败：{exc}",
                 WorkflowStage.report_generation: "训练验证失败，报告暂未生成。",
             },
-            artifact_refs=[exc.output_dir] if isinstance(exc, MLZeroRunError) and exc.output_dir else None,
+            artifact_refs=[run_error_output_dir] if run_error_output_dir else None,
+            artifact_refs_by_stage=_collect_stage_artifacts_by_stage(run_error_output_dir),
         )
+        if incremental_plan is not None:
+            failed_statuses, failed_summaries, failed_artifacts = _stage_records_for_incremental_failure(
+                incremental_plan,
+                exc,
+            )
+            _record_stage_selection_map(
+                saved_task,
+                team_access,
+                stage_selection_map=stage_selection_map,
+                status_by_stage=failed_statuses,
+                summary_by_stage=failed_summaries,
+                artifact_refs_by_stage=failed_artifacts,
+            )
         _write_task_audit(
             team_access,
             action="task.run",
@@ -1338,9 +1595,11 @@ def run_task(
             detail={
                 "status": "failed",
                 "detail": str(exc),
-                "output_dir": exc.output_dir if isinstance(exc, MLZeroRunError) else None,
+                "output_dir": run_error_output_dir,
                 "model_name": selection.model_name,
                 "connector_id": selection.connector.id,
+                "rerun_from_stage": requested_rerun_stage.value if requested_rerun_stage else None,
+                "rerun_mode": incremental_plan.mode if incremental_plan else "full_mlzero",
                 "cycle_id": cycle_id,
             },
         )
@@ -1353,13 +1612,21 @@ def run_task(
         output_dir=summary.output_dir,
         token_usage=summary.token_usage,
     )
+    _mark_rerun_completed(
+        task,
+        start_stage=requested_rerun_stage,
+        mode=incremental_plan.mode if incremental_plan else "full_mlzero",
+        output_dir=summary.output_dir,
+    )
+    if incremental_plan is not None:
+        task.notes = f"Strict incremental rerun from {incremental_plan.start_stage.value} completed."
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     task_store.upsert_run_summary(saved_task, summary, access_token=team_access.access_token)
     task_store.upsert_token_ledger(
         team_id=saved_task.team_id,
         task_id=saved_task.id,
         phase="mlzero",
-        stage_key=selection.stage.value,
+        stage_key=requested_rerun_stage.value if requested_rerun_stage else selection.stage.value,
         source_key=summary.output_dir,
         usage=summary.token_usage,
         access_token=team_access.access_token,
@@ -1367,7 +1634,7 @@ def run_task(
         connector_id=selection.connector.id,
         connector_display_name=selection.connector.display_name,
         model_name=selection.model_name,
-        calculation_method="mlzero_token_usage_json",
+        calculation_method="strict_incremental_token_usage_json" if incremental_plan else "mlzero_token_usage_json",
     )
     saved_task, _ = _apply_interaction_policies(
         saved_task,
@@ -1394,7 +1661,20 @@ def run_task(
             WorkflowStage.report_generation: "模型报告摘要已可基于真实任务、数据集画像和运行产物生成。",
         },
         artifact_refs=[summary.output_dir],
+        artifact_refs_by_stage=_collect_stage_artifacts_by_stage(summary.output_dir),
     )
+    if incremental_result is not None:
+        completed_statuses, completed_summaries, completed_artifacts = _stage_records_for_incremental_success(
+            incremental_result
+        )
+        _record_stage_selection_map(
+            saved_task,
+            team_access,
+            stage_selection_map=stage_selection_map,
+            status_by_stage=completed_statuses,
+            summary_by_stage=completed_summaries,
+            artifact_refs_by_stage=completed_artifacts,
+        )
     _write_task_audit(
         team_access,
         action="task.run",
@@ -1407,6 +1687,8 @@ def run_task(
             "metric_value": summary.metric_value,
             "model_name": selection.model_name,
             "connector_id": selection.connector.id,
+            "rerun_from_stage": requested_rerun_stage.value if requested_rerun_stage else None,
+            "rerun_mode": incremental_plan.mode if incremental_plan else "full_mlzero",
             "cycle_id": cycle_id,
         },
     )

@@ -110,6 +110,14 @@ const TASK_STATUS_TONES = {
   failed: "danger",
   published: "success",
 };
+const WORKFLOW_STAGE_LABELS = {
+  requirement_analysis: "需求解析",
+  data_analysis: "数据分析",
+  feature_engineering: "特征工程",
+  model_selection: "模型选择",
+  training_validation: "训练验证",
+  report_generation: "报告生成",
+};
 const TEAM_ROLE_LABELS = {
   team_owner: "团队所有者",
   admin: "管理员",
@@ -153,6 +161,19 @@ function getTaskMetricName(task) {
   const analysis = getTaskAnalysis(task);
   if (typeof analysis?.metric_name === "string" && analysis.metric_name.trim()) return analysis.metric_name.trim();
   return task?.last_run?.metric_name ?? null;
+}
+function getTaskRerunStage(task) {
+  const humanLoop = task?.structured_requirements?.human_loop;
+  if (!humanLoop || humanLoop.rerun_requested !== true) return null;
+  const stage = typeof humanLoop.rerun_from_stage === "string" ? humanLoop.rerun_from_stage : "";
+  return stage || null;
+}
+function formatWorkflowStage(stage) { return WORKFLOW_STAGE_LABELS[stage] ?? stage ?? "未知阶段"; }
+function getTaskRunButtonLabel(task, running) {
+  if (running) return "MLZero 运行中...";
+  const rerunStage = getTaskRerunStage(task);
+  if (rerunStage) return `从${formatWorkflowStage(rerunStage)}重跑（${DEFAULT_RUN_TIME_LIMIT} 分钟）`;
+  return `运行 MLZero（${DEFAULT_RUN_TIME_LIMIT} 分钟）`;
 }
 function getTaskRunAttempt(task) { return task?.last_run_attempt && typeof task.last_run_attempt === "object" ? task.last_run_attempt : null; }
 function getTaskRunUsage(task) {
@@ -204,6 +225,10 @@ function translateServerMessage(message) {
   if (lowered.includes("membership in the requested team is not active")) return "你在当前团队中的成员状态不是 active，暂时不能继续操作。";
   if (lowered.includes("missing supabase bearer token")) return "登录状态失效，请重新登录。";
   if (lowered.includes("requires a team admin role")) return "当前操作需要团队管理员权限。";
+  if (lowered.includes("requires the team owner role")) return "当前操作需要团队所有者权限。";
+  if (lowered.includes("only the current team owner can transfer ownership")) return "只有当前团队所有者可以转移所有权。";
+  if (lowered.includes("team_owner must be assigned through the ownership transfer endpoint")) return "团队所有者只能通过所有权转移入口变更。";
+  if (lowered.includes("team_owner cannot demote themselves")) return "团队所有者不能在成员表里降级自己，请使用所有权转移。";
   if (lowered.includes("requires a developer or team admin role")) return "当前操作需要开发成员或团队管理员权限。";
   if (lowered.includes("connector storage request")) return "连接器相关请求被 Supabase 拒绝，请检查当前团队权限。";
   if (lowered.includes("governance request")) return "团队治理请求被 Supabase 拒绝，请检查当前团队权限。";
@@ -230,6 +255,10 @@ export default function App() {
   const [memberships, setMemberships] = useState([]);
   const [activeTeamId, setActiveTeamId] = useState("");
   const [teamMembers, setTeamMembers] = useState([]);
+  const [teamSettings, setTeamSettings] = useState(null);
+  const [teamSettingsState, setTeamSettingsState] = useState("idle");
+  const [teamSettingsSaving, setTeamSettingsSaving] = useState(false);
+  const [ownershipTransferring, setOwnershipTransferring] = useState(false);
   const [teamBusy, setTeamBusy] = useState(false);
   const [teamError, setTeamError] = useState("");
   const [teamMessage, setTeamMessage] = useState("");
@@ -263,6 +292,10 @@ export default function App() {
   const [savingConnector, setSavingConnector] = useState(false);
   const [testingConnectorId, setTestingConnectorId] = useState("");
   const [activatingConnectorId, setActivatingConnectorId] = useState("");
+  const [updatingConnectorId, setUpdatingConnectorId] = useState("");
+  const [deactivatingConnectorId, setDeactivatingConnectorId] = useState("");
+  const [deletingConnectorId, setDeletingConnectorId] = useState("");
+  const [healthCheckingConnectors, setHealthCheckingConnectors] = useState(false);
   const [connectorMessage, setConnectorMessage] = useState("");
   const [connectorError, setConnectorError] = useState("");
   const [inviteInfo, setInviteInfo] = useState(null);
@@ -297,6 +330,7 @@ export default function App() {
   const activeConnector = useMemo(() => connectors.find((connector) => connector.is_active) ?? null, [connectors]);
   const teamCanManage = useMemo(() => ["admin", "team_owner"].includes(activeTeam?.role ?? ""), [activeTeam?.role]);
   const teamCanDevelop = useMemo(() => ["team_owner", "admin", "developer_user"].includes(activeTeam?.role ?? ""), [activeTeam?.role]);
+  const teamCanOwn = useMemo(() => activeTeam?.role === "team_owner", [activeTeam?.role]);
   const visibleNavItems = useMemo(
     () => NAV_ITEMS.filter((item) => (!item.requiresAdmin || teamCanManage) && (!item.requiresDeveloper || teamCanDevelop)),
     [teamCanDevelop, teamCanManage],
@@ -331,11 +365,13 @@ export default function App() {
         setMemberships([]);
         setActiveTeamId("");
         setTeamMembers([]);
+        setTeamSettings(null);
+        setTeamSettingsState("idle");
         return;
       }
 
       const teamIds = membershipRows.map((row) => row.team_id);
-      const { data: teamRows, error: teamRowsError } = await supabase.from("teams").select("id, name, invite_code, created_at, updated_at").in("id", teamIds);
+      const { data: teamRows, error: teamRowsError } = await supabase.from("teams").select("id, name, invite_code, created_by, description, status, created_at, updated_at").in("id", teamIds);
       if (teamRowsError) throw teamRowsError;
       const teamMap = new Map((teamRows ?? []).map((team) => [team.id, team]));
       const nextMemberships = membershipRows.map((row) => ({
@@ -345,6 +381,9 @@ export default function App() {
         joined_at: row.joined_at,
         name: teamMap.get(row.team_id)?.name ?? row.team_id,
         invite_code: teamMap.get(row.team_id)?.invite_code ?? "",
+        created_by: teamMap.get(row.team_id)?.created_by ?? "",
+        description: teamMap.get(row.team_id)?.description ?? "",
+        status: teamMap.get(row.team_id)?.status ?? "active",
         created_at: teamMap.get(row.team_id)?.created_at ?? row.joined_at,
         updated_at: teamMap.get(row.team_id)?.updated_at ?? row.joined_at,
       }));
@@ -374,6 +413,24 @@ export default function App() {
       setTeamError(getErrorMessage(error));
     } finally {
       setTeamBusy(false);
+    }
+  }
+
+  async function loadTeamSettings(teamId = activeTeamId) {
+    if (!session?.access_token || !teamId) {
+      setTeamSettings(null);
+      setTeamSettingsState("idle");
+      return;
+    }
+    setTeamSettingsState("loading");
+    try {
+      const response = await api.teamSettings({ accessToken: session.access_token, teamId });
+      setTeamSettings(response.team ?? null);
+    } catch (error) {
+      setTeamError(getErrorMessage(error));
+      setTeamSettings(null);
+    } finally {
+      setTeamSettingsState("ready");
     }
   }
 
@@ -529,6 +586,7 @@ export default function App() {
       loadUsageSummary(),
       loadConnectors(),
       loadTeamMembers(),
+      loadTeamSettings(),
       loadQuotaSummary(),
       loadRoutingPolicies(),
       loadAssets(),
@@ -569,6 +627,8 @@ export default function App() {
         setMemberships([]);
         setActiveTeamId("");
         setTeamMembers([]);
+        setTeamSettings(null);
+        setTeamSettingsState("idle");
         setTasks([]);
         setTaskAIConversations(null);
         setTaskAIConversationsState("idle");
@@ -620,6 +680,8 @@ export default function App() {
       setUsageError("");
       setConnectors([]);
       setTeamMembers([]);
+      setTeamSettings(null);
+      setTeamSettingsState("idle");
       setInviteInfo(null);
       setQuotaSummary([]);
       setQuotaState("idle");
@@ -640,6 +702,7 @@ export default function App() {
       loadUsageSummary(),
       loadConnectors(),
       loadTeamMembers(),
+      loadTeamSettings(),
       loadQuotaSummary(),
       loadRoutingPolicies(),
       loadAssets(),
@@ -1046,6 +1109,83 @@ export default function App() {
     }
   }
 
+  async function handleUpdateConnector(connectorId, payload) {
+    setUpdatingConnectorId(connectorId);
+    setConnectorError("");
+    setConnectorMessage("");
+    try {
+      const updatedConnector = await api.updateConnector(connectorId, payload, requestContext);
+      setConnectors((current) => mergeConnectorIntoList(current, updatedConnector));
+      await Promise.all([loadAuditLogs()]);
+      setConnectorMessage("连接器配置已更新。请重新测试后再作为稳定运行时使用。");
+      return true;
+    } catch (error) {
+      setConnectorError(getErrorMessage(error));
+      return false;
+    } finally {
+      setUpdatingConnectorId("");
+    }
+  }
+
+  async function handleHealthCheckConnectors() {
+    setHealthCheckingConnectors(true);
+    setConnectorError("");
+    setConnectorMessage("");
+    try {
+      const response = await api.healthCheckConnectors(requestContext);
+      const results = response.items ?? [];
+      setConnectors((current) => results.reduce((items, item) => (
+        item.connector ? mergeConnectorIntoList(items, item.connector) : items
+      ), current));
+      const passedCount = results.filter((item) => item.ok).length;
+      await loadAuditLogs();
+      setConnectorMessage(`${response.detail} ${passedCount}/${results.length} 个连接器通过。`);
+    } catch (error) {
+      setConnectorError(getErrorMessage(error));
+    } finally {
+      setHealthCheckingConnectors(false);
+    }
+  }
+
+  async function handleDeactivateConnector(connectorId) {
+    setDeactivatingConnectorId(connectorId);
+    setConnectorError("");
+    setConnectorMessage("");
+    try {
+      const response = await api.deactivateConnector(connectorId, requestContext);
+      setConnectors((current) => mergeConnectorIntoList(current, response.connector));
+      await Promise.all([loadHealth(), loadAuditLogs()]);
+      setConnectorMessage(response.detail);
+      return true;
+    } catch (error) {
+      setConnectorError(getErrorMessage(error));
+      return false;
+    } finally {
+      setDeactivatingConnectorId("");
+    }
+  }
+
+  async function handleDeleteConnector(connectorId) {
+    const connector = connectors.find((item) => item.id === connectorId);
+    if (!connector || !window.confirm(`确定删除连接器“${connector.display_name}”吗？删除后任务路由不能再引用它。`)) return false;
+    setDeletingConnectorId(connectorId);
+    setConnectorError("");
+    setConnectorMessage("");
+    try {
+      const wasActive = connector.is_active;
+      const response = await api.deleteConnector(connectorId, requestContext);
+      setConnectors((current) => current.filter((item) => item.id !== connectorId));
+      await Promise.all([wasActive ? loadHealth() : Promise.resolve(), loadAuditLogs()]);
+      setConnectorMessage(response.detail);
+      return true;
+    } catch (error) {
+      setConnectorError(getErrorMessage(error));
+      return false;
+    } finally {
+      setDeletingConnectorId("");
+    }
+  }
+
   async function handlePrepareInvite(payload) {
     setInviteBusy(true);
     setTeamError("");
@@ -1088,6 +1228,57 @@ export default function App() {
       setTeamError(getErrorMessage(error));
     } finally {
       setStatusUpdatingUserId("");
+    }
+  }
+
+  async function handleUpdateTeamSettings(payload) {
+    setTeamSettingsSaving(true);
+    setTeamError("");
+    setTeamMessage("");
+    try {
+      const response = await api.updateTeamSettings(payload, requestContext);
+      setTeamSettings(response.team ?? null);
+      setMemberships((current) => current.map((team) => (
+        team.id === activeTeamId
+          ? {
+              ...team,
+              name: response.team?.name ?? team.name,
+              description: response.team?.description ?? "",
+              status: response.team?.status ?? team.status,
+              updated_at: response.team?.updated_at ?? team.updated_at,
+            }
+          : team
+      )));
+      await loadAuditLogs();
+      setTeamMessage("团队设置已更新。");
+      return true;
+    } catch (error) {
+      setTeamError(getErrorMessage(error));
+      return false;
+    } finally {
+      setTeamSettingsSaving(false);
+    }
+  }
+
+  async function handleTransferTeamOwnership(newOwnerUserId) {
+    if (!newOwnerUserId) return false;
+    const target = teamMembers.find((member) => member.user_id === newOwnerUserId);
+    const label = target?.profile?.display_name || target?.profile?.email || newOwnerUserId;
+    if (!window.confirm(`确定把团队所有权转移给“${label}”吗？转移后你会降为管理员。`)) return false;
+    setOwnershipTransferring(true);
+    setTeamError("");
+    setTeamMessage("");
+    try {
+      const response = await api.transferTeamOwnership({ new_owner_user_id: newOwnerUserId }, requestContext);
+      setTeamSettings(response.team ?? null);
+      await Promise.all([loadMemberships(activeTeamId), loadTeamMembers(), loadAuditLogs()]);
+      setTeamMessage(response.detail);
+      return true;
+    } catch (error) {
+      setTeamError(getErrorMessage(error));
+      return false;
+    } finally {
+      setOwnershipTransferring(false);
     }
   }
 
@@ -1193,6 +1384,7 @@ export default function App() {
     const combinedUsage = combineTokenUsageReports(analysisUsage, runUsage);
     const lastRunAttempt = getTaskRunAttempt(selectedTask);
     const showingFailedAttempt = selectedTask.status === "failed" && lastRunAttempt;
+    const rerunStage = getTaskRerunStage(selectedTask);
     const conversationCount = Array.isArray(taskAIConversations?.items) ? taskAIConversations.items.length : 0;
     return (
       <div className="detail-stack task-detail-panel">
@@ -1209,10 +1401,16 @@ export default function App() {
             <article className="summary-item"><span>建议指标</span><strong>{formatMetricName(getTaskMetricName(selectedTask))}</strong></article>
             <article className="summary-item"><span>AI 置信度</span><strong>{formatConfidence(getTaskConfidence(selectedTask))}</strong></article>
           </div>
+          {rerunStage ? (
+            <div className="callout">
+              <strong>下一次运行会从{formatWorkflowStage(rerunStage)}开始</strong>
+              <p>后端会执行严格增量重跑：上游阶段复用已有真实产物，下游阶段写入新的运行目录和 `incremental_rerun_manifest.json`。</p>
+            </div>
+          ) : null}
           <p className="section-subtitle">{getTaskSummary(selectedTask)}</p>
           <div className="button-row connector-actions">
             <button type="button" className="ghost-button" onClick={() => void handleAnalyzeTask(selectedTask.id)} disabled={!selectedTask.dataset_filename || analyzingTaskId === selectedTask.id || runningTaskId === selectedTask.id}>{analyzingTaskId === selectedTask.id ? "AI 解析中..." : "AI 解析"}</button>
-            <button type="button" className="primary-button" onClick={() => void handleRunTask(selectedTask.id)} disabled={!selectedTask.dataset_filename || runningTaskId === selectedTask.id || ["waiting_human", "paused_for_review"].includes(selectedTask.status)}>{runningTaskId === selectedTask.id ? "MLZero 运行中..." : `运行 MLZero（${DEFAULT_RUN_TIME_LIMIT} 分钟）`}</button>
+            <button type="button" className="primary-button" onClick={() => void handleRunTask(selectedTask.id)} disabled={!selectedTask.dataset_filename || runningTaskId === selectedTask.id || ["waiting_human", "paused_for_review"].includes(selectedTask.status)}>{getTaskRunButtonLabel(selectedTask, runningTaskId === selectedTask.id)}</button>
             <button type="button" className="chip-button" onClick={() => setActivePage("conversations")}>查看 AI 对话</button>
             <button type="button" className="chip-button" onClick={() => setActivePage("demo")}>Web Demo</button>
             {teamCanDevelop ? <button type="button" className="chip-button" onClick={() => setActivePage("code")}>查看 AI 代码</button> : null}
@@ -1624,7 +1822,32 @@ export default function App() {
               </>
             ) : null}
 
-            {activePage === "connectors" ? <ConnectorManagementPanel activeTeamName={activeTeam?.name ?? ""} connectorsState={connectorsState} connectors={connectors} form={connectorForm} savingConnector={savingConnector} testingConnectorId={testingConnectorId} activatingConnectorId={activatingConnectorId} message={connectorMessage} error={connectorError} onFormChange={(field, value) => setConnectorForm((current) => ({ ...current, [field]: value }))} onSubmit={handleConnectorSubmit} onRefresh={() => void loadConnectors()} onTest={handleTestConnector} onActivate={handleActivateConnector} /> : null}
+            {activePage === "connectors" ? (
+              <ConnectorManagementPanel
+                activeTeamName={activeTeam?.name ?? ""}
+                connectorsState={connectorsState}
+                connectors={connectors}
+                form={connectorForm}
+                savingConnector={savingConnector}
+                testingConnectorId={testingConnectorId}
+                activatingConnectorId={activatingConnectorId}
+                updatingConnectorId={updatingConnectorId}
+                deactivatingConnectorId={deactivatingConnectorId}
+                deletingConnectorId={deletingConnectorId}
+                healthCheckingConnectors={healthCheckingConnectors}
+                message={connectorMessage}
+                error={connectorError}
+                onFormChange={(field, value) => setConnectorForm((current) => ({ ...current, [field]: value }))}
+                onSubmit={handleConnectorSubmit}
+                onRefresh={() => void loadConnectors()}
+                onTest={handleTestConnector}
+                onActivate={handleActivateConnector}
+                onUpdate={handleUpdateConnector}
+                onDeactivate={handleDeactivateConnector}
+                onDelete={handleDeleteConnector}
+                onHealthCheck={handleHealthCheckConnectors}
+              />
+            ) : null}
             {activePage === "routing" ? (
               <>
                 <section className="page-header">
@@ -1694,7 +1917,43 @@ export default function App() {
                 />
               </>
             ) : null}
-            {activePage === "team" ? <><section className="page-header"><div><p className="eyebrow">Team</p><h1>团队与权限</h1><p className="page-copy">这里除了切换团队和查看成员，还可以直接生成邀请码、调整角色并冻结或恢复成员。</p></div></section>{teamMessage ? <div className="notice-banner">{teamMessage}</div> : null}{teamError ? <div className="error-banner">{teamError}</div> : null}<TeamMembersPanel activeTeam={activeTeam} memberships={memberships} teamMembers={teamMembers} loading={teamBusy} activeUserId={currentUser?.id ?? ""} canManage={teamCanManage} inviteBusy={inviteBusy} roleUpdatingUserId={roleUpdatingUserId} statusUpdatingUserId={statusUpdatingUserId} inviteInfo={inviteInfo} onRefresh={() => void loadTeamMembers()} onSelectTeam={setActiveTeamId} onPrepareInvite={handlePrepareInvite} onUpdateRole={handleUpdateTeamMemberRole} onUpdateStatus={handleUpdateTeamMemberStatus} /></> : null}
+            {activePage === "team" ? (
+              <>
+                <section className="page-header">
+                  <div>
+                    <p className="eyebrow">Team</p>
+                    <h1>团队与权限</h1>
+                    <p className="page-copy">这里除了切换团队和查看成员，还可以由团队所有者维护团队设置、转移所有权，并由管理员调整成员角色和状态。</p>
+                  </div>
+                </section>
+                {teamMessage ? <div className="notice-banner">{teamMessage}</div> : null}
+                {teamError ? <div className="error-banner">{teamError}</div> : null}
+                <TeamMembersPanel
+                  activeTeam={activeTeam}
+                  memberships={memberships}
+                  teamMembers={teamMembers}
+                  teamSettings={teamSettings}
+                  teamSettingsLoading={teamSettingsState === "loading"}
+                  teamSettingsSaving={teamSettingsSaving}
+                  ownershipTransferring={ownershipTransferring}
+                  loading={teamBusy}
+                  activeUserId={currentUser?.id ?? ""}
+                  canManage={teamCanManage}
+                  canOwn={teamCanOwn}
+                  inviteBusy={inviteBusy}
+                  roleUpdatingUserId={roleUpdatingUserId}
+                  statusUpdatingUserId={statusUpdatingUserId}
+                  inviteInfo={inviteInfo}
+                  onRefresh={() => void Promise.all([loadTeamMembers(), loadTeamSettings()])}
+                  onSelectTeam={setActiveTeamId}
+                  onPrepareInvite={handlePrepareInvite}
+                  onUpdateRole={handleUpdateTeamMemberRole}
+                  onUpdateStatus={handleUpdateTeamMemberStatus}
+                  onUpdateSettings={handleUpdateTeamSettings}
+                  onTransferOwnership={handleTransferTeamOwnership}
+                />
+              </>
+            ) : null}
             {activePage === "audit" ? (
               <>
                 <section className="page-header">

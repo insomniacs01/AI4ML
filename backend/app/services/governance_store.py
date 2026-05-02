@@ -20,6 +20,8 @@ from backend.app.models.governance import (
     TeamMemberRecord,
     TeamProfileRecord,
     TeamQuotaRecord,
+    TeamSettingsRecord,
+    TeamSettingsUpdateRequest,
 )
 
 
@@ -62,7 +64,7 @@ class GovernanceStore:
         payload = self._request_json(
             path=(
                 "teams"
-                f"?select=id,name,invite_code,created_at,updated_at&"
+                f"?select=id,name,invite_code,created_by,description,status,created_at,updated_at&"
                 f"id=eq.{quote(team_id, safe='')}&limit=1"
             ),
             access_token=access_token,
@@ -70,6 +72,85 @@ class GovernanceStore:
         if not isinstance(payload, list):
             raise ConnectionError("Unexpected team response from Supabase.")
         return payload[0] if payload else None
+
+    def get_team_settings(self, team_id: str, *, access_token: str) -> TeamSettingsRecord | None:
+        team = self.get_team(team_id, access_token=access_token)
+        if team is None:
+            return None
+        members = self.list_members(team_id, access_token=access_token)
+        return self._team_settings_from_payload(team, members)
+
+    def update_team_settings(
+        self,
+        team_id: str,
+        payload: TeamSettingsUpdateRequest,
+        *,
+        access_token: str,
+    ) -> TeamSettingsRecord:
+        body: dict[str, Any] = {}
+        if payload.name is not None:
+            body["name"] = payload.name.strip()
+        if payload.description is not None:
+            body["description"] = payload.description.strip() or None
+        if payload.status is not None:
+            body["status"] = payload.status
+        if not body:
+            current = self.get_team_settings(team_id, access_token=access_token)
+            if current is None:
+                raise ValueError("team not found")
+            return current
+
+        updated_payload = self._request_json(
+            path=f"teams?id=eq.{quote(team_id, safe='')}",
+            access_token=access_token,
+            method="PATCH",
+            body=body,
+        )
+        updated = self._unwrap_single_record(updated_payload, "team settings update")
+        members = self.list_members(team_id, access_token=access_token)
+        return self._team_settings_from_payload(updated, members)
+
+    def transfer_ownership(
+        self,
+        team_id: str,
+        *,
+        current_owner_id: str,
+        new_owner_user_id: str,
+        access_token: str,
+    ) -> tuple[TeamSettingsRecord, TeamMemberRecord, TeamMemberRecord]:
+        members = self.list_members(team_id, access_token=access_token)
+        previous_owner = next((item for item in members if item.user_id == current_owner_id), None)
+        if previous_owner is None or previous_owner.role != "team_owner":
+            raise PermissionError("Only the current team owner can transfer ownership.")
+
+        next_owner = next((item for item in members if item.user_id == new_owner_user_id), None)
+        if next_owner is None:
+            raise ValueError("new owner is not a member of this team")
+        if next_owner.member_status != "active":
+            raise ValueError("new owner must be an active team member")
+
+        if next_owner.user_id == previous_owner.user_id:
+            settings = self.get_team_settings(team_id, access_token=access_token)
+            if settings is None:
+                raise ValueError("team not found")
+            return settings, previous_owner, next_owner
+
+        promoted = self.update_member_role(
+            team_id,
+            next_owner.user_id,
+            "team_owner",
+            access_token=access_token,
+        )
+        demoted = self.update_member_role(
+            team_id,
+            previous_owner.user_id,
+            "admin",
+            access_token=access_token,
+        )
+        settings = self.get_team_settings(team_id, access_token=access_token)
+        if settings is None:
+            raise ValueError("team not found")
+        return settings, demoted, promoted
 
     def update_member_role(self, team_id: str, user_id: str, role: str, *, access_token: str) -> TeamMemberRecord:
         payload = self._request_json(
@@ -572,6 +653,28 @@ class GovernanceStore:
                 "resource_id": resource_id,
                 "detail": detail,
             },
+        )
+
+    @staticmethod
+    def _team_settings_from_payload(
+        payload: dict[str, Any],
+        members: list[TeamMemberRecord],
+    ) -> TeamSettingsRecord:
+        owner = next((item for item in members if item.role == "team_owner" and item.member_status == "active"), None)
+        owner_user_id = owner.user_id if owner is not None else str(payload.get("created_by")) if payload.get("created_by") else None
+        owner_profile = owner.profile if owner is not None else None
+        return TeamSettingsRecord(
+            id=str(payload.get("id")),
+            name=str(payload.get("name") or ""),
+            invite_code=str(payload.get("invite_code") or ""),
+            created_by=str(payload.get("created_by") or owner_user_id or ""),
+            owner_user_id=owner_user_id,
+            owner_display_name=owner_profile.display_name if owner_profile else None,
+            owner_email=owner_profile.email if owner_profile else None,
+            description=str(payload.get("description")) if payload.get("description") else None,
+            status=str(payload.get("status") or "active"),
+            created_at=payload.get("created_at"),
+            updated_at=payload.get("updated_at"),
         )
 
     def _asset_from_payload(

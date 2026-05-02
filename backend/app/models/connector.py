@@ -27,6 +27,15 @@ class ConnectorCreateRequest(BaseModel):
     wire_api: Literal["auto", "chat_completions", "responses"] = "auto"
 
 
+class ConnectorUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    endpoint_url: str | None = Field(default=None, max_length=500)
+    base_url: str | None = Field(default=None, max_length=500)
+    model_name: str | None = Field(default=None, min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, min_length=1, max_length=500)
+    wire_api: Literal["auto", "chat_completions", "responses"] | None = None
+
+
 class ConnectorRecord(BaseModel):
     id: str
     team_id: str
@@ -62,6 +71,22 @@ class ConnectorActivateResponse(BaseModel):
     detail: str
     scope: Literal["team_runtime"] = "team_runtime"
     connector: ConnectorRecord
+
+
+class ConnectorDeactivateResponse(BaseModel):
+    detail: str
+    connector: ConnectorRecord
+
+
+class ConnectorDeleteResponse(BaseModel):
+    deleted: bool
+    connector_id: str
+    detail: str
+
+
+class ConnectorHealthCheckResponse(BaseModel):
+    detail: str
+    items: list[ConnectorTestResponse]
 
 
 class StoredConnectorRecord(BaseModel):

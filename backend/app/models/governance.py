@@ -10,6 +10,7 @@ TeamMemberRole = Literal["admin", "member", "team_owner", "business_user", "deve
 TeamMemberStatus = Literal["invited", "active", "frozen", "removed"]
 QuotaStatus = Literal["active", "frozen", "exhausted"]
 AssetType = Literal["dataset", "model", "workflow", "report"]
+TeamStatus = Literal["active", "disabled", "archived"]
 
 
 class TeamProfileRecord(BaseModel):
@@ -31,6 +32,41 @@ class TeamMemberRecord(BaseModel):
 class TeamMembersResponse(BaseModel):
     team_id: str
     items: list[TeamMemberRecord]
+
+
+class TeamSettingsRecord(BaseModel):
+    id: str
+    name: str
+    invite_code: str
+    created_by: str
+    owner_user_id: str | None = None
+    owner_display_name: str | None = None
+    owner_email: str | None = None
+    description: str | None = None
+    status: TeamStatus | str = "active"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class TeamSettingsResponse(BaseModel):
+    team: TeamSettingsRecord
+
+
+class TeamSettingsUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
+    status: TeamStatus | None = None
+
+
+class TeamOwnershipTransferRequest(BaseModel):
+    new_owner_user_id: str = Field(min_length=1, max_length=64)
+
+
+class TeamOwnershipTransferResponse(BaseModel):
+    detail: str
+    team: TeamSettingsRecord
+    previous_owner: TeamMemberRecord
+    new_owner: TeamMemberRecord
 
 
 class TeamInviteRequest(BaseModel):

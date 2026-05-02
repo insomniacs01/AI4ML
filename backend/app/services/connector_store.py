@@ -8,7 +8,13 @@ from urllib.request import Request, urlopen
 
 from backend.app.core.config import Settings
 from backend.app.core.secret_box import decrypt_secret, encrypt_secret, is_encrypted_secret
-from backend.app.models.connector import ConnectorCreateRequest, ConnectorWireApi, StoredConnectorRecord
+from backend.app.models.connector import (
+    ConnectorCreateRequest,
+    ConnectorTestStatus,
+    ConnectorUpdateRequest,
+    ConnectorWireApi,
+    StoredConnectorRecord,
+)
 
 
 class ConnectorStore:
@@ -115,6 +121,32 @@ class ConnectorStore:
         )
         return self._connector_from_payload(self._unwrap_single_record(updated_payload, "connector update"))
 
+    def update_connector(
+        self,
+        connector: StoredConnectorRecord,
+        payload: ConnectorUpdateRequest,
+        *,
+        normalized_base_url: str | None,
+        normalized_wire_api: ConnectorWireApi | None,
+        access_token: str,
+    ) -> StoredConnectorRecord:
+        if payload.display_name is not None:
+            connector.display_name = payload.display_name.strip()
+        if payload.endpoint_url is not None:
+            connector.endpoint_url = payload.endpoint_url.strip() or None
+        if normalized_base_url is not None:
+            connector.base_url = normalized_base_url
+        if payload.model_name is not None:
+            connector.model_name = payload.model_name.strip()
+        if normalized_wire_api is not None:
+            connector.wire_api = normalized_wire_api
+        if payload.api_key is not None:
+            connector.api_key = payload.api_key.strip()
+        connector.last_test_status = ConnectorTestStatus.untested
+        connector.last_test_detail = "连接器配置已更新，需要重新测试。"
+        connector.last_tested_at = None
+        return self.save_connector(connector, access_token=access_token)
+
     def activate_connector(self, team_id: str, connector_id: str, *, access_token: str) -> StoredConnectorRecord:
         activated_payload = self._request_json(
             path="rpc/activate_ai_connector",
@@ -126,6 +158,32 @@ class ConnectorStore:
             },
         )
         return self._connector_from_payload(self._unwrap_single_record(activated_payload, "connector activate"))
+
+    def deactivate_connector(self, team_id: str, connector_id: str, *, access_token: str) -> StoredConnectorRecord:
+        payload = self._request_json(
+            path=(
+                "ai_connectors"
+                f"?team_id=eq.{quote(team_id, safe='')}"
+                f"&id=eq.{quote(connector_id, safe='')}"
+            ),
+            access_token=access_token,
+            method="PATCH",
+            body={"is_active": False},
+        )
+        return self._connector_from_payload(self._unwrap_single_record(payload, "connector deactivate"))
+
+    def delete_connector(self, team_id: str, connector_id: str, *, access_token: str) -> bool:
+        self._request_json(
+            path=(
+                "ai_connectors"
+                f"?team_id=eq.{quote(team_id, safe='')}"
+                f"&id=eq.{quote(connector_id, safe='')}"
+            ),
+            access_token=access_token,
+            method="DELETE",
+            expect_json=False,
+        )
+        return True
 
     def _connector_from_payload(self, payload: dict[str, Any]) -> StoredConnectorRecord:
         record = StoredConnectorRecord.model_validate(payload)
@@ -149,6 +207,7 @@ class ConnectorStore:
         access_token: str,
         method: str = "GET",
         body: dict[str, Any] | None = None,
+        expect_json: bool = True,
     ) -> Any:
         self._ensure_configured()
 
@@ -191,6 +250,8 @@ class ConnectorStore:
         except (URLError, TimeoutError, OSError) as exc:
             raise ConnectionError("Could not reach Supabase to read or write connector records.") from exc
 
+        if not expect_json:
+            return None
         if not raw_body:
             return None
 

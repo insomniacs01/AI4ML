@@ -45,6 +45,20 @@ function getStatusTone(status) {
   return "warning";
 }
 
+function normalizeArtifactRefs(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === "string") return [value].filter(Boolean);
+  if (typeof value === "object") {
+    return Object.entries(value).flatMap(([key, item]) => {
+      if (Array.isArray(item)) return item.map((entry) => `${key}: ${entry}`);
+      if (item) return [`${key}: ${item}`];
+      return [];
+    });
+  }
+  return [];
+}
+
 export default function WorkflowStagePanel({
   tasks,
   tasksLoading,
@@ -151,23 +165,34 @@ export default function WorkflowStagePanel({
 
         {stages.length ? (
           <div className="detail-stack">
-            {stages.map((stage) => (
-              <article key={stage.id} className="section-card">
-                <div className="section-head">
-                  <div>
-                    <h3>{STAGE_LABELS[stage.stage] ?? stage.stage}</h3>
-                    <p>{stage.summary || "暂无阶段摘要。"}</p>
+            {stages.map((stage) => {
+              const artifactRefs = normalizeArtifactRefs(stage.artifact_refs);
+              return (
+                <article key={stage.id} className="section-card">
+                  <div className="section-head">
+                    <div>
+                      <h3>{STAGE_LABELS[stage.stage] ?? stage.stage}</h3>
+                      <p>{stage.summary || "暂无阶段摘要。"}</p>
+                    </div>
+                    <span className={`runtime-pill ${getStatusTone(stage.status)}`}>{STATUS_LABELS[stage.status] ?? stage.status}</span>
                   </div>
-                  <span className={`runtime-pill ${getStatusTone(stage.status)}`}>{STATUS_LABELS[stage.status] ?? stage.status}</span>
-                </div>
-                <div className="summary-grid">
-                  <article className="summary-item"><span>连接器</span><strong>{stage.selected_connector_id || "未指定"}</strong></article>
-                  <article className="summary-item"><span>模型</span><strong>{stage.model_name || "未指定"}</strong></article>
-                  <article className="summary-item"><span>来源</span><strong>{stage.selection_source || "未记录"}</strong></article>
-                  <article className="summary-item"><span>更新时间</span><strong>{formatDateTime(stage.updated_at)}</strong></article>
-                </div>
-              </article>
-            ))}
+                  <div className="summary-grid">
+                    <article className="summary-item"><span>连接器</span><strong>{stage.selected_connector_id || "未指定"}</strong></article>
+                    <article className="summary-item"><span>模型</span><strong>{stage.model_name || "未指定"}</strong></article>
+                    <article className="summary-item"><span>来源</span><strong>{stage.selection_source || "未记录"}</strong></article>
+                    <article className="summary-item"><span>更新时间</span><strong>{formatDateTime(stage.updated_at)}</strong></article>
+                    <article className="summary-item"><span>关键产物</span><strong>{artifactRefs.length ? `${artifactRefs.length} 个` : "未记录"}</strong></article>
+                  </div>
+                  {artifactRefs.length ? (
+                    <div className="chip-list workflow-artifact-list">
+                      {artifactRefs.map((path) => (
+                        <span key={path} className="chip mono-text">{path}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
         ) : null}
       </section>

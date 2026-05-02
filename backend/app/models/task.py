@@ -247,6 +247,8 @@ class TaskWorkflowConfigUpdateRequest(BaseModel):
 
 class TaskRunRequest(BaseModel):
     time_limit: int = Field(default=20, ge=5, le=300)
+    rerun_from_stage: Optional[WorkflowStage] = None
+    force_full_run: bool = False
 
 
 class TaskInteractiveChatRequest(BaseModel):
