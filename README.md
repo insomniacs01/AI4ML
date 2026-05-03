@@ -112,6 +112,7 @@ AI4ML/
 - `GET/POST /api/team/assets`
 - `POST /api/team/assets/{asset_id}/publish`
 - `POST /api/team/assets/{asset_id}/fork`
+- `GET /api/team/token-ledgers`
 - `GET /api/team/audit-logs`
 
 ## 环境准备
@@ -273,6 +274,8 @@ npm run build
 
 - 更高层的工作流广场、模型广场运营仍未完全产品化。
 - 资产中心已有发布和 Fork，但仍是登记台账，不是完整资产平台。
+- CSV 上传会生成真实数据集画像；工作流阶段记录会保存开始/结束时间、耗时、日志摘要和关键产物入口。
+- Token 用量已同时支持任务级汇总和管理员可见的逐次 TokenLedger 流水。
 - 代码工作区已有下载、版本记录和 Python 工件重跑，但仍是运行工件编辑器，不是完整 IDE。
 - MLZero 长时多轮搜索虽然可配置，但实际稳定性仍依赖当前机器环境和所配置的云模型提供方。
 

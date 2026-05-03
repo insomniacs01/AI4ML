@@ -45,6 +45,13 @@ function getStatusTone(status) {
   return "warning";
 }
 
+function formatDuration(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "暂无";
+  if (value < 60) return `${Math.round(value)} 秒`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟`;
+  return `${Math.round(value / 360) / 10} 小时`;
+}
+
 function normalizeArtifactRefs(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
@@ -181,8 +188,17 @@ export default function WorkflowStagePanel({
                     <article className="summary-item"><span>模型</span><strong>{stage.model_name || "未指定"}</strong></article>
                     <article className="summary-item"><span>来源</span><strong>{stage.selection_source || "未记录"}</strong></article>
                     <article className="summary-item"><span>更新时间</span><strong>{formatDateTime(stage.updated_at)}</strong></article>
+                    <article className="summary-item"><span>开始时间</span><strong>{formatDateTime(stage.started_at)}</strong></article>
+                    <article className="summary-item"><span>结束时间</span><strong>{formatDateTime(stage.finished_at)}</strong></article>
+                    <article className="summary-item"><span>阶段耗时</span><strong>{formatDuration(stage.duration_seconds)}</strong></article>
                     <article className="summary-item"><span>关键产物</span><strong>{artifactRefs.length ? `${artifactRefs.length} 个` : "未记录"}</strong></article>
                   </div>
+                  {stage.log_excerpt ? (
+                    <details className="callout workflow-log-excerpt">
+                      <summary>查看日志摘要</summary>
+                      <pre className="code-block">{stage.log_excerpt}</pre>
+                    </details>
+                  ) : null}
                   {artifactRefs.length ? (
                     <div className="chip-list workflow-artifact-list">
                       {artifactRefs.map((path) => (
@@ -221,6 +237,7 @@ export default function WorkflowStagePanel({
                   <th>标题</th>
                   <th>状态</th>
                   <th>指派</th>
+                  <th>截止时间</th>
                   <th>更新时间</th>
                 </tr>
               </thead>
@@ -231,6 +248,7 @@ export default function WorkflowStagePanel({
                     <td>{request.payload?.title || "未命名请求"}</td>
                     <td>{request.status}</td>
                     <td>{request.assignee_value || request.assigned_to || "未指定"}</td>
+                    <td>{formatDateTime(request.timeout_at)}</td>
                     <td>{formatDateTime(request.updated_at)}</td>
                   </tr>
                 ))}

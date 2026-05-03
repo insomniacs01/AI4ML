@@ -61,6 +61,13 @@ class DatasetProfile(BaseModel):
     generated_at: datetime
 
 
+class DatasetUploadSummary(BaseModel):
+    filename: str
+    size_bytes: int
+    content_type: Optional[str] = None
+    profile: DatasetProfile
+
+
 class FeatureImportanceEntry(BaseModel):
     feature: str
     importance: float
@@ -266,6 +273,10 @@ class WorkflowStageRecord(BaseModel):
     selection_source: Optional[str] = None
     summary: Optional[str] = None
     artifact_refs: Optional[Any] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    log_excerpt: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -357,6 +368,7 @@ class TaskRecord(BaseModel):
     status: TaskStatus = TaskStatus.draft
     dataset_filename: Optional[str] = None
     dataset_path: Optional[str] = None
+    dataset_profile: Optional[DatasetProfile] = None
     notes: Optional[str] = None
     analysis_token_usage: Optional[TokenUsageReport] = None
     last_run: Optional[RunSummary] = None

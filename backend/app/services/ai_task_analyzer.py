@@ -113,6 +113,7 @@ def apply_analysis_to_task(task: TaskRecord, analysis: TaskAnalysisResult) -> Ta
             filename=task.dataset_filename,
             target_column=analysis.label_column,
         )
+        task.dataset_profile = dataset_profile
         structured_requirements["dataset_profile"] = dataset_profile_to_plain(dataset_profile)
     structured_requirements.update({
         "analysis_source": "ai_connector",

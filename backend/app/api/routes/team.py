@@ -36,6 +36,7 @@ from backend.app.models.governance import (
     TeamQuotasResponse,
     TeamSettingsResponse,
     TeamSettingsUpdateRequest,
+    TokenLedgersResponse,
 )
 from backend.app.services.governance_store import GovernanceStore
 
@@ -367,6 +368,9 @@ def save_team_routing(
 @router.get("/assets", response_model=PlatformAssetsResponse)
 def list_team_assets(
     asset_type: str | None = Query(default=None),
+    review_status: str | None = Query(default=None),
+    visibility: str | None = Query(default=None),
+    category: str | None = Query(default=None),
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> PlatformAssetsResponse:
     try:
@@ -374,6 +378,9 @@ def list_team_assets(
             team_access.team_id,
             access_token=team_access.access_token,
             asset_type=asset_type,
+            review_status=review_status,
+            visibility=visibility,
+            category=category,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
@@ -499,6 +506,32 @@ def fork_team_asset(
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产 Fork 已创建。", asset=asset)
+
+
+@router.get("/token-ledgers", response_model=TokenLedgersResponse)
+def list_team_token_ledgers(
+    limit: int = Query(default=500, ge=1, le=1000),
+    user_id: str | None = Query(default=None),
+    task_id: str | None = Query(default=None),
+    team_access: TeamAccessContext = Depends(require_team_admin_access),
+) -> TokenLedgersResponse:
+    try:
+        items = get_governance_store().list_token_ledgers(
+            team_access.team_id,
+            access_token=team_access.access_token,
+            limit=limit,
+            user_id=user_id,
+            task_id=task_id,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return TokenLedgersResponse(
+        team_id=team_access.team_id,
+        items=items,
+        total_tokens=sum(item.total_tokens for item in items),
+        input_tokens=sum(item.input_tokens for item in items),
+        output_tokens=sum(item.output_tokens for item in items),
+    )
 
 
 @router.get("/audit-logs", response_model=AuditLogsResponse)

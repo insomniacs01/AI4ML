@@ -197,6 +197,7 @@ create table if not exists public.ai_tasks (
   status text not null default 'draft' check (status in ('draft', 'uploaded', 'planning', 'running', 'paused_for_review', 'waiting_human', 'completed', 'failed', 'published')),
   dataset_filename text,
   dataset_path text,
+  dataset_profile jsonb,
   notes text,
   analysis_token_usage jsonb,
   last_run jsonb,
@@ -212,6 +213,8 @@ alter table public.ai_tasks
   add column if not exists stage_routing jsonb not null default '[]'::jsonb;
 alter table public.ai_tasks
   add column if not exists interaction_policies jsonb not null default '[]'::jsonb;
+alter table public.ai_tasks
+  add column if not exists dataset_profile jsonb;
 
 drop trigger if exists ai_tasks_set_updated_at on public.ai_tasks;
 create trigger ai_tasks_set_updated_at
@@ -362,9 +365,22 @@ create table if not exists public.workflow_stage_records (
   selection_source text,
   summary text,
   artifact_refs jsonb,
+  started_at timestamptz,
+  finished_at timestamptz,
+  duration_seconds double precision,
+  log_excerpt text,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.workflow_stage_records
+  add column if not exists started_at timestamptz;
+alter table public.workflow_stage_records
+  add column if not exists finished_at timestamptz;
+alter table public.workflow_stage_records
+  add column if not exists duration_seconds double precision;
+alter table public.workflow_stage_records
+  add column if not exists log_excerpt text;
 
 drop trigger if exists workflow_stage_records_set_updated_at on public.workflow_stage_records;
 create trigger workflow_stage_records_set_updated_at
@@ -413,11 +429,46 @@ create table if not exists public.platform_assets (
   title text not null,
   description text,
   storage_path text,
+  category text,
+  tags text[] not null default '{}'::text[],
+  visibility text not null default 'private' check (visibility in ('private', 'team', 'public', 'unlisted')),
+  version text,
+  source_task_id text references public.ai_tasks(id) on delete set null,
+  source_asset_id uuid references public.platform_assets(id) on delete set null,
+  model_card jsonb,
   metadata jsonb,
   review_status text not null default 'private',
+  published_at timestamptz,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.platform_assets
+  add column if not exists category text;
+alter table public.platform_assets
+  add column if not exists tags text[] not null default '{}'::text[];
+alter table public.platform_assets
+  add column if not exists visibility text not null default 'private';
+alter table public.platform_assets
+  add column if not exists version text;
+alter table public.platform_assets
+  add column if not exists source_task_id text references public.ai_tasks(id) on delete set null;
+alter table public.platform_assets
+  add column if not exists source_asset_id uuid references public.platform_assets(id) on delete set null;
+alter table public.platform_assets
+  add column if not exists model_card jsonb;
+alter table public.platform_assets
+  add column if not exists published_at timestamptz;
+
+do $$
+begin
+  alter table public.platform_assets
+    drop constraint if exists platform_assets_visibility_check;
+  alter table public.platform_assets
+    add constraint platform_assets_visibility_check
+    check (visibility in ('private', 'team', 'public', 'unlisted'));
+end;
+$$;
 
 drop trigger if exists platform_assets_set_updated_at on public.platform_assets;
 create trigger platform_assets_set_updated_at
@@ -581,6 +632,45 @@ begin
   end if;
 
   return activated;
+end;
+$$;
+
+create or replace function public.adjust_member_token_usage(
+  target_team_id uuid,
+  target_user_id uuid,
+  token_delta integer
+)
+returns public.quota_accounts
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  adjusted public.quota_accounts;
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if not public.is_member_of_team(target_team_id) then
+    raise exception 'You do not have access to the requested team.';
+  end if;
+
+  insert into public.quota_accounts (team_id, user_id, token_quota, token_used, status)
+  values (target_team_id, target_user_id, 0, greatest(coalesce(token_delta, 0), 0), 'active')
+  on conflict (team_id, user_id) do update
+    set token_used = greatest(public.quota_accounts.token_used + coalesce(token_delta, 0), 0),
+        status = case
+          when public.quota_accounts.status = 'frozen' then 'frozen'
+          when public.quota_accounts.token_quota > 0
+            and greatest(public.quota_accounts.token_used + coalesce(token_delta, 0), 0) >= public.quota_accounts.token_quota
+            then 'exhausted'
+          else 'active'
+        end,
+        updated_at = timezone('utc', now())
+  returning * into adjusted;
+
+  return adjusted;
 end;
 $$;
 
@@ -826,5 +916,6 @@ with check (team_id is null or public.is_member_of_team(team_id));
 grant execute on function public.create_team_with_owner(text) to authenticated;
 grant execute on function public.join_team_with_code(text) to authenticated;
 grant execute on function public.activate_ai_connector(uuid, uuid) to authenticated;
+grant execute on function public.adjust_member_token_usage(uuid, uuid, integer) to authenticated;
 grant execute on function public.is_member_of_team(uuid) to authenticated;
 grant execute on function public.shares_team_with(uuid) to authenticated;

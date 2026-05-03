@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -108,6 +108,22 @@ class TaskStore:
         dataset_path.write_bytes(content)
         return dataset_path
 
+    def save_dataset_chunks(self, team_id: str, task_id: str, filename: str, chunks: Iterable[bytes]) -> Path:
+        dataset_path = self.dataset_upload_path(team_id, task_id, filename)
+        with dataset_path.open("wb") as handle:
+            for chunk in chunks:
+                if chunk:
+                    handle.write(chunk)
+        return dataset_path
+
+    def dataset_upload_path(self, team_id: str, task_id: str, filename: str) -> Path:
+        task_dir = self._task_dir(team_id, task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        suffix = Path(filename).suffix.lower()
+        if suffix != ".csv":
+            raise ValueError(f"dataset filename must end with .csv: {filename}")
+        return task_dir / f"dataset{suffix}"
+
     def delete_task(self, team_id: str, task_id: str, *, access_token: str) -> bool:
         existing = self.get_task(team_id, task_id, access_token=access_token)
         if existing is None:
@@ -161,18 +177,26 @@ class TaskStore:
         selection_source: str | None = None,
         summary: str | None = None,
         artifact_refs: Any | None = None,
+        log_excerpt: str | None = None,
     ) -> WorkflowStageRecord:
         normalized_stage = normalize_workflow_stage(stage)
         existing = self._request_json(
             path=(
                 "workflow_stage_records"
-                f"?select=id&team_id=eq.{quote(team_id, safe='')}"
+                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
                 f"&task_id=eq.{quote(task_id, safe='')}"
                 f"&stage=eq.{quote(self._enum_value(normalized_stage), safe='')}"
                 "&order=updated_at.desc"
                 "&limit=1"
             ),
             access_token=access_token,
+        )
+        existing_record = None
+        if isinstance(existing, list) and existing:
+            existing_record = self._stage_record_from_payload(existing[0])
+        started_at, finished_at, duration_seconds = self._resolve_stage_timing(
+            existing_record,
+            status=status,
         )
         body = {
             "team_id": team_id,
@@ -184,10 +208,14 @@ class TaskStore:
             "selection_source": selection_source,
             "summary": summary,
             "artifact_refs": artifact_refs,
+            "started_at": started_at.isoformat() if started_at else None,
+            "finished_at": finished_at.isoformat() if finished_at else None,
+            "duration_seconds": duration_seconds,
+            "log_excerpt": log_excerpt if log_excerpt is not None else (existing_record.log_excerpt if existing_record else None),
         }
-        if isinstance(existing, list) and existing:
+        if existing_record is not None:
             updated_payload = self._request_json(
-                path=f"workflow_stage_records?id=eq.{quote(str(existing[0]['id']), safe='')}",
+                path=f"workflow_stage_records?id=eq.{quote(existing_record.id, safe='')}",
                 access_token=access_token,
                 method="PATCH",
                 body=body,
@@ -463,38 +491,16 @@ class TaskStore:
             )
 
     def _adjust_member_token_usage(self, *, team_id: str, user_id: str, token_delta: int, access_token: str) -> None:
-        existing = self._request_json(
-            path=(
-                "quota_accounts"
-                f"?select=team_id,user_id,token_quota,token_used,status,warning_threshold"
-                f"&team_id=eq.{quote(team_id, safe='')}"
-                f"&user_id=eq.{quote(user_id, safe='')}"
-                "&limit=1"
-            ),
-            access_token=access_token,
-        )
-        row = existing[0] if isinstance(existing, list) and existing else None
-        if row is None:
-            return
-
-        token_quota = _coerce_non_negative_int(row.get("token_quota"))
-        token_used = max(_coerce_non_negative_int(row.get("token_used")) + token_delta, 0)
-        status_value = str(row.get("status") or "active")
-        if status_value != "frozen":
-            status_value = "exhausted" if token_quota > 0 and token_used >= token_quota else "active"
-
         self._request_json(
-            path=(
-                "quota_accounts"
-                f"?team_id=eq.{quote(team_id, safe='')}"
-                f"&user_id=eq.{quote(user_id, safe='')}"
-            ),
+            path="rpc/adjust_member_token_usage",
             access_token=access_token,
-            method="PATCH",
+            method="POST",
             body={
-                "token_used": token_used,
-                "status": status_value,
+                "target_team_id": team_id,
+                "target_user_id": user_id,
+                "token_delta": token_delta,
             },
+            expect_json=False,
         )
 
     def _task_dir(self, team_id: str, task_id: str) -> Path:
@@ -602,6 +608,34 @@ class TaskStore:
             record.stage = normalize_workflow_stage(str(record.stage))
         return record
 
+    @staticmethod
+    def _resolve_stage_timing(
+        existing: WorkflowStageRecord | None,
+        *,
+        status: WorkflowStageStatus,
+    ) -> tuple[datetime | None, datetime | None, float | None]:
+        now = datetime.now(timezone.utc)
+        started_at = existing.started_at if existing else None
+        finished_at = existing.finished_at if existing else None
+
+        if status == WorkflowStageStatus.running:
+            if existing is None or existing.status != WorkflowStageStatus.running:
+                started_at = now
+            finished_at = None
+        elif status in {WorkflowStageStatus.completed, WorkflowStageStatus.failed}:
+            if started_at is None:
+                started_at = existing.created_at if existing else now
+            if finished_at is None:
+                finished_at = now
+        elif status in {WorkflowStageStatus.pending, WorkflowStageStatus.waiting_human}:
+            if started_at is None:
+                finished_at = None
+
+        duration_seconds = None
+        if started_at is not None and finished_at is not None:
+            duration_seconds = max((finished_at - started_at).total_seconds(), 0.0)
+        return started_at, finished_at, duration_seconds
+
     @classmethod
     def _human_request_from_payload(cls, payload: dict[str, Any]) -> TaskHumanRequestRecord:
         record = TaskHumanRequestRecord.model_validate(payload)
@@ -621,6 +655,7 @@ class TaskStore:
             "status": task.status.value if hasattr(task.status, "value") else str(task.status),
             "dataset_filename": task.dataset_filename,
             "dataset_path": task.dataset_path,
+            "dataset_profile": task.dataset_profile.model_dump(mode="json") if task.dataset_profile else None,
             "notes": task.notes,
             "analysis_token_usage": task.analysis_token_usage.model_dump() if task.analysis_token_usage else None,
             "last_run": task.last_run.model_dump(mode="json") if task.last_run else None,

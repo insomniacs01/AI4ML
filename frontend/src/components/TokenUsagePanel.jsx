@@ -127,12 +127,17 @@ export function TokenUsageCard({
 
 export default function TokenUsagePanel({
   summary,
+  ledgers,
   loading,
+  ledgersLoading,
   error,
+  ledgerError,
+  canViewLedgers,
   onRefresh,
   onSelectTask,
 }) {
   const items = Array.isArray(summary?.items) ? summary.items : [];
+  const ledgerItems = Array.isArray(ledgers?.items) ? ledgers.items : [];
 
   return (
     <div className="detail-stack">
@@ -251,6 +256,73 @@ export default function TokenUsagePanel({
         ) : (
           <div className="empty-state">当前团队还没有任何任务级 Token 记录。</div>
         )}
+      </section>
+
+      <section className="section-card">
+        <div className="section-head">
+          <div>
+            <h3>Token 调用流水</h3>
+            <p>管理员可追溯到成员、任务、阶段、连接器和核算方式；这张表来自 TokenLedger，不是按任务摘要反推。</p>
+          </div>
+          <span className="runtime-pill info">{canViewLedgers ? `${ledgerItems.length} 条` : "管理员可见"}</span>
+        </div>
+
+        {ledgerError ? <div className="error-banner">{ledgerError}</div> : null}
+        {!canViewLedgers ? <div className="empty-state">当前账号不是团队管理员，不能查看团队级调用流水。</div> : null}
+        {canViewLedgers && ledgersLoading && !ledgerItems.length ? <div className="empty-state">正在读取 Token 调用流水...</div> : null}
+
+        {canViewLedgers && ledgerItems.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>成员</th>
+                  <th>任务 / 阶段</th>
+                  <th>连接器 / 模型</th>
+                  <th>Token</th>
+                  <th>核算方式</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledgerItems.map((ledger) => (
+                  <tr key={ledger.id}>
+                    <td>{formatDateTime(ledger.created_at)}</td>
+                    <td>
+                      <div className="table-cell-stack">
+                        <strong>{ledger.user_display_name || ledger.user_email || ledger.user_id || "未记录"}</strong>
+                        <span>{ledger.phase}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="table-cell-stack">
+                        <strong>{ledger.task_name || ledger.task_id || "未关联任务"}</strong>
+                        <span>{ledger.stage_key || "未记录阶段"}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="table-cell-stack">
+                        <strong>{ledger.connector_display_name || ledger.connector_id || "未记录连接器"}</strong>
+                        <span>{ledger.model_name || "未记录模型"}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="table-cell-stack">
+                        <strong>{formatTokenValue(ledger.total_tokens)}</strong>
+                        <span>输入 {formatTokenValue(ledger.input_tokens)} / 输出 {formatTokenValue(ledger.output_tokens)}</span>
+                      </div>
+                    </td>
+                    <td>{ledger.calculation_method || "未记录"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        {canViewLedgers && !ledgerItems.length && !ledgersLoading && !ledgerError ? (
+          <div className="empty-state">当前团队还没有逐次 Token 调用流水。</div>
+        ) : null}
       </section>
     </div>
   );

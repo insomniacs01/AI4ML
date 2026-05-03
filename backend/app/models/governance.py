@@ -179,8 +179,16 @@ class PlatformAssetRecord(BaseModel):
     title: str
     description: str | None = None
     storage_path: str | None = None
+    category: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    visibility: str = "private"
+    version: str | None = None
+    source_task_id: str | None = None
+    source_asset_id: str | None = None
+    model_card: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     review_status: str
+    published_at: datetime | None = None
     creator_display_name: str | None = None
     creator_email: str | None = None
     created_at: datetime
@@ -197,6 +205,12 @@ class PlatformAssetCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     storage_path: str | None = Field(default=None, max_length=4000)
+    category: str | None = Field(default=None, max_length=120)
+    tags: list[str] = Field(default_factory=list)
+    visibility: str = Field(default="private", min_length=1, max_length=40)
+    version: str | None = Field(default="1.0.0", max_length=80)
+    source_task_id: str | None = Field(default=None, max_length=120)
+    model_card: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     review_status: str = Field(default="private", min_length=1, max_length=80)
 
@@ -204,10 +218,14 @@ class PlatformAssetCreateRequest(BaseModel):
 class PlatformAssetReviewRequest(BaseModel):
     review_status: str = Field(min_length=1, max_length=80)
     note: str | None = Field(default=None, max_length=4000)
+    category: str | None = Field(default=None, max_length=120)
+    tags: list[str] | None = None
+    visibility: str | None = Field(default=None, max_length=40)
 
 
 class PlatformAssetPublishRequest(BaseModel):
     note: str | None = Field(default=None, max_length=4000)
+    visibility: str = Field(default="public", min_length=1, max_length=40)
     metadata: dict[str, Any] | None = None
 
 
@@ -215,12 +233,44 @@ class PlatformAssetForkRequest(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     review_status: str = Field(default="private", min_length=1, max_length=80)
+    version: str | None = Field(default=None, max_length=80)
     metadata: dict[str, Any] | None = None
 
 
 class PlatformAssetMutationResponse(BaseModel):
     detail: str
     asset: PlatformAssetRecord
+
+
+class TokenLedgerRecord(BaseModel):
+    id: str
+    team_id: str
+    user_id: str | None = None
+    user_display_name: str | None = None
+    user_email: str | None = None
+    task_id: str | None = None
+    task_name: str | None = None
+    connector_id: str | None = None
+    connector_display_name: str | None = None
+    phase: str
+    stage_key: str | None = None
+    source_key: str
+    model_name: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    calculation_method: str | None = None
+    raw_usage: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TokenLedgersResponse(BaseModel):
+    team_id: str
+    items: list[TokenLedgerRecord]
+    total_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class AuditLogRecord(BaseModel):

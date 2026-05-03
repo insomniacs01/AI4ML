@@ -1399,3 +1399,41 @@
   - `requirement_analysis` / `data_analysis` 会先重新执行 AI 解析再继续下游阶段；`feature_engineering` 会重新生成并执行代码；`model_selection` / `training_validation` 会复用既有 `generated_code.py` 并改写运行路径后执行；`report_generation` 不训练，只复用真实产物并重建报告快照。
   - 增量重跑缺少必要历史产物时必须明确失败，例如缺少上一次 output directory 或缺少 `generated_code.py`，不能静默退回整次 MLZero 运行。
   - Supabase 上线环境必须应用最新 `supabase/schema.sql`，否则团队设置字段、连接器增删改、阶段产物记录、严格增量重跑相关状态可能缺表/缺字段/缺策略。
+
+## 2026-05-03 requirements first-seven completion pass
+
+- 本轮按前面梳理出的需求缺口前 7 项继续补齐，仍遵守“不伪造结果、不静默 fallback”的约束。
+- 已补齐 CSV 上传与数据集画像：
+  - 上传改为分块写入，增加文件名、Content-Type、空文件、二进制空字节和 100MB 大小限制。
+  - `TaskRecord` 新增 `dataset_profile`，保存真实列名、行列数、缺失值比例、样例值和预览行。
+  - 任务详情页新增“数据集画像”区，展示真实预览和缺失概览。
+- 已补齐工作流阶段可视化所需字段：
+  - `workflow_stage_records` 新增 `started_at / finished_at / duration_seconds / log_excerpt`。
+  - 阶段进入新一轮 running 时会重置旧完成时间，避免沿用上次运行耗时。
+  - 工作流页展示阶段开始/结束、耗时、日志摘要和人工节点截止时间。
+- 已补齐 Token 逐次流水与原子扣减：
+  - `supabase/schema.sql` 新增 `adjust_member_token_usage(...)` RPC，Token 用量写账后原子更新成员额度。
+  - 后端新增 `GET /api/team/token-ledgers`，管理员可按团队查看成员、任务、阶段、连接器、模型、输入/输出/总 Token 和核算方式。
+  - Token 用量页新增管理员可见的 Token 调用流水表。
+- 已补齐资产元数据模型：
+  - `platform_assets` 新增 `category / tags / visibility / version / source_task_id / source_asset_id / model_card / published_at`。
+  - 后端资产创建、审核、发布、Fork 已读写这些字段，审核状态与可见性分离。
+  - 资产列表支持按 `asset_type / review_status / visibility / category` 查询。
+- 已补齐数据中心 / 模型广场 / 工作流广场的真实页面能力：
+  - 资产页表单支持分类、标签、可见性、版本、来源任务和模型卡片 JSON。
+  - 资产表展示分类、标签、可见性、版本、来源任务或 Fork 来源。
+  - 管理员可在页面上修改分类、标签和可见性，不再只是数据库字段。
+- 已补齐从任务沉淀资产的入口：
+  - 资产页可从当前任务一键登记数据集、模型、报告或工作流为 `pending_review` 资产。
+  - 模型资产会写入真实 `last_run` 指标、最佳模型、输出目录、leaderboard 和数据集画像。
+  - 工作流资产会写入阶段路由、人机协同策略、结构化需求和最近运行信息，供后续 Fork 复用。
+- 已补齐 Fork 来源与版本语义：
+  - Fork 资产会写入 `source_asset_id`，保留来源任务、分类、标签、模型卡片和来源 metadata。
+  - 前端 Fork 时可填写新版本号；新副本默认私有、独立可审核/发布。
+- 本轮验证：
+  - `python -m compileall backend\app`
+  - `python -m unittest discover backend\tests`，当前 24 个测试通过。
+  - `npm run build`，构建通过；仅保留 Vite chunk size warning。
+- 当前注意事项：
+  - Supabase 上线环境必须重新执行最新 `supabase/schema.sql`，否则 `dataset_profile`、阶段耗时/日志字段、资产元数据字段、`adjust_member_token_usage` RPC 和 Token 流水页面都会缺依赖。
+  - TokenLedger 的 `calculation_method` 当前仍以 provider usage / MLZero token_usage.json 为主；需求文档中的 tokenizer 离线复算只应在后续确实接入 tokenizer 后启用，不能用固定倍率估算。

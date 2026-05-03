@@ -52,6 +52,7 @@ from backend.app.models.task import (
 from backend.app.services.ai_task_analyzer import analyze_task_with_ai, apply_analysis_to_task
 from backend.app.services.connector_runtime import build_runtime_settings
 from backend.app.services.connector_store import ConnectorStore
+from backend.app.services.dataset_profile import build_dataset_profile, dataset_profile_to_plain
 from backend.app.services.executors.mlzero_executor import MLZeroExecutor, MLZeroRunError
 from backend.app.services.governance_store import GovernanceStore
 from backend.app.services.task_ai_conversations import build_task_ai_conversations
@@ -80,6 +81,16 @@ from backend.app.services.token_usage import read_token_usage
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+MAX_CSV_UPLOAD_BYTES = 100 * 1024 * 1024
+CSV_UPLOAD_CHUNK_BYTES = 1024 * 1024
+ALLOWED_CSV_CONTENT_TYPES = {
+    "text/csv",
+    "application/csv",
+    "application/vnd.ms-excel",
+    "text/plain",
+    "application/octet-stream",
+}
 
 
 @dataclass(frozen=True)
@@ -115,6 +126,41 @@ def get_governance_store() -> GovernanceStore:
 @lru_cache
 def get_task_human_collaboration_service() -> TaskHumanCollaborationService:
     return TaskHumanCollaborationService(get_task_store())
+
+
+def _validate_upload_filename(filename: str) -> str:
+    normalized = filename.strip()
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="dataset filename is required")
+    if Path(normalized).name != normalized or "\\" in normalized or "/" in normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="dataset filename must not contain path separators")
+    if any(ord(char) < 32 for char in normalized):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="dataset filename contains control characters")
+    if Path(normalized).suffix.lower() != ".csv":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="only CSV uploads are supported")
+    return normalized
+
+
+def _validate_upload_content_type(content_type: str | None) -> None:
+    if not content_type:
+        return
+    normalized = content_type.split(";")[0].strip().lower()
+    if normalized not in ALLOWED_CSV_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"unsupported CSV content type: {content_type}",
+        )
+
+
+def _validate_csv_sample(sample: bytes) -> None:
+    if not sample:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded CSV is empty")
+    if b"\x00" in sample:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file contains binary null bytes")
+    try:
+        sample.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"uploaded CSV is not valid UTF-8: {exc}") from exc
 
 
 def _raise_connector_store_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
@@ -386,6 +432,7 @@ def _record_workflow_stage(
     summary: str,
     selection: TaskStageRoutingRecord | _ResolvedStageSelection | None = None,
     artifact_refs: list[str] | dict | None = None,
+    log_excerpt: str | None = None,
 ) -> None:
     stage_record = selection.stage_record if isinstance(selection, _ResolvedStageSelection) else selection
     get_task_store().upsert_stage_record(
@@ -399,6 +446,7 @@ def _record_workflow_stage(
         selection_source=stage_record.selection_source if stage_record else None,
         summary=summary,
         artifact_refs=artifact_refs,
+        log_excerpt=log_excerpt,
     )
 
 
@@ -411,6 +459,7 @@ def _record_stage_selection_map(
     summary_by_stage: dict[WorkflowStage, str],
     artifact_refs: list[str] | dict | None = None,
     artifact_refs_by_stage: dict[WorkflowStage, list[str] | dict] | None = None,
+    log_excerpt_by_stage: dict[WorkflowStage, str] | None = None,
 ) -> None:
     for stage, stage_status in status_by_stage.items():
         _record_workflow_stage(
@@ -421,6 +470,7 @@ def _record_stage_selection_map(
             summary=summary_by_stage[stage],
             selection=stage_selection_map.get(stage.value),
             artifact_refs=artifact_refs_by_stage.get(stage, artifact_refs) if artifact_refs_by_stage else artifact_refs,
+            log_excerpt=log_excerpt_by_stage.get(stage) if log_excerpt_by_stage else None,
         )
 
 
@@ -478,6 +528,38 @@ def _collect_stage_artifacts_by_stage(output_dir: str | None) -> dict[WorkflowSt
         if matched:
             collected[stage] = matched
     return collected
+
+
+def _read_run_log_excerpt(output_dir: str | None, *, max_chars: int = 1800) -> str | None:
+    if not output_dir:
+        return None
+    root = Path(output_dir)
+    if not root.exists():
+        return None
+    candidates = [
+        root / "summary.txt",
+        root / "mlzero_stderr.log",
+        root / "mlzero_stdout.log",
+        root / "info_logs.txt",
+        root / "detail_logs.txt",
+        root / "logs.txt",
+    ]
+    candidates.extend(sorted(root.rglob("*.log"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True))
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        if len(text) > max_chars:
+            text = text[-max_chars:]
+        return f"{path.name}\n{text}"
+    return None
 
 
 def _resolve_requested_rerun_stage(task: TaskRecord, payload: TaskRunRequest) -> WorkflowStage | None:
@@ -799,6 +881,7 @@ def _run_ai_analysis(
             summary=f"AI 解析失败：{exc.detail}",
             selection=stage_selection_map.get(WorkflowStage.data_analysis.value),
             artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+            log_excerpt=str(exc.detail),
         )
         if fail_on_error:
             raise
@@ -816,6 +899,7 @@ def _run_ai_analysis(
             summary=f"AI 解析失败：{exc}",
             selection=stage_selection_map.get(WorkflowStage.data_analysis.value),
             artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+            log_excerpt=str(exc),
         )
         if fail_on_error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
@@ -850,6 +934,7 @@ def _run_ai_analysis(
         ),
         selection=selection,
         artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+        log_excerpt=analysis.reasoning,
     )
     return saved_task
 
@@ -1307,29 +1392,81 @@ async def upload_dataset(
     task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="only CSV uploads are supported")
+    filename = _validate_upload_filename(file.filename or "")
+    _validate_upload_content_type(file.content_type)
 
-    content = await file.read()
-    dataset_path = task_store.save_dataset(team_access.team_id, task_id, file.filename, content)
-    task.dataset_filename = file.filename
+    dataset_path = task_store.dataset_upload_path(team_access.team_id, task_id, filename)
+    size_bytes = 0
+    sample = bytearray()
+    try:
+        with dataset_path.open("wb") as handle:
+            while True:
+                chunk = await file.read(CSV_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                size_bytes += len(chunk)
+                if size_bytes > MAX_CSV_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"CSV upload exceeds {MAX_CSV_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+                    )
+                if len(sample) < CSV_UPLOAD_CHUNK_BYTES:
+                    sample.extend(chunk[: CSV_UPLOAD_CHUNK_BYTES - len(sample)])
+                handle.write(chunk)
+        _validate_csv_sample(bytes(sample))
+        dataset_profile = build_dataset_profile(
+            dataset_path,
+            filename=filename,
+            target_column=None,
+        )
+        if dataset_profile.column_count == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded CSV does not contain a header row")
+    except HTTPException:
+        if dataset_path.exists():
+            dataset_path.unlink()
+        raise
+    except OSError as exc:
+        if dataset_path.exists():
+            dataset_path.unlink()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"failed to save uploaded CSV: {exc}") from exc
+
+    task.dataset_filename = filename
     task.dataset_path = str(dataset_path)
-    task.status = TaskStatus.planning
+    task.dataset_profile = dataset_profile
+    task.status = TaskStatus.uploaded
     task.last_run = None
     task.last_run_attempt = None
     task.label_column = None
     task.problem_type = None
     task.analysis_token_usage = None
-    task.structured_requirements = None
-    task.notes = "CSV 已上传，系统会根据当前阶段路由自动执行 AI 解析。"
+    task.structured_requirements = {"dataset_profile": dataset_profile_to_plain(dataset_profile)}
+    task.notes = "CSV 已上传并完成基础画像，系统会根据当前阶段路由自动执行 AI 解析。"
     task = task_store.save_task(task, access_token=team_access.access_token)
+    _record_workflow_stage(
+        task,
+        team_access,
+        stage=WorkflowStage.data_analysis,
+        stage_status=WorkflowStageStatus.completed,
+        summary=(
+            f"CSV 已上传并完成基础画像：{dataset_profile.row_count} 行、"
+            f"{dataset_profile.column_count} 列。"
+        ),
+        artifact_refs=[str(dataset_path)],
+        log_excerpt=(
+            f"filename={filename}; size_bytes={size_bytes}; "
+            f"columns={', '.join(column.name for column in dataset_profile.columns[:12])}"
+        ),
+    )
     _write_task_audit(
         team_access,
         action="task.dataset.upload",
         task_id=task.id,
         detail={
-            "filename": file.filename,
-            "size_bytes": len(content),
+            "filename": filename,
+            "size_bytes": size_bytes,
+            "content_type": file.content_type,
+            "row_count": dataset_profile.row_count,
+            "column_count": dataset_profile.column_count,
             "status": task.status.value,
         },
     )
@@ -1555,6 +1692,7 @@ def run_task(
             cycle_id=cycle_id,
             stage_selection_map=stage_selection_map,
         )
+        run_log_excerpt = _read_run_log_excerpt(run_error_output_dir) or str(exc)
         _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
         _record_stage_selection_map(
             saved_task,
@@ -1574,6 +1712,12 @@ def run_task(
             },
             artifact_refs=[run_error_output_dir] if run_error_output_dir else None,
             artifact_refs_by_stage=_collect_stage_artifacts_by_stage(run_error_output_dir),
+            log_excerpt_by_stage={
+                WorkflowStage.feature_engineering: run_log_excerpt,
+                WorkflowStage.model_selection: run_log_excerpt,
+                WorkflowStage.training_validation: run_log_excerpt,
+                WorkflowStage.report_generation: run_log_excerpt,
+            },
         )
         if incremental_plan is not None:
             failed_statuses, failed_summaries, failed_artifacts = _stage_records_for_incremental_failure(
@@ -1587,6 +1731,7 @@ def run_task(
                 status_by_stage=failed_statuses,
                 summary_by_stage=failed_summaries,
                 artifact_refs_by_stage=failed_artifacts,
+                log_excerpt_by_stage={stage: run_log_excerpt for stage in failed_statuses},
             )
         _write_task_audit(
             team_access,
@@ -1643,6 +1788,7 @@ def run_task(
         cycle_id=cycle_id,
         stage_selection_map=stage_selection_map,
     )
+    run_log_excerpt = _read_run_log_excerpt(summary.output_dir)
     _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
     _record_stage_selection_map(
         saved_task,
@@ -1662,6 +1808,12 @@ def run_task(
         },
         artifact_refs=[summary.output_dir],
         artifact_refs_by_stage=_collect_stage_artifacts_by_stage(summary.output_dir),
+        log_excerpt_by_stage={
+            WorkflowStage.feature_engineering: run_log_excerpt,
+            WorkflowStage.model_selection: run_log_excerpt,
+            WorkflowStage.training_validation: run_log_excerpt,
+            WorkflowStage.report_generation: run_log_excerpt,
+        },
     )
     if incremental_result is not None:
         completed_statuses, completed_summaries, completed_artifacts = _stage_records_for_incremental_success(
@@ -1674,6 +1826,7 @@ def run_task(
             status_by_stage=completed_statuses,
             summary_by_stage=completed_summaries,
             artifact_refs_by_stage=completed_artifacts,
+            log_excerpt_by_stage={stage: run_log_excerpt for stage in completed_statuses},
         )
     _write_task_audit(
         team_access,

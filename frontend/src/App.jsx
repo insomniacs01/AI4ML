@@ -155,8 +155,17 @@ function combineTokenUsageReports(...reports) {
   );
 }
 function getTaskAnalysis(task) { return task?.structured_requirements && typeof task.structured_requirements === "object" ? task.structured_requirements : null; }
+function getTaskDatasetProfile(task) {
+  const analysis = getTaskAnalysis(task);
+  return task?.dataset_profile && typeof task.dataset_profile === "object"
+    ? task.dataset_profile
+    : analysis?.dataset_profile && typeof analysis.dataset_profile === "object"
+      ? analysis.dataset_profile
+      : null;
+}
 function getTaskConfidence(task) { const analysis = getTaskAnalysis(task); return typeof analysis?.confidence === "number" ? analysis.confidence : null; }
 function formatConfidence(value) { return typeof value === "number" && !Number.isNaN(value) ? `${Math.round(value * 100)}%` : "暂无"; }
+function formatRatio(value) { return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 1000) / 10}%` : "暂无"; }
 function getTaskMetricName(task) {
   const analysis = getTaskAnalysis(task);
   if (typeof analysis?.metric_name === "string" && analysis.metric_name.trim()) return analysis.metric_name.trim();
@@ -267,6 +276,9 @@ export default function App() {
   const [usageSummary, setUsageSummary] = useState(null);
   const [usageState, setUsageState] = useState("idle");
   const [usageError, setUsageError] = useState("");
+  const [tokenLedgers, setTokenLedgers] = useState(null);
+  const [tokenLedgerState, setTokenLedgerState] = useState("idle");
+  const [tokenLedgerError, setTokenLedgerError] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [taskForm, setTaskForm] = useState(EMPTY_TASK_FORM);
   const [taskFile, setTaskFile] = useState(null);
@@ -498,6 +510,24 @@ export default function App() {
     }
   }
 
+  async function loadTokenLedgers() {
+    if (!session?.access_token || !activeTeamId || !teamCanManage) {
+      setTokenLedgers(null);
+      setTokenLedgerState("idle");
+      setTokenLedgerError("");
+      return;
+    }
+    setTokenLedgerState("loading");
+    setTokenLedgerError("");
+    try {
+      setTokenLedgers(await api.teamTokenLedgers({ limit: 500 }, requestContext));
+    } catch (error) {
+      setTokenLedgerError(getErrorMessage(error));
+    } finally {
+      setTokenLedgerState("ready");
+    }
+  }
+
   async function loadConnectors() {
     if (!session?.access_token || !activeTeamId) {
       setConnectors([]);
@@ -584,6 +614,7 @@ export default function App() {
       loadHealth(),
       loadTasks(),
       loadUsageSummary(),
+      loadTokenLedgers(),
       loadConnectors(),
       loadTeamMembers(),
       loadTeamSettings(),
@@ -639,6 +670,9 @@ export default function App() {
         setUsageSummary(null);
         setUsageState("idle");
         setUsageError("");
+        setTokenLedgers(null);
+        setTokenLedgerState("idle");
+        setTokenLedgerError("");
         setConnectors([]);
         setInviteInfo(null);
         setQuotaSummary([]);
@@ -678,6 +712,9 @@ export default function App() {
       setUsageSummary(null);
       setUsageState("idle");
       setUsageError("");
+      setTokenLedgers(null);
+      setTokenLedgerState("idle");
+      setTokenLedgerError("");
       setConnectors([]);
       setTeamMembers([]);
       setTeamSettings(null);
@@ -700,6 +737,7 @@ export default function App() {
     void Promise.all([
       loadTasks(),
       loadUsageSummary(),
+      loadTokenLedgers(),
       loadConnectors(),
       loadTeamMembers(),
       loadTeamSettings(),
@@ -929,12 +967,13 @@ export default function App() {
       setTaskForm(EMPTY_TASK_FORM);
       setTaskFile(null);
       setTaskUploadToken((current) => current + 1);
-      await Promise.all([loadUsageSummary(), loadTaskAIConversations(uploadedTask.id), loadTaskModelReport(uploadedTask.id)]);
+      await Promise.all([loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(uploadedTask.id), loadTaskModelReport(uploadedTask.id)]);
       setTaskMessage(buildTaskCreationMessage(uploadedTask));
     } catch (error) {
       await Promise.allSettled([
         loadTasks(),
         loadUsageSummary(),
+        loadTokenLedgers(),
         createdTaskId ? loadTaskAIConversations(createdTaskId) : Promise.resolve(),
         createdTaskId ? loadTaskModelReport(createdTaskId) : Promise.resolve(),
       ]);
@@ -953,10 +992,10 @@ export default function App() {
       const updatedTask = await api.analyzeTask(taskId, requestContext);
       setTasks((current) => mergeTaskIntoList(current, updatedTask));
       setSelectedTaskId(updatedTask.id);
-      await Promise.all([loadUsageSummary(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
+      await Promise.all([loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
       setTaskMessage(`任务“${updatedTask.name}”已通过当前运行时 AI 重新解析。`);
     } catch (error) {
-      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
+      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
       setTaskError(getErrorMessage(error));
     } finally {
       setAnalyzingTaskId("");
@@ -971,7 +1010,7 @@ export default function App() {
       const updatedTask = await api.runTask(taskId, DEFAULT_RUN_TIME_LIMIT, requestContext);
       setTasks((current) => mergeTaskIntoList(current, updatedTask));
       setSelectedTaskId(updatedTask.id);
-      await Promise.all([loadUsageSummary(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
+      await Promise.all([loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
       if (updatedTask.status === "paused_for_review") {
         setTaskMessage("任务已根据人工参与策略自动暂停，等待处理协同节点。");
       } else if (updatedTask.last_run) {
@@ -980,7 +1019,7 @@ export default function App() {
         setTaskMessage("任务状态已更新。");
       }
     } catch (error) {
-      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
+      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
       setTaskError(getErrorMessage(error));
     } finally {
       setRunningTaskId("");
@@ -1017,7 +1056,7 @@ export default function App() {
     try {
       await api.deleteTask(taskId, requestContext);
       setTasks((current) => current.filter((item) => item.id !== taskId));
-      await loadUsageSummary();
+      await Promise.all([loadUsageSummary(), loadTokenLedgers()]);
       if (selectedTaskId === taskId) {
         setTaskAIConversations(null);
         setTaskAIConversationsState("idle");
@@ -1328,6 +1367,113 @@ export default function App() {
     }
   }
 
+  async function handleCreateAssetFromTask(assetType) {
+    if (!selectedTask?.id) return setAssetError("请先选择一个任务。");
+    const datasetProfile = getTaskDatasetProfile(selectedTask);
+    const baseTags = [
+      selectedTask.problem_type,
+      selectedTask.label_column,
+      selectedTask.dataset_filename ? "csv" : "",
+    ].filter(Boolean);
+    const category = selectedTask.problem_type ? `tabular_${selectedTask.problem_type}` : "tabular";
+    let payload = null;
+    if (assetType === "dataset") {
+      if (!selectedTask.dataset_path) return setAssetError("当前任务还没有可登记的数据集路径。");
+      payload = {
+        asset_type: "dataset",
+        title: `${selectedTask.name} 数据集`,
+        description: selectedTask.description,
+        storage_path: selectedTask.dataset_path,
+        category,
+        tags: baseTags,
+        visibility: "private",
+        version: "1.0.0",
+        source_task_id: selectedTask.id,
+        metadata: { dataset_profile: datasetProfile },
+        review_status: "pending_review",
+      };
+    } else if (assetType === "model") {
+      if (!selectedTask.last_run?.output_dir) return setAssetError("当前任务还没有成功运行产物，不能登记模型资产。");
+      payload = {
+        asset_type: "model",
+        title: `${selectedTask.name} 模型`,
+        description: selectedTask.notes || selectedTask.description,
+        storage_path: selectedTask.last_run.output_dir,
+        category,
+        tags: [...baseTags, selectedTask.last_run.best_model].filter(Boolean),
+        visibility: "private",
+        version: "1.0.0",
+        source_task_id: selectedTask.id,
+        model_card: {
+          task_id: selectedTask.id,
+          task_name: selectedTask.name,
+          problem_type: selectedTask.problem_type,
+          label_column: selectedTask.label_column,
+          best_model: selectedTask.last_run.best_model,
+          metric_name: selectedTask.last_run.metric_name,
+          metric_value: selectedTask.last_run.metric_value,
+          output_dir: selectedTask.last_run.output_dir,
+          dataset_profile: datasetProfile,
+        },
+        metadata: { leaderboard: selectedTask.last_run.leaderboard ?? [] },
+        review_status: "pending_review",
+      };
+    } else if (assetType === "report") {
+      if (!selectedTask.last_run?.output_dir) return setAssetError("当前任务还没有成功运行产物，不能登记报告资产。");
+      payload = {
+        asset_type: "report",
+        title: `${selectedTask.name} 分析报告`,
+        description: `基于任务 ${selectedTask.name} 的模型报告入口。`,
+        storage_path: selectedTask.last_run.output_dir,
+        category,
+        tags: [...baseTags, "report"],
+        visibility: "private",
+        version: "1.0.0",
+        source_task_id: selectedTask.id,
+        metadata: {
+          report_api: `/api/tasks/${selectedTask.id}/report`,
+          metric_name: selectedTask.last_run.metric_name,
+          metric_value: selectedTask.last_run.metric_value,
+        },
+        review_status: "pending_review",
+      };
+    } else if (assetType === "workflow") {
+      payload = {
+        asset_type: "workflow",
+        title: `${selectedTask.name} 工作流`,
+        description: selectedTask.description,
+        storage_path: selectedTask.last_run?.output_dir || selectedTask.dataset_path || null,
+        category,
+        tags: [...baseTags, "workflow"],
+        visibility: "private",
+        version: "1.0.0",
+        source_task_id: selectedTask.id,
+        metadata: {
+          task_id: selectedTask.id,
+          stage_routing: selectedTask.stage_routing ?? [],
+          interaction_policies: selectedTask.interaction_policies ?? [],
+          structured_requirements: selectedTask.structured_requirements ?? null,
+          last_run: selectedTask.last_run ?? null,
+        },
+        review_status: "pending_review",
+      };
+    }
+    if (!payload) return;
+    setAssetCreating(true);
+    setAssetError("");
+    setAssetMessage("");
+    try {
+      await api.createTeamAsset(payload, requestContext);
+      await Promise.all([loadAssets(), loadAuditLogs()]);
+      setAssetMessage("已从当前任务创建待审核资产。");
+      setActivePage("assets");
+    } catch (error) {
+      setAssetError(getErrorMessage(error));
+    } finally {
+      setAssetCreating(false);
+    }
+  }
+
   async function handleReviewAsset(assetId, payload) {
     setAssetReviewingId(assetId);
     setAssetError("");
@@ -1343,12 +1489,12 @@ export default function App() {
     }
   }
 
-  async function handlePublishAsset(assetId) {
+  async function handlePublishAsset(assetId, visibility = "public") {
     setAssetPublishingId(assetId);
     setAssetError("");
     setAssetMessage("");
     try {
-      await api.publishTeamAsset(assetId, {}, requestContext);
+      await api.publishTeamAsset(assetId, { visibility }, requestContext);
       await Promise.all([loadAssets(), loadAuditLogs()]);
       setAssetMessage("资产已发布到团队广场。");
     } catch (error) {
@@ -1362,11 +1508,12 @@ export default function App() {
     if (!asset?.id) return;
     const title = window.prompt("Fork 后的新资产标题", `Fork of ${asset.title}`);
     if (!title) return;
+    const version = window.prompt("Fork 后的版本号", asset.version || "1.0.0");
     setAssetForkingId(asset.id);
     setAssetError("");
     setAssetMessage("");
     try {
-      await api.forkTeamAsset(asset.id, { title: title.trim(), review_status: "private" }, requestContext);
+      await api.forkTeamAsset(asset.id, { title: title.trim(), version: version?.trim() || asset.version || "1.0.0", review_status: "private" }, requestContext);
       await Promise.all([loadAssets(), loadAuditLogs()]);
       setAssetMessage("资产 Fork 已创建。");
     } catch (error) {
@@ -1386,6 +1533,9 @@ export default function App() {
     const showingFailedAttempt = selectedTask.status === "failed" && lastRunAttempt;
     const rerunStage = getTaskRerunStage(selectedTask);
     const conversationCount = Array.isArray(taskAIConversations?.items) ? taskAIConversations.items.length : 0;
+    const datasetProfile = getTaskDatasetProfile(selectedTask);
+    const datasetColumns = Array.isArray(datasetProfile?.columns) ? datasetProfile.columns : [];
+    const previewRows = Array.isArray(datasetProfile?.preview_rows) ? datasetProfile.preview_rows : [];
     return (
       <div className="detail-stack task-detail-panel">
         <section className="section-card task-detail-hero">
@@ -1416,6 +1566,52 @@ export default function App() {
             {teamCanDevelop ? <button type="button" className="chip-button" onClick={() => setActivePage("code")}>查看 AI 代码</button> : null}
             <button type="button" className="chip-button" onClick={() => setActivePage("human")}>人机协同</button>
           </div>
+        </section>
+
+        <section className="section-card">
+          <div className="section-head">
+            <div>
+              <h3>数据集画像</h3>
+              <p>上传 CSV 后由后端读取真实文件生成列名、样例行和缺失值概览。</p>
+            </div>
+            {datasetProfile ? <span className="runtime-pill success">已生成</span> : <span className="runtime-pill warning">未记录</span>}
+          </div>
+          {datasetProfile ? (
+            <div className="detail-stack">
+              <div className="summary-grid">
+                <article className="summary-item"><span>文件名</span><strong>{datasetProfile.filename || selectedTask.dataset_filename || "未记录"}</strong></article>
+                <article className="summary-item"><span>行数</span><strong>{Number(datasetProfile.row_count ?? 0).toLocaleString("zh-CN")}</strong></article>
+                <article className="summary-item"><span>列数</span><strong>{Number(datasetProfile.column_count ?? 0).toLocaleString("zh-CN")}</strong></article>
+                <article className="summary-item"><span>目标列</span><strong>{datasetProfile.target_column || selectedTask.label_column || "待解析"}</strong></article>
+              </div>
+              {datasetColumns.length ? (
+                <div className="table-wrap compact-table">
+                  <table>
+                    <thead><tr><th>列名</th><th>类型</th><th>非空</th><th>缺失率</th><th>样例</th></tr></thead>
+                    <tbody>
+                      {datasetColumns.slice(0, 12).map((column) => (
+                        <tr key={column.name}>
+                          <td>{column.name}</td>
+                          <td>{column.inferred_type}</td>
+                          <td>{Number(column.non_empty_count ?? 0).toLocaleString("zh-CN")}</td>
+                          <td>{formatRatio(column.missing_ratio)}</td>
+                          <td>{Array.isArray(column.sample_values) && column.sample_values.length ? column.sample_values.join(" / ") : "暂无"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+              {previewRows.length ? (
+                <details className="callout">
+                  <summary>查看样例行</summary>
+                  <pre className="code-block">{JSON.stringify(previewRows.slice(0, 8), null, 2)}</pre>
+                </details>
+              ) : null}
+            </div>
+          ) : (
+            <div className="empty-state">当前任务还没有数据集画像。重新上传 CSV 后会写入真实预览信息。</div>
+          )}
         </section>
 
         <section className="section-card">
@@ -1811,9 +2007,13 @@ export default function App() {
                 </section>
                 <TokenUsagePanel
                   summary={usageSummary}
+                  ledgers={tokenLedgers}
                   loading={usageState === "loading"}
+                  ledgersLoading={tokenLedgerState === "loading"}
                   error={usageError}
-                  onRefresh={() => void loadUsageSummary()}
+                  ledgerError={tokenLedgerError}
+                  canViewLedgers={teamCanManage}
+                  onRefresh={() => void Promise.all([loadUsageSummary(), loadTokenLedgers()])}
                   onSelectTask={(taskId) => {
                     setSelectedTaskId(taskId);
                     setActivePage("tasks");
@@ -1901,6 +2101,7 @@ export default function App() {
                 </section>
                 <AssetCenterPanel
                   assets={assetItems}
+                  selectedTask={selectedTask}
                   loading={assetState === "loading"}
                   creating={assetCreating}
                   reviewingAssetId={assetReviewingId}
@@ -1914,6 +2115,7 @@ export default function App() {
                   onReview={handleReviewAsset}
                   onPublish={handlePublishAsset}
                   onFork={handleForkAsset}
+                  onCreateFromTask={handleCreateAssetFromTask}
                 />
               </>
             ) : null}

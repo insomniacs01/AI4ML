@@ -22,6 +22,7 @@ from backend.app.models.governance import (
     TeamQuotaRecord,
     TeamSettingsRecord,
     TeamSettingsUpdateRequest,
+    TokenLedgerRecord,
 )
 
 
@@ -417,7 +418,16 @@ class GovernanceStore:
         items = self.list_quotas(team_id, access_token=access_token)
         return next((item for item in items if item.user_id == user_id), None)
 
-    def list_assets(self, team_id: str, *, access_token: str, asset_type: str | None = None) -> list[PlatformAssetRecord]:
+    def list_assets(
+        self,
+        team_id: str,
+        *,
+        access_token: str,
+        asset_type: str | None = None,
+        review_status: str | None = None,
+        visibility: str | None = None,
+        category: str | None = None,
+    ) -> list[PlatformAssetRecord]:
         path = (
             "platform_assets"
             f"?select=*&team_id=eq.{quote(team_id, safe='')}"
@@ -425,6 +435,12 @@ class GovernanceStore:
         )
         if asset_type:
             path += f"&asset_type=eq.{quote(asset_type, safe='')}"
+        if review_status:
+            path += f"&review_status=eq.{quote(review_status, safe='')}"
+        if visibility:
+            path += f"&visibility=eq.{quote(visibility, safe='')}"
+        if category:
+            path += f"&category=eq.{quote(category, safe='')}"
         payload = self._request_json(path=path, access_token=access_token)
         if not isinstance(payload, list):
             raise ConnectionError("Unexpected platform-assets response from Supabase.")
@@ -473,6 +489,12 @@ class GovernanceStore:
                 "title": payload.title,
                 "description": payload.description,
                 "storage_path": payload.storage_path,
+                "category": payload.category,
+                "tags": _normalize_tags(payload.tags),
+                "visibility": payload.visibility,
+                "version": payload.version,
+                "source_task_id": payload.source_task_id,
+                "model_card": payload.model_card,
                 "metadata": payload.metadata,
                 "review_status": payload.review_status,
             },
@@ -490,6 +512,13 @@ class GovernanceStore:
         *,
         access_token: str,
     ) -> PlatformAssetRecord:
+        body: dict[str, Any] = {"review_status": payload.review_status}
+        if payload.category is not None:
+            body["category"] = payload.category
+        if payload.tags is not None:
+            body["tags"] = _normalize_tags(payload.tags)
+        if payload.visibility is not None:
+            body["visibility"] = payload.visibility
         updated = self._request_json(
             path=(
                 "platform_assets"
@@ -497,7 +526,7 @@ class GovernanceStore:
             ),
             access_token=access_token,
             method="PATCH",
-            body={"review_status": payload.review_status},
+            body=body,
         )
         record = self._unwrap_single_record(updated, "asset review")
         creator_id = str(record.get("created_by")) if record.get("created_by") else None
@@ -535,6 +564,8 @@ class GovernanceStore:
             method="PATCH",
             body={
                 "review_status": "published",
+                "visibility": payload.visibility,
+                "published_at": datetime.now(timezone.utc).isoformat(),
                 "metadata": metadata,
             },
         )
@@ -583,6 +614,13 @@ class GovernanceStore:
                 "title": payload.title or f"Fork of {source.title}",
                 "description": payload.description if payload.description is not None else source.description,
                 "storage_path": source.storage_path,
+                "category": source.category,
+                "tags": _normalize_tags(source.tags),
+                "visibility": "private",
+                "version": payload.version or source.version,
+                "source_task_id": source.source_task_id,
+                "source_asset_id": source.id,
+                "model_card": source.model_card,
                 "metadata": fork_metadata,
                 "review_status": payload.review_status,
             },
@@ -591,6 +629,84 @@ class GovernanceStore:
         profiles = self._list_profiles([created_by], access_token=access_token)
         profile_map = {item.user_id: item for item in profiles}
         return self._asset_from_payload(record, profile_map=profile_map)
+
+    def list_token_ledgers(
+        self,
+        team_id: str,
+        *,
+        access_token: str,
+        limit: int = 500,
+        user_id: str | None = None,
+        task_id: str | None = None,
+    ) -> list[TokenLedgerRecord]:
+        capped_limit = min(max(limit, 1), 1000)
+        path = (
+            "token_ledgers"
+            f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+            f"&order=created_at.desc&limit={capped_limit}"
+        )
+        if user_id:
+            path += f"&user_id=eq.{quote(user_id, safe='')}"
+        if task_id:
+            path += f"&task_id=eq.{quote(task_id, safe='')}"
+        payload = self._request_json(path=path, access_token=access_token)
+        if not isinstance(payload, list):
+            raise ConnectionError("Unexpected token-ledgers response from Supabase.")
+
+        profiles = self._list_profiles(
+            [str(item.get("user_id")) for item in payload if isinstance(item, dict) and item.get("user_id")],
+            access_token=access_token,
+        )
+        profile_map = {item.user_id: item for item in profiles}
+        task_map = self._list_task_names(
+            team_id,
+            [str(item.get("task_id")) for item in payload if isinstance(item, dict) and item.get("task_id")],
+            access_token=access_token,
+        )
+        connector_map = self._list_connector_names(
+            team_id,
+            [str(item.get("connector_id")) for item in payload if isinstance(item, dict) and item.get("connector_id")],
+            access_token=access_token,
+        )
+
+        items: list[TokenLedgerRecord] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            ledger_user_id = str(item.get("user_id")) if item.get("user_id") else None
+            profile = profile_map.get(ledger_user_id or "")
+            ledger_task_id = str(item.get("task_id")) if item.get("task_id") else None
+            ledger_connector_id = str(item.get("connector_id")) if item.get("connector_id") else None
+            connector_display_name = (
+                str(item.get("connector_display_name"))
+                if item.get("connector_display_name")
+                else connector_map.get(ledger_connector_id or "")
+            )
+            items.append(
+                TokenLedgerRecord(
+                    id=str(item.get("id")),
+                    team_id=str(item.get("team_id")),
+                    user_id=ledger_user_id,
+                    user_display_name=profile.display_name if profile else None,
+                    user_email=profile.email if profile else None,
+                    task_id=ledger_task_id,
+                    task_name=task_map.get(ledger_task_id or ""),
+                    connector_id=ledger_connector_id,
+                    connector_display_name=connector_display_name,
+                    phase=str(item.get("phase")),
+                    stage_key=str(item.get("stage_key")) if item.get("stage_key") else None,
+                    source_key=str(item.get("source_key")),
+                    model_name=str(item.get("model_name")) if item.get("model_name") else None,
+                    input_tokens=_coerce_non_negative_int(item.get("input_tokens")),
+                    output_tokens=_coerce_non_negative_int(item.get("output_tokens")),
+                    total_tokens=_coerce_non_negative_int(item.get("total_tokens")),
+                    calculation_method=str(item.get("calculation_method")) if item.get("calculation_method") else None,
+                    raw_usage=item.get("raw_usage") if isinstance(item.get("raw_usage"), dict) else None,
+                    created_at=item.get("created_at"),
+                    updated_at=item.get("updated_at"),
+                )
+            )
+        return items
 
     def list_audit_logs(self, team_id: str, *, access_token: str, limit: int = 200) -> list[AuditLogRecord]:
         payload = self._request_json(
@@ -693,8 +809,16 @@ class GovernanceStore:
             title=str(payload.get("title")),
             description=str(payload.get("description")) if payload.get("description") else None,
             storage_path=str(payload.get("storage_path")) if payload.get("storage_path") else None,
+            category=str(payload.get("category")) if payload.get("category") else None,
+            tags=_normalize_tags(payload.get("tags")),
+            visibility=str(payload.get("visibility") or "private"),
+            version=str(payload.get("version")) if payload.get("version") else None,
+            source_task_id=str(payload.get("source_task_id")) if payload.get("source_task_id") else None,
+            source_asset_id=str(payload.get("source_asset_id")) if payload.get("source_asset_id") else None,
+            model_card=payload.get("model_card") if isinstance(payload.get("model_card"), dict) else None,
             metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None,
             review_status=str(payload.get("review_status", "private")),
+            published_at=payload.get("published_at"),
             creator_display_name=profile.display_name if profile else None,
             creator_email=profile.email if profile else None,
             created_at=payload.get("created_at"),
@@ -722,6 +846,50 @@ class GovernanceStore:
             for item in payload
             if isinstance(item, dict) and item.get("user_id")
         ]
+
+    def _list_task_names(self, team_id: str, task_ids: list[str], *, access_token: str) -> dict[str, str]:
+        normalized_ids = sorted({item for item in task_ids if item})
+        if not normalized_ids:
+            return {}
+        in_list = ",".join(f'"{item}"' for item in normalized_ids)
+        quoted_in_list = quote(in_list, safe='(),"')
+        payload = self._request_json(
+            path=(
+                "ai_tasks"
+                f"?select=id,name&team_id=eq.{quote(team_id, safe='')}"
+                f"&id=in.({quoted_in_list})"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, list):
+            raise ConnectionError("Unexpected task-name response from Supabase.")
+        return {
+            str(item.get("id")): str(item.get("name") or item.get("id"))
+            for item in payload
+            if isinstance(item, dict) and item.get("id")
+        }
+
+    def _list_connector_names(self, team_id: str, connector_ids: list[str], *, access_token: str) -> dict[str, str]:
+        normalized_ids = sorted({item for item in connector_ids if item})
+        if not normalized_ids:
+            return {}
+        in_list = ",".join(f'"{item}"' for item in normalized_ids)
+        quoted_in_list = quote(in_list, safe='(),"')
+        payload = self._request_json(
+            path=(
+                "ai_connectors"
+                f"?select=id,display_name&team_id=eq.{quote(team_id, safe='')}"
+                f"&id=in.({quoted_in_list})"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, list):
+            raise ConnectionError("Unexpected connector-name response from Supabase.")
+        return {
+            str(item.get("id")): str(item.get("display_name") or item.get("id"))
+            for item in payload
+            if isinstance(item, dict) and item.get("id")
+        }
 
     def _request_json(
         self,
@@ -794,3 +962,24 @@ def _coerce_non_negative_int(value: Any) -> int:
     except (TypeError, ValueError):
         return 0
     return max(result, 0)
+
+
+def _normalize_tags(value: Any) -> list[str]:
+    if value is None:
+        return []
+    raw_items: list[Any]
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, tuple):
+        raw_items = list(value)
+    else:
+        return []
+
+    tags: list[str] = []
+    for item in raw_items:
+        tag = str(item).strip()
+        if tag and tag not in tags:
+            tags.append(tag[:80])
+    return tags[:20]

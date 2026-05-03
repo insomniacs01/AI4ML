@@ -180,9 +180,20 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  teamAssets(assetType, context = {}) {
-    const query = assetType ? `?asset_type=${encodeURIComponent(assetType)}` : "";
-    return request(`/team/assets${query}`, context);
+  teamAssets(assetType, filters = {}, context = {}) {
+    let resolvedFilters = filters;
+    let resolvedContext = context;
+    if (filters?.accessToken || filters?.teamId) {
+      resolvedFilters = {};
+      resolvedContext = filters;
+    }
+    const params = new URLSearchParams();
+    if (assetType) params.set("asset_type", assetType);
+    Object.entries(resolvedFilters ?? {}).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    const query = params.toString() ? `?${params.toString()}` : "";
+    return request(`/team/assets${query}`, resolvedContext);
   },
   createTeamAsset(payload, context = {}) {
     return request("/team/assets", {
@@ -218,6 +229,20 @@ export const api = {
   },
   teamAuditLogs(context = {}) {
     return request("/team/audit-logs", context);
+  },
+  teamTokenLedgers(filters = {}, context = {}) {
+    let resolvedFilters = filters;
+    let resolvedContext = context;
+    if (filters?.accessToken || filters?.teamId) {
+      resolvedFilters = {};
+      resolvedContext = filters;
+    }
+    const params = new URLSearchParams();
+    Object.entries(resolvedFilters ?? {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") params.set(key, value);
+    });
+    const query = params.toString() ? `?${params.toString()}` : "";
+    return request(`/team/token-ledgers${query}`, resolvedContext);
   },
   listTasks(context = {}) {
     return request("/tasks", context);

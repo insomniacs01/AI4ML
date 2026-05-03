@@ -156,6 +156,8 @@ def _build_autogluon_prediction_response(
 
 
 def _resolve_dataset_profile(task: TaskRecord) -> DatasetProfile | None:
+    if task.dataset_profile is not None:
+        return task.dataset_profile
     structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
     cached = dataset_profile_from_plain(structured.get("dataset_profile"))
     if cached is not None:

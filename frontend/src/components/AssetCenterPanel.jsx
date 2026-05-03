@@ -34,11 +34,18 @@ const EMPTY_FORM = {
   title: "",
   description: "",
   storage_path: "",
+  category: "",
+  tags: "",
+  visibility: "private",
+  version: "1.0.0",
+  source_task_id: "",
+  model_card: "",
   review_status: "private",
 };
 
 export default function AssetCenterPanel({
   assets,
+  selectedTask,
   loading,
   creating,
   reviewingAssetId,
@@ -52,6 +59,7 @@ export default function AssetCenterPanel({
   onReview,
   onPublish,
   onFork,
+  onCreateFromTask,
 }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [activeType, setActiveType] = useState("all");
@@ -78,14 +86,44 @@ export default function AssetCenterPanel({
 
   function handleSubmit(event) {
     event.preventDefault();
+    let modelCard = null;
+    if (form.model_card.trim()) {
+      try {
+        modelCard = JSON.parse(form.model_card);
+      } catch {
+        window.alert("模型卡片 JSON 格式不正确。");
+        return;
+      }
+    }
     onCreate?.({
       asset_type: form.asset_type,
       title: form.title.trim(),
       description: form.description.trim() || null,
       storage_path: form.storage_path.trim() || null,
+      category: form.category.trim() || null,
+      tags: form.tags.split(",").map((item) => item.trim()).filter(Boolean),
+      visibility: form.visibility,
+      version: form.version.trim() || null,
+      source_task_id: form.source_task_id.trim() || null,
+      model_card: modelCard,
       review_status: form.review_status,
     });
     setForm(EMPTY_FORM);
+  }
+
+  function handleEditMetadata(asset) {
+    const category = window.prompt("分类", asset.category || "");
+    if (category === null) return;
+    const tags = window.prompt("标签，用逗号分隔", Array.isArray(asset.tags) ? asset.tags.join(", ") : "");
+    if (tags === null) return;
+    const visibility = window.prompt("可见性：private / team / public / unlisted", asset.visibility || "private");
+    if (visibility === null) return;
+    onReview?.(asset.id, {
+      review_status: asset.review_status,
+      category: category.trim() || null,
+      tags: tags.split(",").map((item) => item.trim()).filter(Boolean),
+      visibility: visibility.trim() || "private",
+    });
   }
 
   return (
@@ -129,6 +167,29 @@ export default function AssetCenterPanel({
                 <option value="rejected">rejected</option>
               </select>
             </label>
+            <label className="field">
+              <span>可见性</span>
+              <select value={form.visibility} onChange={(event) => setForm((current) => ({ ...current, visibility: event.target.value }))}>
+                <option value="private">private</option>
+                <option value="team">team</option>
+                <option value="public">public</option>
+                <option value="unlisted">unlisted</option>
+              </select>
+            </label>
+          </div>
+          <div className="form-row">
+            <label className="field">
+              <span>分类</span>
+              <input value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} placeholder="例如：tabular_regression" />
+            </label>
+            <label className="field">
+              <span>标签</span>
+              <input value={form.tags} onChange={(event) => setForm((current) => ({ ...current, tags: event.target.value }))} placeholder="多个标签用逗号分隔" />
+            </label>
+            <label className="field">
+              <span>版本</span>
+              <input value={form.version} onChange={(event) => setForm((current) => ({ ...current, version: event.target.value }))} />
+            </label>
           </div>
           <label className="field">
             <span>标题</span>
@@ -142,10 +203,29 @@ export default function AssetCenterPanel({
             <span>存储路径</span>
             <input value={form.storage_path} onChange={(event) => setForm((current) => ({ ...current, storage_path: event.target.value }))} placeholder="例如：storage/mlzero_runs/task-1/run_summary.json" />
           </label>
+          <label className="field">
+            <span>来源任务 ID</span>
+            <input value={form.source_task_id} onChange={(event) => setForm((current) => ({ ...current, source_task_id: event.target.value }))} placeholder="可选，关联任务来源" />
+          </label>
+          <label className="field">
+            <span>模型卡片 JSON</span>
+            <textarea value={form.model_card} onChange={(event) => setForm((current) => ({ ...current, model_card: event.target.value }))} rows={4} placeholder='模型资产可填写，例如 {"metric_name":"accuracy","metric_value":0.91}' />
+          </label>
           <div className="button-row">
             <button type="submit" className="primary-button" disabled={creating}>{creating ? "创建中..." : "登记资产"}</button>
           </div>
         </form>
+
+        <div className="callout">
+          <strong>从当前任务沉淀</strong>
+          <p>{selectedTask ? `当前任务：${selectedTask.name}` : "先在任务页选择一个任务，再把数据集、模型、报告或工作流登记为待审核资产。"}</p>
+          <div className="button-row">
+            <button type="button" className="ghost-button" disabled={!selectedTask || creating} onClick={() => onCreateFromTask?.("dataset")}>数据集</button>
+            <button type="button" className="ghost-button" disabled={!selectedTask || creating} onClick={() => onCreateFromTask?.("model")}>模型</button>
+            <button type="button" className="ghost-button" disabled={!selectedTask || creating} onClick={() => onCreateFromTask?.("report")}>报告</button>
+            <button type="button" className="ghost-button" disabled={!selectedTask || creating} onClick={() => onCreateFromTask?.("workflow")}>工作流</button>
+          </div>
+        </div>
       </section>
 
       <section className="section-card">
@@ -179,7 +259,7 @@ export default function AssetCenterPanel({
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>标题</th><th>类型</th><th>来源</th><th>状态</th><th>更新时间</th><th>操作</th></tr>
+                <tr><th>标题</th><th>类型</th><th>分类 / 标签</th><th>来源</th><th>状态</th><th>更新时间</th><th>操作</th></tr>
               </thead>
               <tbody>
                 {visibleAssets.map((asset) => (
@@ -193,8 +273,15 @@ export default function AssetCenterPanel({
                     <td>{asset.asset_type}</td>
                     <td>
                       <div className="table-cell-stack">
+                        <strong>{asset.category || "未分类"}</strong>
+                        <span>{Array.isArray(asset.tags) && asset.tags.length ? asset.tags.join(" / ") : "未打标签"}</span>
+                        <span>{asset.visibility || "private"} · v{asset.version || "未记录"}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="table-cell-stack">
                         <strong>{asset.creator_display_name || asset.creator_email || asset.created_by || "-"}</strong>
-                        <span>{asset.metadata?.fork?.forked_from_asset_id ? `Fork 自 ${asset.metadata.fork.forked_from_asset_id}` : "原始登记"}</span>
+                        <span>{asset.source_asset_id || asset.metadata?.fork?.forked_from_asset_id ? `Fork 自 ${asset.source_asset_id || asset.metadata.fork.forked_from_asset_id}` : asset.source_task_id ? `任务 ${asset.source_task_id}` : "原始登记"}</span>
                       </div>
                     </td>
                     <td>{STATUS_LABELS[asset.review_status] ?? asset.review_status}</td>
@@ -204,11 +291,14 @@ export default function AssetCenterPanel({
                         <button type="button" className="ghost-button" disabled={forkingAssetId === asset.id} onClick={() => onFork?.(asset)}>
                           {forkingAssetId === asset.id ? "Fork 中..." : "Fork"}
                         </button>
-                        <button type="button" className="ghost-button" disabled={publishingAssetId === asset.id || asset.review_status === "published"} onClick={() => onPublish?.(asset.id)}>
+                        <button type="button" className="ghost-button" disabled={publishingAssetId === asset.id || asset.review_status === "published"} onClick={() => onPublish?.(asset.id, "public")}>
                           {publishingAssetId === asset.id ? "发布中..." : "发布"}
                         </button>
                         {isAdmin ? (
                           <>
+                          <button type="button" className="ghost-button" disabled={reviewingAssetId === asset.id} onClick={() => handleEditMetadata(asset)}>
+                            分类标签
+                          </button>
                           <button type="button" className="ghost-button" disabled={reviewingAssetId === asset.id} onClick={() => onReview?.(asset.id, { review_status: "approved" })}>
                             {reviewingAssetId === asset.id ? "处理中..." : "通过"}
                           </button>
