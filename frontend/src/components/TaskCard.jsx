@@ -1,4 +1,4 @@
-import { getBestLeaderboardEntry, getLeaderboardCandidateCount } from "../lib/leaderboard.js";
+import { getLeaderboardCandidateCount } from "../lib/leaderboard.js";
 
 const STATUS_LABELS = {
   draft: "草稿",
@@ -84,18 +84,6 @@ function getTokenSummary(task) {
   return `${total.toLocaleString("zh-CN")} Token`;
 }
 
-function getBestCandidateSummary(task) {
-  if (!task.last_run) return "暂无";
-  const bestEntry = getBestLeaderboardEntry(task.last_run.leaderboard, task.last_run.metric_name ?? "validation_score");
-  return bestEntry?.label ?? task.last_run.best_model ?? "暂无";
-}
-
-function getCandidateCountSummary(task) {
-  if (!task.last_run) return "暂无";
-  const candidateCount = getLeaderboardCandidateCount(task.last_run.leaderboard, task.last_run.metric_name ?? "validation_score");
-  return candidateCount ? `${candidateCount} 个` : "未记录";
-}
-
 function getStatusTone(status) {
   if (status === "failed") return "danger";
   if (status === "completed" || status === "published") return "success";
@@ -134,27 +122,25 @@ export default function TaskCard({
         <span>{task.dataset_filename ?? "未上传数据"}</span>
       </div>
 
-      <div className="task-highlights">
+      <div className="task-card-facts">
         <div><span>目标列</span><strong>{task.label_column ?? "未解析"}</strong></div>
-        <div><span>任务类型</span><strong>{formatProblemType(task.problem_type)}</strong></div>
-        <div><span>最佳候选</span><strong>{getBestCandidateSummary(task)}</strong></div>
-        <div><span>候选数</span><strong>{getCandidateCountSummary(task)}</strong></div>
+        <div><span>类型</span><strong>{formatProblemType(task.problem_type)}</strong></div>
+        <div><span>结果</span><strong>{getMetricSummary(task)}</strong></div>
       </div>
 
-      <dl className="task-meta task-meta-compact">
-        <div><dt>最新结果</dt><dd>{getMetricSummary(task)}</dd></div>
-        <div><dt>Token</dt><dd>{getTokenSummary(task)}</dd></div>
-        <div><dt>更新时间</dt><dd>{new Date(task.updated_at).toLocaleString()}</dd></div>
-      </dl>
+      <div className="task-card-foot">
+        <span>{getTokenSummary(task)}</span>
+        <time>{new Date(task.updated_at).toLocaleString()}</time>
+      </div>
 
       {task.notes ? <p className="meta-note">{task.notes}</p> : null}
 
       <div className="button-row connector-actions task-card-actions">
         <button type="button" className="chip-button" onClick={() => onSelect(task.id)}>
-          {selected ? "当前选中" : "查看详情"}
+          {selected ? "已打开" : "打开"}
         </button>
         <button type="button" className="ghost-button" onClick={() => onAnalyze(task.id)} disabled={!task.dataset_filename || analyzing || running}>
-          {analyzing ? "解析中..." : "AI 解析"}
+          {analyzing ? "解析中..." : "解析"}
         </button>
         <button type="button" className="primary-button" onClick={() => onRun(task.id)} disabled={!task.dataset_filename || running || ["waiting_human", "paused_for_review"].includes(task.status)}>
           {running ? "运行中..." : "运行"}

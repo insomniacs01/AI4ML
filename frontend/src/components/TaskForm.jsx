@@ -42,12 +42,11 @@ export default function TaskForm({
   const connectorOptions = Array.isArray(connectors) ? connectors : [];
 
   return (
-    <section className="section-card task-form-card">
+    <section className="section-card task-form-card task-panel">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Step 1</p>
-          <h3>创建任务并上传 CSV</h3>
-          <p>这里一次性配置任务描述、阶段 AI 覆盖和人工参与策略。未覆盖的阶段会继承团队默认路由。</p>
+          <p className="eyebrow">新任务</p>
+          <h3>描述需求并上传 CSV</h3>
         </div>
       </div>
 
@@ -75,16 +74,21 @@ export default function TaskForm({
           />
         </label>
 
-        <div className="placeholder-panel">
-          <strong>技术字段仍然由 AI 自动解析</strong>
-          <p>上传后，系统会把任务描述、CSV 列名和预览样本发给当前阶段路由对应的 AI，自动填充目标列、任务类型和建议指标。</p>
-        </div>
+        <label className="field">
+          <span>CSV 数据集</span>
+          <input key={fileInputKey} type="file" accept=".csv" onChange={onFileChange} required />
+          <small className="helper-text">{selectedFile ? `已选择：${selectedFile.name}` : "只支持 .csv 文件"}</small>
+        </label>
+
+        <button type="submit" className="primary-button task-submit-button" disabled={submitting}>
+          {submitting ? "提交中..." : "提交并解析"}
+        </button>
 
         <details className="task-advanced-section">
           <summary>
             <div>
               <strong>高级配置</strong>
-              <span>阶段 AI 覆盖与人工参与策略</span>
+              <span>阶段 AI 覆盖、人工复核节点</span>
             </div>
             <em>展开</em>
           </summary>
@@ -159,7 +163,7 @@ export default function TaskForm({
                   <div className="section-head">
                     <div>
                       <h3>策略 {index + 1}</h3>
-                      <p>这个策略会在对应阶段自动创建一个人机协同节点。</p>
+                      <p>到达对应阶段时创建一个复核节点。</p>
                     </div>
                     <button type="button" className="ghost-button" onClick={() => onRemovePolicy(index)}>
                       删除
@@ -271,16 +275,6 @@ export default function TaskForm({
             </div>
           </section>
         </details>
-
-        <label className="field">
-          <span>CSV 数据集</span>
-          <input key={fileInputKey} type="file" accept=".csv" onChange={onFileChange} required />
-          <small className="helper-text">{selectedFile ? `已选择：${selectedFile.name}` : "只支持 .csv 文件"}</small>
-        </label>
-
-        <button type="submit" className="primary-button" disabled={submitting}>
-          {submitting ? "提交中..." : "提交需求并上传 CSV"}
-        </button>
       </form>
     </section>
   );

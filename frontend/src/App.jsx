@@ -23,28 +23,28 @@ import { api } from "./lib/api.js";
 import { readSupabaseAuthSettings, supabase, supabaseReady } from "./lib/supabase.js";
 
 const NAV_GROUPS = [
-  { id: "work", label: "建模工作台" },
-  { id: "collab", label: "协同与资产" },
-  { id: "admin", label: "团队治理" },
-  { id: "system", label: "运行状态" },
+  { id: "work", label: "日常使用" },
+  { id: "collab", label: "协作资产" },
+  { id: "admin", label: "团队管理" },
+  { id: "system", label: "系统" },
 ];
 
 const NAV_ITEMS = [
-  { id: "tasks", label: "任务", short: "任", group: "work", helper: "创建、上传、运行" },
-  { id: "workflow", label: "工作流", short: "流", group: "work", helper: "阶段进度" },
-  { id: "report", label: "报告", short: "报", group: "work", helper: "结果解释" },
-  { id: "demo", label: "Web Demo", short: "测", group: "work", helper: "在线预测" },
-  { id: "conversations", label: "AI 对话", short: "话", group: "work", helper: "Prompt / Response" },
-  { id: "code", label: "代码工作区", short: "码", group: "work", helper: "真实工件", requiresDeveloper: true },
-  { id: "human", label: "人机协同", short: "协", group: "collab", helper: "复核与恢复" },
-  { id: "usage", label: "Token 用量", short: "耗", group: "collab", helper: "消耗追踪" },
-  { id: "assets", label: "资产", short: "资", group: "collab", helper: "登记与审核" },
-  { id: "connectors", label: "连接器", short: "连", group: "admin", helper: "模型来源", requiresAdmin: true },
-  { id: "routing", label: "默认 AI", short: "由", group: "admin", helper: "阶段路由", requiresAdmin: true },
-  { id: "quotas", label: "配额", short: "额", group: "admin", helper: "成员额度", requiresAdmin: true },
-  { id: "team", label: "团队", short: "团", group: "admin", helper: "成员权限" },
-  { id: "audit", label: "审计", short: "审", group: "admin", helper: "治理日志", requiresAdmin: true },
-  { id: "system", label: "系统", short: "系", group: "system", helper: "健康检查" },
+  { id: "tasks", label: "开始建模", short: "建", group: "work", helper: "新建与运行" },
+  { id: "workflow", label: "运行进度", short: "进", group: "work", helper: "阶段与日志" },
+  { id: "report", label: "模型报告", short: "报", group: "work", helper: "结果解释" },
+  { id: "demo", label: "在线预测", short: "测", group: "work", helper: "试用模型" },
+  { id: "conversations", label: "AI 记录", short: "话", group: "work", helper: "问答记录" },
+  { id: "code", label: "代码文件", short: "码", group: "work", helper: "运行工件", requiresDeveloper: true },
+  { id: "human", label: "复核待办", short: "协", group: "collab", helper: "人工决策" },
+  { id: "usage", label: "消耗账本", short: "账", group: "collab", helper: "Token 明细" },
+  { id: "assets", label: "资产库", short: "资", group: "collab", helper: "发布复用" },
+  { id: "connectors", label: "模型连接", short: "连", group: "admin", helper: "API Key", requiresAdmin: true },
+  { id: "routing", label: "阶段默认 AI", short: "由", group: "admin", helper: "默认模型", requiresAdmin: true },
+  { id: "quotas", label: "成员配额", short: "额", group: "admin", helper: "额度控制", requiresAdmin: true },
+  { id: "team", label: "成员与团队", short: "团", group: "admin", helper: "角色状态" },
+  { id: "audit", label: "操作审计", short: "审", group: "admin", helper: "操作记录", requiresAdmin: true },
+  { id: "system", label: "系统状态", short: "系", group: "system", helper: "健康检查" },
 ];
 
 function createEmptyTaskPolicy() {
@@ -201,6 +201,94 @@ function getTaskSummary(task) {
   if (task?.label_column) return `已识别目标列 ${task.label_column}，任务类型待补全。`;
   return `已识别任务类型 ${formatProblemType(task.problem_type)}，目标列待补全。`;
 }
+function getTaskNextStep(task) {
+  if (!task) {
+    return {
+      tone: "info",
+      title: "新建一个建模任务",
+      body: "填写任务名称、业务描述并上传 CSV。",
+      action: "提交需求并上传 CSV",
+      page: "tasks",
+    };
+  }
+  if (!task.dataset_filename) {
+    return {
+      tone: "warning",
+      title: "补上传 CSV 数据集",
+      body: "这个任务还没有数据文件，暂时不能进入 AI 解析和运行。",
+      action: "选择 CSV 文件",
+      page: "tasks",
+    };
+  }
+  if (!task.label_column || !task.problem_type) {
+    return {
+      tone: "warning",
+      title: "让 AI 解析目标列和任务类型",
+      body: "解析完成后才能把明确的建模语义交给 MLZero。",
+      action: "AI 解析",
+      page: "tasks",
+    };
+  }
+  if (["paused_for_review", "waiting_human"].includes(task.status)) {
+    return {
+      tone: "warning",
+      title: "处理人工复核待办",
+      body: "任务正在等待人工确认、修改或恢复。",
+      action: "打开复核待办",
+      page: "human",
+    };
+  }
+  if (task.status === "running") {
+    return {
+      tone: "info",
+      title: "等待本次运行完成",
+      body: "运行结束后会回写指标、候选模型和输出目录。",
+      action: "查看运行进度",
+      page: "workflow",
+    };
+  }
+  if (task.status === "failed") {
+    return {
+      tone: "danger",
+      title: "查看失败原因或重新运行",
+      body: task.notes || "最近一次运行失败，失败日志和输出目录会保留。",
+      action: "查看运行进度",
+      page: "workflow",
+    };
+  }
+  if (!task.last_run) {
+    return {
+      tone: "info",
+      title: "运行 MLZero 训练模型",
+      body: "AI 解析已经就绪，可以开始自动建模。",
+      action: "运行 MLZero",
+      page: "tasks",
+    };
+  }
+  return {
+    tone: "success",
+    title: "查看结果、报告和预测",
+    body: "模型结果已经回写，可以继续看报告、试在线预测或沉淀资产。",
+    action: "打开模型报告",
+    page: "report",
+  };
+}
+function getTaskLifecycleSteps(task) {
+  return [
+    { key: "task", label: "任务", state: task ? "done" : "active" },
+    { key: "dataset", label: "数据", state: task?.dataset_filename ? "done" : task ? "active" : "pending" },
+    {
+      key: "analysis",
+      label: "AI 解析",
+      state: task?.label_column && task?.problem_type ? "done" : task?.dataset_filename ? "active" : "pending",
+    },
+    {
+      key: "run",
+      label: "训练",
+      state: task?.last_run ? "done" : task?.status === "failed" ? "danger" : task?.status === "running" ? "active" : "pending",
+    },
+  ];
+}
 function getAnalysisSourceLabel(task) {
   const source = getTaskAnalysis(task)?.analysis_source;
   if (!source) return "未标注";
@@ -348,6 +436,9 @@ export default function App() {
     [teamCanDevelop, teamCanManage],
   );
   const activeNavItem = useMemo(() => visibleNavItems.find((item) => item.id === activePage) ?? visibleNavItems[0] ?? null, [activePage, visibleNavItems]);
+  const completedTaskCount = useMemo(() => tasks.filter((task) => task.status === "completed" || task.last_run).length, [tasks]);
+  const waitingTaskCount = useMemo(() => tasks.filter((task) => ["paused_for_review", "waiting_human"].includes(task.status)).length, [tasks]);
+  const workspaceNextStep = useMemo(() => getTaskNextStep(selectedTask), [selectedTask]);
 
   async function loadHealth() {
     setHealthLoading(true);
@@ -1524,7 +1615,7 @@ export default function App() {
   }
 
   function renderTaskDetail() {
-    if (!selectedTask) return <div className="empty-state">先从左侧任务列表选择一个任务，或先创建新任务。</div>;
+    if (!selectedTask) return <div className="empty-state task-detail-panel">先创建一个任务，或从任务队列中选择已有任务。</div>;
     const analysis = getTaskAnalysis(selectedTask);
     const analysisUsage = selectedTask.analysis_token_usage ?? null;
     const runUsage = getTaskRunUsage(selectedTask);
@@ -1536,13 +1627,59 @@ export default function App() {
     const datasetProfile = getTaskDatasetProfile(selectedTask);
     const datasetColumns = Array.isArray(datasetProfile?.columns) ? datasetProfile.columns : [];
     const previewRows = Array.isArray(datasetProfile?.preview_rows) ? datasetProfile.preview_rows : [];
+    const nextStep = getTaskNextStep(selectedTask);
+    const lifecycleSteps = getTaskLifecycleSteps(selectedTask);
+    const canRunSelectedTask = Boolean(selectedTask.dataset_filename)
+      && runningTaskId !== selectedTask.id
+      && !["waiting_human", "paused_for_review"].includes(selectedTask.status);
+    const canAnalyzeSelectedTask = Boolean(selectedTask.dataset_filename)
+      && analyzingTaskId !== selectedTask.id
+      && runningTaskId !== selectedTask.id;
+
+    function handleNextStepClick() {
+      if (nextStep.action === "AI 解析") {
+        if (canAnalyzeSelectedTask) void handleAnalyzeTask(selectedTask.id);
+        return;
+      }
+      if (nextStep.action === "运行 MLZero") {
+        if (canRunSelectedTask) void handleRunTask(selectedTask.id);
+        return;
+      }
+      setActivePage(nextStep.page);
+    }
+
     return (
-      <div className="detail-stack task-detail-panel">
+      <div className="detail-stack task-detail-panel task-panel">
         <section className="section-card task-detail-hero">
-          <div className="section-head">
-            <div><p className="eyebrow">任务详情</p><h3>{selectedTask.name}</h3><p className="task-description-large">{selectedTask.description}</p></div>
+          <div className="task-detail-titlebar">
+            <div>
+              <p className="eyebrow">当前任务</p>
+              <h3>{selectedTask.name}</h3>
+              <p className="task-description-large">{selectedTask.description}</p>
+            </div>
             <span className={`runtime-pill ${getTaskStatusTone(selectedTask.status)}`}>{formatTaskStatus(selectedTask.status)}</span>
           </div>
+
+          <div className="task-next-action">
+            <span className={`task-next-dot ${nextStep.tone}`} />
+            <div>
+              <strong>{nextStep.title}</strong>
+              <p>{nextStep.body}</p>
+            </div>
+            <button type="button" className="primary-button" onClick={handleNextStepClick}>
+              {nextStep.action}
+            </button>
+          </div>
+
+          <div className="task-progress-strip" aria-label="任务阶段">
+            {lifecycleSteps.map((step, index) => (
+              <div key={step.key} className={`task-progress-step ${step.state}`}>
+                <span>{index + 1}</span>
+                <strong>{step.label}</strong>
+              </div>
+            ))}
+          </div>
+
           <div className="summary-grid task-detail-kpis">
             <article className="summary-item"><span>数据集</span><strong>{selectedTask.dataset_filename ?? "未上传"}</strong></article>
             <article className="summary-item"><span>AI 解析状态</span><strong>{getTaskAnalysisStatus(selectedTask)}</strong></article>
@@ -1557,100 +1694,33 @@ export default function App() {
               <p>后端会执行严格增量重跑：上游阶段复用已有真实产物，下游阶段写入新的运行目录和 `incremental_rerun_manifest.json`。</p>
             </div>
           ) : null}
-          <p className="section-subtitle">{getTaskSummary(selectedTask)}</p>
-          <div className="button-row connector-actions">
-            <button type="button" className="ghost-button" onClick={() => void handleAnalyzeTask(selectedTask.id)} disabled={!selectedTask.dataset_filename || analyzingTaskId === selectedTask.id || runningTaskId === selectedTask.id}>{analyzingTaskId === selectedTask.id ? "AI 解析中..." : "AI 解析"}</button>
-            <button type="button" className="primary-button" onClick={() => void handleRunTask(selectedTask.id)} disabled={!selectedTask.dataset_filename || runningTaskId === selectedTask.id || ["waiting_human", "paused_for_review"].includes(selectedTask.status)}>{getTaskRunButtonLabel(selectedTask, runningTaskId === selectedTask.id)}</button>
-            <button type="button" className="chip-button" onClick={() => setActivePage("conversations")}>查看 AI 对话</button>
-            <button type="button" className="chip-button" onClick={() => setActivePage("demo")}>Web Demo</button>
-            {teamCanDevelop ? <button type="button" className="chip-button" onClick={() => setActivePage("code")}>查看 AI 代码</button> : null}
-            <button type="button" className="chip-button" onClick={() => setActivePage("human")}>人机协同</button>
+
+          <div className="button-row task-action-row">
+            <button type="button" className="ghost-button" onClick={() => void handleAnalyzeTask(selectedTask.id)} disabled={!canAnalyzeSelectedTask}>{analyzingTaskId === selectedTask.id ? "AI 解析中..." : "AI 解析"}</button>
+            <button type="button" className="primary-button" onClick={() => void handleRunTask(selectedTask.id)} disabled={!canRunSelectedTask}>{getTaskRunButtonLabel(selectedTask, runningTaskId === selectedTask.id)}</button>
+            <button type="button" className="chip-button" onClick={() => setActivePage("workflow")}>运行进度</button>
+            <button type="button" className="chip-button" onClick={() => setActivePage("report")}>模型报告</button>
+            <button type="button" className="chip-button" onClick={() => setActivePage("demo")}>在线预测</button>
+            {teamCanDevelop ? <button type="button" className="chip-button" onClick={() => setActivePage("code")}>代码文件</button> : null}
           </div>
         </section>
 
-        <section className="section-card">
-          <div className="section-head">
+        <details className="section-card task-detail-fold" open={Boolean(showingFailedAttempt || selectedTask.last_run || lastRunAttempt)}>
+          <summary>
             <div>
-              <h3>数据集画像</h3>
-              <p>上传 CSV 后由后端读取真实文件生成列名、样例行和缺失值概览。</p>
+              <h3>MLZero 运行结果</h3>
+              <p>
+                {showingFailedAttempt
+                  ? "最近一次运行失败"
+                  : selectedTask.last_run
+                    ? `${formatMetricName(selectedTask.last_run.metric_name)}：${formatMetricValue(selectedTask.last_run.metric_value)}`
+                    : lastRunAttempt
+                      ? "已有运行尝试"
+                      : "尚未运行"}
+              </p>
             </div>
-            {datasetProfile ? <span className="runtime-pill success">已生成</span> : <span className="runtime-pill warning">未记录</span>}
-          </div>
-          {datasetProfile ? (
-            <div className="detail-stack">
-              <div className="summary-grid">
-                <article className="summary-item"><span>文件名</span><strong>{datasetProfile.filename || selectedTask.dataset_filename || "未记录"}</strong></article>
-                <article className="summary-item"><span>行数</span><strong>{Number(datasetProfile.row_count ?? 0).toLocaleString("zh-CN")}</strong></article>
-                <article className="summary-item"><span>列数</span><strong>{Number(datasetProfile.column_count ?? 0).toLocaleString("zh-CN")}</strong></article>
-                <article className="summary-item"><span>目标列</span><strong>{datasetProfile.target_column || selectedTask.label_column || "待解析"}</strong></article>
-              </div>
-              {datasetColumns.length ? (
-                <div className="table-wrap compact-table">
-                  <table>
-                    <thead><tr><th>列名</th><th>类型</th><th>非空</th><th>缺失率</th><th>样例</th></tr></thead>
-                    <tbody>
-                      {datasetColumns.slice(0, 12).map((column) => (
-                        <tr key={column.name}>
-                          <td>{column.name}</td>
-                          <td>{column.inferred_type}</td>
-                          <td>{Number(column.non_empty_count ?? 0).toLocaleString("zh-CN")}</td>
-                          <td>{formatRatio(column.missing_ratio)}</td>
-                          <td>{Array.isArray(column.sample_values) && column.sample_values.length ? column.sample_values.join(" / ") : "暂无"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-              {previewRows.length ? (
-                <details className="callout">
-                  <summary>查看样例行</summary>
-                  <pre className="code-block">{JSON.stringify(previewRows.slice(0, 8), null, 2)}</pre>
-                </details>
-              ) : null}
-            </div>
-          ) : (
-            <div className="empty-state">当前任务还没有数据集画像。重新上传 CSV 后会写入真实预览信息。</div>
-          )}
-        </section>
-
-        <section className="section-card">
-          <div className="section-head"><div><h3>AI 解析说明</h3><p>这里展示的是当前运行时 AI 返回并写回任务记录的结果。</p></div></div>
-          {analysis ? (
-            <div className="detail-stack">
-              <div className="summary-grid">
-                <article className="summary-item"><span>解析来源</span><strong>{getAnalysisSourceLabel(selectedTask)}</strong></article>
-                <article className="summary-item"><span>解析模型</span><strong>{analysis.analysis_model ?? "未记录"}</strong></article>
-                <article className="summary-item"><span>解析时间</span><strong>{formatDateTime(analysis.analyzed_at)}</strong></article>
-                <article className="summary-item"><span>列名数量</span><strong>{Array.isArray(analysis.column_names) ? analysis.column_names.length : 0}</strong></article>
-              </div>
-              <div className="callout"><strong>AI 推断理由</strong><p>{analysis.reasoning ?? "暂无"}</p></div>
-              {analysis.raw_response ? <details className="callout"><summary>查看 AI 原始返回</summary><pre className="code-block">{analysis.raw_response}</pre></details> : null}
-            </div>
-          ) : <div className="empty-state">这个任务还没有拿到 AI 解析结果。先确认连接器可用，再点击“AI 解析”。</div>}
-        </section>
-
-        <section className="section-card">
-          <div className="section-head">
-            <div>
-              <h3>AI 对话记录</h3>
-              <p>对话日志已经移到独立页面展示，会按 Prompt / Response 的聊天形式展开，不再挤占任务详情区。</p>
-            </div>
-            <button type="button" className="primary-button" onClick={() => setActivePage("conversations")}>
-              打开 AI 对话页
-            </button>
-          </div>
-          {taskAIConversationsError ? <div className="error-banner">{taskAIConversationsError}</div> : null}
-          <div className="summary-grid">
-            <article className="summary-item"><span>已记录问答</span><strong>{taskAIConversationsState === "loading" ? "刷新中..." : conversationCount ? `${conversationCount} 组` : "暂无"}</strong></article>
-            <article className="summary-item"><span>当前查看方式</span><strong>独立聊天页</strong></article>
-            <article className="summary-item"><span>覆盖范围</span><strong>任务分析 + 最新 MLZero 尝试</strong></article>
-            <article className="summary-item"><span>建议操作</span><strong>切到 AI 对话页查看完整问答流</strong></article>
-          </div>
-        </section>
-
-        <section className="section-card">
-          <div className="section-head"><div><h3>MLZero 运行结果</h3><p>成功运行会展示指标、最佳候选和候选对比；失败尝试也会保留输出目录与 token，方便继续排查。</p></div></div>
+            <span className="disclosure-action">展开</span>
+          </summary>
           {showingFailedAttempt ? (
             <div className="detail-stack">
               <div className="summary-grid">
@@ -1685,11 +1755,88 @@ export default function App() {
                 <article className="summary-item"><span>运行状态</span><strong>{selectedTask.notes ?? "暂无"}</strong></article>
               </div>
             </div>
-          ) : <div className="empty-state">还没有运行结果。真正成功时，你会在这里看到指标、候选对比和输出目录，而不只是一个“已完成”状态。</div>}
+          ) : <div className="empty-state">还没有运行结果。</div>}
+        </details>
+
+        <details className="section-card task-detail-fold" open={Boolean(analysis && !selectedTask.last_run)}>
+          <summary>
+            <div>
+              <h3>AI 解析</h3>
+              <p>{getTaskSummary(selectedTask)}</p>
+            </div>
+            <span className="disclosure-action">展开</span>
+          </summary>
+          {analysis ? (
+            <div className="detail-stack">
+              <div className="summary-grid">
+                <article className="summary-item"><span>解析来源</span><strong>{getAnalysisSourceLabel(selectedTask)}</strong></article>
+                <article className="summary-item"><span>解析模型</span><strong>{analysis.analysis_model ?? "未记录"}</strong></article>
+                <article className="summary-item"><span>解析时间</span><strong>{formatDateTime(analysis.analyzed_at)}</strong></article>
+                <article className="summary-item"><span>列名数量</span><strong>{Array.isArray(analysis.column_names) ? analysis.column_names.length : 0}</strong></article>
+              </div>
+              <div className="callout"><strong>AI 推断理由</strong><p>{analysis.reasoning ?? "暂无"}</p></div>
+              {analysis.raw_response ? <details className="callout"><summary>查看 AI 原始返回</summary><pre className="code-block">{analysis.raw_response}</pre></details> : null}
+            </div>
+          ) : <div className="empty-state">这个任务还没有拿到 AI 解析结果。</div>}
+        </details>
+
+        <details className="section-card task-detail-fold">
+          <summary>
+            <div>
+              <h3>数据集画像</h3>
+              <p>{datasetProfile ? `${Number(datasetProfile.row_count ?? 0).toLocaleString("zh-CN")} 行 · ${Number(datasetProfile.column_count ?? 0).toLocaleString("zh-CN")} 列` : "未记录"}</p>
+            </div>
+            <span className="disclosure-action">展开</span>
+          </summary>
+          {datasetProfile ? (
+            <div className="detail-stack">
+              <div className="summary-grid">
+                <article className="summary-item"><span>文件名</span><strong>{datasetProfile.filename || selectedTask.dataset_filename || "未记录"}</strong></article>
+                <article className="summary-item"><span>行数</span><strong>{Number(datasetProfile.row_count ?? 0).toLocaleString("zh-CN")}</strong></article>
+                <article className="summary-item"><span>列数</span><strong>{Number(datasetProfile.column_count ?? 0).toLocaleString("zh-CN")}</strong></article>
+                <article className="summary-item"><span>目标列</span><strong>{datasetProfile.target_column || selectedTask.label_column || "待解析"}</strong></article>
+              </div>
+              {datasetColumns.length ? (
+                <div className="table-wrap compact-table">
+                  <table>
+                    <thead><tr><th>列名</th><th>类型</th><th>非空</th><th>缺失率</th><th>样例</th></tr></thead>
+                    <tbody>
+                      {datasetColumns.slice(0, 12).map((column) => (
+                        <tr key={column.name}>
+                          <td>{column.name}</td>
+                          <td>{column.inferred_type}</td>
+                          <td>{Number(column.non_empty_count ?? 0).toLocaleString("zh-CN")}</td>
+                          <td>{formatRatio(column.missing_ratio)}</td>
+                          <td>{Array.isArray(column.sample_values) && column.sample_values.length ? column.sample_values.join(" / ") : "暂无"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+              {previewRows.length ? (
+                <details className="callout">
+                  <summary>查看样例行</summary>
+                  <pre className="code-block">{JSON.stringify(previewRows.slice(0, 8), null, 2)}</pre>
+                </details>
+              ) : null}
+            </div>
+          ) : <div className="empty-state">当前任务还没有数据集画像。</div>}
+        </details>
+
+        <section className="section-card task-link-card">
+          <div>
+            <h3>AI 记录</h3>
+            <p>{taskAIConversationsState === "loading" ? "刷新中..." : conversationCount ? `${conversationCount} 组问答` : "暂无记录"}</p>
+          </div>
+          <button type="button" className="ghost-button" onClick={() => setActivePage("conversations")}>
+            打开记录
+          </button>
         </section>
+        {taskAIConversationsError ? <div className="error-banner">{taskAIConversationsError}</div> : null}
 
         {selectedTask.last_run ? (
-          <details className="section-card task-detail-disclosure">
+          <details className="section-card task-detail-fold">
             <summary>
               <div>
                 <h3>候选模型对比</h3>
@@ -1711,7 +1858,7 @@ export default function App() {
           </details>
         ) : null}
 
-        <details className="section-card task-detail-disclosure">
+        <details className="section-card task-detail-fold">
           <summary>
             <div>
               <h3>Token 用量明细</h3>
@@ -1825,24 +1972,87 @@ export default function App() {
           <div className="page-scroll">
             {activePage === "tasks" ? (
               <>
-                <section className="page-header workbench-header">
-                  <div>
-                    <p className="eyebrow">Tasks</p>
-                    <h1>任务上传与 AI 解析</h1>
-                    <p className="page-copy">把自然语言需求、CSV 数据集、阶段 AI 路由和人工复核策略放在一条清晰链路里。上传后系统会调用当前团队的运行时 AI 填充目标列、任务类型和指标。</p>
+                <section className="task-command-center">
+                  <div className="task-command-main">
+                    <p className="eyebrow">建模工作台</p>
+                    <h1>从 CSV 到模型结果</h1>
+                    <div className={`task-command-next ${workspaceNextStep.tone}`}>
+                      <span>下一步</span>
+                      <strong>{workspaceNextStep.title}</strong>
+                    </div>
                   </div>
-                  <div className="header-status-stack">
-                    <div className="runtime-pill info">当前运行时：{activeConnector ? `${activeConnector.display_name} · ${activeConnector.model_name}` : health?.model_alias ?? "未读取"}</div>
-                    <div className="runtime-pill">任务数：{tasks.length}</div>
+                  <div className="task-command-metrics" aria-label="任务概览">
+                    <article>
+                      <span>当前运行时</span>
+                      <strong>{activeConnector ? activeConnector.display_name : "未激活"}</strong>
+                    </article>
+                    <article>
+                      <span>任务</span>
+                      <strong>{tasks.length}</strong>
+                    </article>
+                    <article>
+                      <span>已完成</span>
+                      <strong>{completedTaskCount}</strong>
+                    </article>
+                    <article>
+                      <span>待复核</span>
+                      <strong>{waitingTaskCount}</strong>
+                    </article>
                   </div>
                 </section>
+
+                <div className="task-step-board">
+                  <article className={activeConnector ? "task-step-card done" : "task-step-card warning"}>
+                    <span>1</span>
+                    <strong>模型连接</strong>
+                    <p>{activeConnector ? `${activeConnector.model_name}` : "需要可用连接器"}</p>
+                    {teamCanManage ? <button type="button" className="chip-button" onClick={() => setActivePage("connectors")}>打开</button> : null}
+                  </article>
+                  <article className={tasks.length ? "task-step-card done" : "task-step-card active"}>
+                    <span>2</span>
+                    <strong>新建任务</strong>
+                    <p>{tasks.length ? `${tasks.length} 个任务` : "填写需求并上传 CSV"}</p>
+                  </article>
+                  <article className={selectedTask?.label_column && selectedTask?.problem_type ? "task-step-card done" : selectedTask?.dataset_filename ? "task-step-card active" : "task-step-card"}>
+                    <span>3</span>
+                    <strong>AI 解析</strong>
+                    <p>{selectedTask ? getTaskAnalysisStatus(selectedTask) : "等待任务"}</p>
+                  </article>
+                  <article className={selectedTask?.last_run ? "task-step-card done" : selectedTask?.status === "failed" ? "task-step-card danger" : selectedTask?.status === "running" ? "task-step-card active" : "task-step-card"}>
+                    <span>4</span>
+                    <strong>训练结果</strong>
+                    <p>{selectedTask?.last_run ? formatMetricName(selectedTask.last_run.metric_name) : selectedTask ? formatTaskStatus(selectedTask.status) : "等待运行"}</p>
+                  </article>
+                </div>
+
+                {!activeConnector ? (
+                  <section className="task-blocker-banner">
+                    <div>
+                      <strong>当前团队还没有激活模型连接</strong>
+                      <p>{teamCanManage ? "先保存并激活一个 OpenAI-compatible 连接器，任务上传后才会进行真实 AI 解析。" : "请联系团队管理员激活模型连接。"}</p>
+                    </div>
+                    {teamCanManage ? <button type="button" className="primary-button" onClick={() => setActivePage("connectors")}>配置模型连接</button> : null}
+                  </section>
+                ) : null}
+
                 {taskMessage ? <div className="notice-banner">{taskMessage}</div> : null}
                 {taskError ? <div className="error-banner">{taskError}</div> : null}
-                <div className="task-workspace-grid">
-                  <div className="detail-stack">
-                    <TaskForm form={taskForm} connectors={connectors} selectedFile={taskFile} fileInputKey={taskUploadToken} submitting={submittingTask} onFieldChange={handleTaskFormFieldChange} onStageRoutingChange={handleTaskStageRoutingChange} onAddPolicy={handleAddTaskPolicy} onPolicyChange={handleTaskPolicyChange} onRemovePolicy={handleRemoveTaskPolicy} onFileChange={(event) => setTaskFile(event.target.files?.[0] ?? null)} onSubmit={handleTaskSubmit} />
-                    <section className="section-card task-list-card"><div className="section-head"><div><h3>任务列表</h3><p>按任务状态、AI 解析和最近运行结果快速判断下一步动作。</p></div></div>{tasksState === "loading" && !tasks.length ? <div className="empty-state">正在读取任务列表...</div> : null}{!tasks.length && tasksState !== "loading" ? <div className="empty-state">还没有任务。先上传一个 CSV 任务。</div> : null}{tasks.length ? <div className="task-cards">{tasks.map((task) => <TaskCard key={task.id} task={task} selected={selectedTask?.id === task.id} running={runningTaskId === task.id} analyzing={analyzingTaskId === task.id} deleting={deletingTaskId === task.id} onSelect={setSelectedTaskId} onAnalyze={handleAnalyzeTask} onRun={handleRunTask} onDelete={handleDeleteTask} onOpenHumanCollaboration={(nextTaskId) => handleOpenHumanCollaboration(nextTaskId)} />)}</div> : null}</section>
-                  </div>
+                <div className="task-workspace-grid task-console-grid">
+                  <TaskForm form={taskForm} connectors={connectors} selectedFile={taskFile} fileInputKey={taskUploadToken} submitting={submittingTask} onFieldChange={handleTaskFormFieldChange} onStageRoutingChange={handleTaskStageRoutingChange} onAddPolicy={handleAddTaskPolicy} onPolicyChange={handleTaskPolicyChange} onRemovePolicy={handleRemoveTaskPolicy} onFileChange={(event) => setTaskFile(event.target.files?.[0] ?? null)} onSubmit={handleTaskSubmit} />
+                  <section className="section-card task-list-card task-panel">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">任务队列</p>
+                        <h3>选择一个任务</h3>
+                      </div>
+                      <button type="button" className="ghost-button" onClick={() => void loadTasks()} disabled={tasksState === "loading"}>
+                        {tasksState === "loading" ? "刷新中..." : "刷新"}
+                      </button>
+                    </div>
+                    {tasksState === "loading" && !tasks.length ? <div className="empty-state">正在读取任务列表...</div> : null}
+                    {!tasks.length && tasksState !== "loading" ? <div className="empty-state">还没有任务。</div> : null}
+                    {tasks.length ? <div className="task-cards">{tasks.map((task) => <TaskCard key={task.id} task={task} selected={selectedTask?.id === task.id} running={runningTaskId === task.id} analyzing={analyzingTaskId === task.id} deleting={deletingTaskId === task.id} onSelect={setSelectedTaskId} onAnalyze={handleAnalyzeTask} onRun={handleRunTask} onDelete={handleDeleteTask} onOpenHumanCollaboration={(nextTaskId) => handleOpenHumanCollaboration(nextTaskId)} />)}</div> : null}
+                  </section>
                   {renderTaskDetail()}
                 </div>
               </>
