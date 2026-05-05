@@ -71,6 +71,8 @@ const NAV_ITEMS = [
   { id: "system", label: "系统状态", short: "系", group: "system", helper: "健康检查" },
 ];
 
+const MAX_KEPT_ROUTE_PANES = 2;
+
 function createEmptyTaskPolicy() {
   return {
     client_id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -741,27 +743,6 @@ export default function App() {
 
   function warmPage(pageId) {
     preloadPageComponent(pageId);
-    if (!session?.access_token || !activeTeamId) return;
-
-    if (pageId === "usage") {
-      if (usageState === "idle") void loadUsageSummary();
-      if (tokenLedgerState === "idle") void loadTokenLedgers();
-      return;
-    }
-    if (pageId === "quotas" && quotaState === "idle") void loadQuotaSummary();
-    if (pageId === "routing" && routingState === "idle") void loadRoutingPolicies();
-    if (pageId === "assets" && assetState === "idle") void loadAssets();
-    if (pageId === "audit" && auditState === "idle") void loadAuditLogs();
-    if (pageId === "team") {
-      if (!teamMembers.length && !teamBusy) void loadTeamMembers();
-      if (teamSettingsState === "idle") void loadTeamSettings();
-    }
-    if (pageId === "conversations" && selectedTask?.id && taskAIConversationsState === "idle") {
-      void loadTaskAIConversations(selectedTask.id);
-    }
-    if (pageId === "report" && selectedTask?.id && taskModelReportState === "idle") {
-      void loadTaskModelReport(selectedTask.id);
-    }
   }
 
   async function refreshWorkspaceData() {
@@ -905,24 +886,6 @@ export default function App() {
   }, [activePage, activeTeamId, session?.access_token, teamCanManage]);
 
   useEffect(() => {
-    if (!session) return undefined;
-    const pageIds = visibleNavItems.map((item) => item.id).filter((id) => id !== activePage && PAGE_LOADERS[id]);
-    if (!pageIds.length) return undefined;
-
-    const preloadVisiblePages = () => {
-      pageIds.forEach(preloadPageComponent);
-    };
-
-    if ("requestIdleCallback" in window) {
-      const idleId = window.requestIdleCallback(preloadVisiblePages, { timeout: 2500 });
-      return () => window.cancelIdleCallback(idleId);
-    }
-
-    const timerId = window.setTimeout(preloadVisiblePages, 800);
-    return () => window.clearTimeout(timerId);
-  }, [activePage, session, visibleNavItems]);
-
-  useEffect(() => {
     if (!tasks.length) {
       setSelectedTaskId("");
       return;
@@ -940,8 +903,15 @@ export default function App() {
     setVisitedPages((current) => {
       const visiblePageIds = new Set(visibleNavItems.map((item) => item.id));
       visiblePageIds.add(activePage);
-      const next = new Set([...current].filter((pageId) => visiblePageIds.has(pageId)));
+      const next = new Set([...current].filter((pageId) => pageId !== activePage && visiblePageIds.has(pageId)));
       next.add(activePage);
+
+      while (next.size > MAX_KEPT_ROUTE_PANES) {
+        const oldestPageId = next.values().next().value;
+        if (!oldestPageId || oldestPageId === activePage) break;
+        next.delete(oldestPageId);
+      }
+
       if (next.size === current.size && [...next].every((pageId) => current.has(pageId))) return current;
       return next;
     });
