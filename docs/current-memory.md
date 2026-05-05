@@ -1437,3 +1437,100 @@
 - 当前注意事项：
   - Supabase 上线环境必须重新执行最新 `supabase/schema.sql`，否则 `dataset_profile`、阶段耗时/日志字段、资产元数据字段、`adjust_member_token_usage` RPC 和 Token 流水页面都会缺依赖。
   - TokenLedger 的 `calculation_method` 当前仍以 provider usage / MLZero token_usage.json 为主；需求文档中的 tokenizer 离线复算只应在后续确实接入 tokenizer 后启用，不能用固定倍率估算。
+
+## 2026-05-05 multi-agent collaboration and speed pass
+
+- 用户本轮连续关注两个核心问题：
+  - 项目是否已经是“多 Agent 协同”形式。
+  - 所有页面切换、加载和使用体感太慢，要求“极速”优化。
+- 当前已新增真实的 `多 Agent 协同中心` 页面：
+  - 前端文件：`frontend/src/components/MultiAgentCollaborationPanel.jsx`
+  - 导航入口：`Agent 协同`
+  - 映射 6 个协作 Agent：
+    - Agent-Alpha：需求解析
+    - Agent-Beta：数据分析
+    - Agent-Gamma：特征工程
+    - Agent-Delta：模型选择
+    - Agent-Epsilon：训练验证
+    - Agent-Zeta：报告生成
+  - 页面使用真实 `GET /api/tasks/{task_id}/human-collaboration` 快照，不使用假数据。
+  - 布局已按用户反馈改过：去掉挤占空间的左侧任务栏，任务选择器上移到顶部，协作图获得完整宽度，状态表和事件日志放到底部区域。
+
+### 当前多 Agent 的真实边界
+
+- 当前“多 Agent 协同”已经有前端可视化和阶段/人工协同状态映射。
+- 当前 6 个 Agent 是围绕现有 MLZero/工作流阶段的可观察协作视图，不是已经启动 6 个独立后端进程或 6 个独立模型 worker。
+- 页面必须继续保持真实状态原则：
+  - 只展示任务、阶段、人工协同请求、产物和运行事件中已经存在的真实信息。
+  - 不要为了让 Agent 看起来繁忙而生成假日志、假产物、假进度。
+
+### 当前极速优化已经完成的内容
+
+- 前端请求层优化：
+  - `frontend/src/lib/api.js` 增加 30 秒 GET 短缓存。
+  - 并发 GET 请求去重，同一个请求在进行中时复用 Promise。
+  - 非 GET 请求会清空 GET 缓存，避免修改后继续读旧数据。
+  - 支持 `{ noCache: true }` 用于手动刷新。
+- 首屏加载优化：
+  - 登录进入团队后不再一次性拉所有页面的数据。
+  - 当前默认只加载任务列表和模型连接器。
+  - 用量、Token 流水、配额、路由、资产、审计、团队成员/设置改为进入对应页面后再加载。
+- 页面代码加载优化：
+  - `frontend/src/App.jsx` 已用 `React.lazy` / `Suspense` 做页面级拆包。
+  - 大页面组件如 Agent、工作流、模型报告、在线预测、AI 记录、代码工作区、人机协同、资产、审计、配额、团队等都改为按需加载。
+  - 导航悬停 / 聚焦会预加载对应页面 chunk 和部分只读数据。
+- 页面切换体感优化：
+  - `frontend/src/App.jsx` 新增 `RoutePane` 与 `visitedPages`。
+  - 已打开过的页面现在会保活，切换页面时只隐藏/显示，不再卸载重建。
+  - 页面局部状态、已渲染内容、展开状态等更容易保留。
+  - AI 记录和模型报告页已有当前任务数据时，切回页面不会立刻重新进入 loading，除非任务变更或用户手动刷新。
+- 协作快照缓存：
+  - 新增 `frontend/src/lib/collaborationCache.js`。
+  - `WorkflowStagePanel`、`MultiAgentCollaborationPanel`、`HumanCollaborationPanel` 共享 60 秒协作快照缓存。
+  - 切换这些页面时优先显示缓存快照，再后台刷新真实数据。
+
+### 当前后端性能优化
+
+- `backend/app/core/supabase_auth.py`
+  - 增加 30 秒 Supabase 用户和团队成员身份缓存。
+  - 避免每个业务接口都重复打 Supabase auth / membership 请求。
+  - 注意：团队角色或成员状态变化最多可能有 30 秒生效延迟，这是为了速度做出的显式权衡。
+- `backend/app/services/task_human_collaboration.py`
+  - `get_snapshot()` 不再每次读取协作状态时 upsert 6 条阶段记录。
+  - 现在读取已有阶段记录和人工请求后，在内存中构造阶段快照。
+  - `sync_task_stages()` 仍保留给写入/运行路径使用。
+  - 这避免了 Agent、工作流、人机协同页面反复打开时造成 Supabase 写入风暴。
+
+### 本轮 GitHub 状态
+
+- 本轮代码已经推送到 GitHub 远端：
+  - remote：`origin https://github.com/insomniacs01/AI4ML.git`
+  - branch：`main`
+- 关键提交：
+  - `7dc5885 Optimize workspace loading and add multi-agent view`
+  - `b7119ce Keep workspace pages alive during navigation`
+- 当前本地工作区还有一个未跟踪文件：
+  - `data/GAID_MASTER_V2_COMPILATION_FINAL.csv`
+  - 该文件不是本轮代码改动的一部分，尚未加入 Git。
+
+### 本轮验证
+
+- 已执行并通过：
+  - `cd frontend && npm run build`
+  - `python -m compileall backend\app`
+  - `python -m unittest discover backend\tests`
+- 最近一次后端测试结果：
+  - 24 个测试通过。
+- 本地前端服务仍可通过：
+  - `http://127.0.0.1:5173`
+
+### 下次继续时最应该记住的事
+
+- 用户对“页面慢”和“每次切换又重新加载”的体验非常敏感。
+- 不要再把页面改回条件渲染卸载模式；当前 `RoutePane` 保活策略是为了解决用户明确抱怨的切页体感。
+- 不要重新引入大规模首屏 eager load；重数据应继续按页面加载或预热。
+- 如果用户仍觉得慢，下一步优先做：
+  1. 给 `api.js` 增加开发态接口耗时日志，定位具体慢接口。
+  2. 对治理类列表接口增加后端短缓存或批量聚合，减少 Supabase 多次 round-trip。
+  3. 对代码工作区、AI 记录、报告等页面加更细粒度的本地状态缓存。
+  4. 视需要保存每个 `RoutePane` 的滚动位置，做到更接近桌面软件的切页体验。
