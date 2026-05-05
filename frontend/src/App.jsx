@@ -364,8 +364,20 @@ function getErrorMessage(error) { return error instanceof Error && error.message
 function RouteLoading() {
   return <div className="empty-state">正在极速打开页面...</div>;
 }
+
+function RoutePane({ pageId, activePage, visitedPages, children }) {
+  if (!visitedPages.has(pageId)) return null;
+  const isActive = activePage === pageId;
+  return (
+    <div className={cn("route-pane", isActive && "active")} hidden={!isActive} aria-hidden={!isActive}>
+      {children}
+    </div>
+  );
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState("tasks");
+  const [visitedPages, setVisitedPages] = useState(() => new Set(["tasks"]));
   const [health, setHealth] = useState(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState("");
@@ -925,6 +937,17 @@ export default function App() {
   }, [activePage, visibleNavItems]);
 
   useEffect(() => {
+    setVisitedPages((current) => {
+      const visiblePageIds = new Set(visibleNavItems.map((item) => item.id));
+      visiblePageIds.add(activePage);
+      const next = new Set([...current].filter((pageId) => visiblePageIds.has(pageId)));
+      next.add(activePage);
+      if (next.size === current.size && [...next].every((pageId) => current.has(pageId))) return current;
+      return next;
+    });
+  }, [activePage, visibleNavItems]);
+
+  useEffect(() => {
     setTaskChatError("");
   }, [selectedTask?.id]);
 
@@ -936,6 +959,8 @@ export default function App() {
       setTaskAIConversationsError("");
       return;
     }
+    if (taskAIConversationsState === "loading") return;
+    if (taskAIConversationsState === "ready" && taskAIConversations?.task_id === selectedTask.id) return;
     void loadTaskAIConversations(selectedTask.id);
   }, [
     activePage,
@@ -955,6 +980,8 @@ export default function App() {
       setTaskModelReportError("");
       return;
     }
+    if (taskModelReportState === "loading") return;
+    if (taskModelReportState === "ready" && taskModelReport?.task_id === selectedTask.id) return;
     void loadTaskModelReport(selectedTask.id);
   }, [
     activePage,
@@ -2046,8 +2073,7 @@ export default function App() {
 
           <div className="page-scroll">
             <Suspense fallback={<RouteLoading />}>
-            {activePage === "tasks" ? (
-              <>
+            <RoutePane pageId="tasks" activePage={activePage} visitedPages={visitedPages}>
                 <section className="task-command-center">
                   <div className="task-command-main">
                     <p className="eyebrow">建模工作台</p>
@@ -2131,11 +2157,9 @@ export default function App() {
                   </section>
                   {renderTaskDetail()}
                 </div>
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "workflow" ? (
-              <>
+            <RoutePane pageId="workflow" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Workflow</p>
@@ -2152,11 +2176,9 @@ export default function App() {
                   onSelectTask={setSelectedTaskId}
                   onOpenHumanCollaboration={handleOpenHumanCollaboration}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "agents" ? (
-              <>
+            <RoutePane pageId="agents" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Multi-Agent</p>
@@ -2174,11 +2196,9 @@ export default function App() {
                   onOpenWorkflow={() => setActivePage("workflow")}
                   onOpenHumanCollaboration={handleOpenHumanCollaboration}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "report" ? (
-              <>
+            <RoutePane pageId="report" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Report</p>
@@ -2197,11 +2217,9 @@ export default function App() {
                   onRefreshReport={() => selectedTask?.id ? void loadTaskModelReport(selectedTask.id) : undefined}
                   formatMetricName={formatMetricName}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "demo" ? (
-              <>
+            <RoutePane pageId="demo" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Web Demo</p>
@@ -2217,11 +2235,9 @@ export default function App() {
                   requestContext={requestContext}
                   onSelectTask={setSelectedTaskId}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "conversations" ? (
-              <>
+            <RoutePane pageId="conversations" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header compact-page-header">
                   <div>
                     <p className="eyebrow">Conversations</p>
@@ -2248,11 +2264,9 @@ export default function App() {
                   onOpenHumanCollaboration={handleOpenHumanCollaboration}
                   onOpenTaskDetails={() => setActivePage("tasks")}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "code" ? (
-              <>
+            <RoutePane pageId="code" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Code Workspace</p>
@@ -2275,11 +2289,9 @@ export default function App() {
                   onOpenHumanCollaboration={handleOpenHumanCollaboration}
                   onOpenTaskDetails={() => setActivePage("tasks")}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "human" ? (
-              <>
+            <RoutePane pageId="human" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Human In The Loop</p>
@@ -2301,11 +2313,9 @@ export default function App() {
                   onTaskUpdated={handleHumanTaskUpdated}
                   onOpenTaskDetails={() => setActivePage("tasks")}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "usage" ? (
-              <>
+            <RoutePane pageId="usage" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Usage</p>
@@ -2327,10 +2337,9 @@ export default function App() {
                     setActivePage("tasks");
                   }}
                 />
-              </>
-            ) : null}
+            </RoutePane>
 
-            {activePage === "connectors" ? (
+            <RoutePane pageId="connectors" activePage={activePage} visitedPages={visitedPages}>
               <ConnectorManagementPanel
                 activeTeamName={activeTeam?.name ?? ""}
                 connectorsState={connectorsState}
@@ -2355,9 +2364,8 @@ export default function App() {
                 onDelete={handleDeleteConnector}
                 onHealthCheck={handleHealthCheckConnectors}
               />
-            ) : null}
-            {activePage === "routing" ? (
-              <>
+            </RoutePane>
+            <RoutePane pageId="routing" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Routing</p>
@@ -2376,10 +2384,8 @@ export default function App() {
                   onRefresh={() => void loadRoutingPolicies()}
                   onSave={handleSaveRoutingPolicies}
                 />
-              </>
-            ) : null}
-            {activePage === "quotas" ? (
-              <>
+            </RoutePane>
+            <RoutePane pageId="quotas" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Quotas</p>
@@ -2396,10 +2402,8 @@ export default function App() {
                   onRefresh={() => void loadQuotaSummary()}
                   onSave={handleSaveTeamQuota}
                 />
-              </>
-            ) : null}
-            {activePage === "assets" ? (
-              <>
+            </RoutePane>
+            <RoutePane pageId="assets" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Assets</p>
@@ -2425,10 +2429,8 @@ export default function App() {
                   onFork={handleForkAsset}
                   onCreateFromTask={handleCreateAssetFromTask}
                 />
-              </>
-            ) : null}
-            {activePage === "team" ? (
-              <>
+            </RoutePane>
+            <RoutePane pageId="team" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Team</p>
@@ -2462,10 +2464,8 @@ export default function App() {
                   onUpdateSettings={handleUpdateTeamSettings}
                   onTransferOwnership={handleTransferTeamOwnership}
                 />
-              </>
-            ) : null}
-            {activePage === "audit" ? (
-              <>
+            </RoutePane>
+            <RoutePane pageId="audit" activePage={activePage} visitedPages={visitedPages}>
                 <section className="page-header">
                   <div>
                     <p className="eyebrow">Audit</p>
@@ -2479,9 +2479,8 @@ export default function App() {
                   error={auditError || (!teamCanManage ? "当前账号不是团队管理员，无法查看团队审计日志。" : "")}
                   onRefresh={() => void loadAuditLogs()}
                 />
-              </>
-            ) : null}
-            {activePage === "system" ? <SystemPanel health={health} loading={healthLoading} error={healthError} onRefresh={() => void loadHealth()} /> : null}
+            </RoutePane>
+            <RoutePane pageId="system" activePage={activePage} visitedPages={visitedPages}><SystemPanel health={health} loading={healthLoading} error={healthError} onRefresh={() => void loadHealth()} /></RoutePane>
             </Suspense>
           </div>
         </div>
