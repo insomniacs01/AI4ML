@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/api.js";
+import { getCachedCollaborationSnapshot, setCachedCollaborationSnapshot } from "../lib/collaborationCache.js";
 
 const STAGE_LABELS = {
   requirement_analysis: "需求解析",
@@ -89,11 +90,14 @@ export default function WorkflowStagePanel({
       return;
     }
     let active = true;
-    setState("loading");
+    const cached = getCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId);
+    if (cached) setSnapshot(cached);
+    setState(cached ? "ready" : "loading");
     setError("");
     api.taskHumanCollaboration(selectedTask.id, requestContext)
       .then((payload) => {
         if (!active) return;
+        setCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId, payload);
         setSnapshot(payload);
         setState("ready");
       })
@@ -113,7 +117,9 @@ export default function WorkflowStagePanel({
     setState("loading");
     setError("");
     try {
-      setSnapshot(await api.taskHumanCollaboration(selectedTask.id, requestContext));
+      const payload = await api.taskHumanCollaboration(selectedTask.id, { ...requestContext, noCache: true });
+      setCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId, payload);
+      setSnapshot(payload);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally {

@@ -56,9 +56,12 @@ class TaskHumanCollaborationService:
         self.task_store = task_store
 
     def get_snapshot(self, task: TaskRecord, *, access_token: str) -> TaskHumanCollaborationResponse:
-        self._expire_overdue_requests(task, access_token=access_token)
-        stages = self.sync_task_stages(task, access_token=access_token)
-        requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
+        requests = self._expire_overdue_requests(task, access_token=access_token)
+        existing_records = {
+            self._stage_key(record.stage): record
+            for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
+        }
+        stages = self._build_stage_snapshot(task, existing_records=existing_records, requests=requests)
         open_request_count = self._count_open_requests(requests)
         return TaskHumanCollaborationResponse(
             task=task,
@@ -83,23 +86,19 @@ class TaskHumanCollaborationService:
             for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
         }
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
-        open_requests_by_stage = {
-            self._stage_key(request.stage): request
-            for request in requests
-            if self._is_active_request(request)
-        }
-
         normalized_selection_map = {
             self._stage_key(stage_key): value
             for stage_key, value in (stage_selection_map or {}).items()
         }
 
         synced_records: list[WorkflowStageRecord] = []
-        for blueprint in self._build_stage_blueprints(task):
+        for blueprint, stage_key, open_request, selection, existing, summary, artifact_refs in self._iter_stage_snapshot_inputs(
+            task,
+            existing_records=existing_records,
+            requests=requests,
+            selection_map=normalized_selection_map,
+        ):
             stage_key = self._stage_key(blueprint.stage)
-            existing = existing_records.get(stage_key)
-            open_request = open_requests_by_stage.get(stage_key)
-            selection = normalized_selection_map.get(stage_key)
             synced_records.append(
                 self.task_store.upsert_stage_record(
                     team_id=task.team_id,
@@ -122,12 +121,76 @@ class TaskHumanCollaborationService:
                         if selection is not None and selection.selection_source is not None
                         else existing.selection_source if existing else None
                     ),
-                    summary=self._build_waiting_summary(open_request) if open_request else blueprint.summary,
-                    artifact_refs=self._collect_stage_artifacts(task, blueprint.stage),
+                    summary=summary,
+                    artifact_refs=artifact_refs,
                 )
             )
 
         return self._sort_stages(synced_records)
+
+    def _build_stage_snapshot(
+        self,
+        task: TaskRecord,
+        *,
+        existing_records: dict[str, WorkflowStageRecord],
+        requests: list[TaskHumanRequestRecord],
+    ) -> list[WorkflowStageRecord]:
+        now = datetime.now(timezone.utc)
+        records: list[WorkflowStageRecord] = []
+        for blueprint, stage_key, open_request, selection, existing, summary, artifact_refs in self._iter_stage_snapshot_inputs(
+            task,
+            existing_records=existing_records,
+            requests=requests,
+            selection_map={self._stage_key(item.stage): item for item in task.stage_routing},
+        ):
+            status = WorkflowStageStatus.waiting_human if open_request else blueprint.status
+            records.append(
+                WorkflowStageRecord(
+                    id=existing.id if existing else f"virtual-{task.id}-{stage_key}",
+                    team_id=task.team_id,
+                    task_id=task.id,
+                    stage=blueprint.stage,
+                    status=status,
+                    selected_connector_id=(selection.connector_id if selection and selection.connector_id else existing.selected_connector_id if existing else None),
+                    model_name=(selection.model_name if selection and selection.model_name else existing.model_name if existing else None),
+                    selection_source=(
+                        selection.selection_source
+                        if selection and selection.selection_source
+                        else existing.selection_source if existing else None
+                    ),
+                    summary=summary,
+                    artifact_refs=artifact_refs,
+                    started_at=existing.started_at if existing else None,
+                    finished_at=existing.finished_at if existing else None,
+                    duration_seconds=existing.duration_seconds if existing else None,
+                    log_excerpt=existing.log_excerpt if existing else None,
+                    created_at=existing.created_at if existing else task.created_at,
+                    updated_at=existing.updated_at if existing else (task.updated_at or now),
+                )
+            )
+        return self._sort_stages(records)
+
+    def _iter_stage_snapshot_inputs(
+        self,
+        task: TaskRecord,
+        *,
+        existing_records: dict[str, WorkflowStageRecord],
+        requests: list[TaskHumanRequestRecord],
+        selection_map: dict[str, TaskStageRoutingRecord],
+    ):
+        open_requests_by_stage = {
+            self._stage_key(request.stage): request
+            for request in requests
+            if self._is_active_request(request)
+        }
+        for blueprint in self._build_stage_blueprints(task):
+            stage_key = self._stage_key(blueprint.stage)
+            existing = existing_records.get(stage_key)
+            open_request = open_requests_by_stage.get(stage_key)
+            selection = selection_map.get(stage_key)
+            summary = self._build_waiting_summary(open_request) if open_request else blueprint.summary
+            artifact_refs = self._collect_stage_artifacts(task, blueprint.stage)
+            yield blueprint, stage_key, open_request, selection, existing, summary, artifact_refs
 
     def create_request(
         self,

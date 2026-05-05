@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/api.js";
+import { getCachedCollaborationSnapshot, setCachedCollaborationSnapshot } from "../lib/collaborationCache.js";
 
 const STAGE_LABELS = {
   requirement_analysis: "需求解析",
@@ -229,12 +230,15 @@ export default function HumanCollaborationPanel({
     }
 
     let active = true;
-    setState("loading");
+    const cached = getCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId);
+    if (cached) setSnapshot(cached);
+    setState(cached ? "ready" : "loading");
     setError("");
 
     api.taskHumanCollaboration(selectedTask.id, requestContext)
       .then((payload) => {
         if (!active) return;
+        setCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId, payload);
         setSnapshot(payload);
         setState("ready");
         setDecisionDrafts((current) => {
@@ -259,6 +263,7 @@ export default function HumanCollaborationPanel({
   }, [onTaskUpdated, requestContext, selectedTask?.id]);
 
   function syncSnapshot(payload, nextMessage) {
+    setCachedCollaborationSnapshot(selectedTask?.id, requestContext?.teamId, payload);
     setSnapshot(payload);
     setMessage(nextMessage);
     setError("");
@@ -277,7 +282,7 @@ export default function HumanCollaborationPanel({
     setState("loading");
     setError("");
     try {
-      const payload = await api.taskHumanCollaboration(selectedTask.id, requestContext);
+      const payload = await api.taskHumanCollaboration(selectedTask.id, { ...requestContext, noCache: true });
       syncSnapshot(payload, "");
       setState("ready");
     } catch (refreshError) {

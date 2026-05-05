@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from functools import lru_cache
+from hashlib import sha256
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -37,22 +39,38 @@ TEAM_DEVELOPER_ROLES = {"admin", "team_owner", "developer_user"}
 TEAM_OWNER_ROLES = {"team_owner"}
 
 
+AUTH_CACHE_TTL_SECONDS = 30.0
+
+
 class SupabaseClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._user_cache: dict[str, tuple[float, SupabaseUser]] = {}
+        self._membership_cache: dict[tuple[str, str, str], tuple[float, dict[str, Any] | None]] = {}
 
     def get_user(self, access_token: str) -> SupabaseUser:
+        token_key = self._token_cache_key(access_token)
+        cached = self._user_cache.get(token_key)
+        if cached and self._cache_is_fresh(cached[0]):
+            return cached[1]
         payload = self._request_json(self.settings.supabase_auth_user_url, access_token)
         user_id = payload.get("id")
         if not isinstance(user_id, str) or not user_id:
             raise PermissionError("Supabase token response did not include a valid user id.")
-        return SupabaseUser(
+        user = SupabaseUser(
             id=user_id,
             email=payload.get("email"),
             raw=payload,
         )
+        self._user_cache[token_key] = (time.monotonic(), user)
+        return user
 
     def get_team_membership(self, access_token: str, *, team_id: str, user_id: str) -> dict[str, Any] | None:
+        token_key = self._token_cache_key(access_token)
+        cache_key = (token_key, team_id, user_id)
+        cached = self._membership_cache.get(cache_key)
+        if cached and self._cache_is_fresh(cached[0]):
+            return cached[1]
         query = (
             "team_members"
             f"?select=team_id,user_id,role,member_status&team_id=eq.{quote(team_id, safe='')}"
@@ -61,7 +79,17 @@ class SupabaseClient:
         payload = self._request_json(f"{self.settings.supabase_rest_url}/{query}", access_token)
         if not isinstance(payload, list):
             raise ConnectionError("Unexpected team membership response from Supabase.")
-        return payload[0] if payload else None
+        membership = payload[0] if payload else None
+        self._membership_cache[cache_key] = (time.monotonic(), membership)
+        return membership
+
+    @staticmethod
+    def _token_cache_key(access_token: str) -> str:
+        return sha256(access_token.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _cache_is_fresh(cached_at: float) -> bool:
+        return time.monotonic() - cached_at < AUTH_CACHE_TTL_SECONDS
 
     def _request_json(self, url: str, access_token: str) -> Any:
         self._ensure_configured()

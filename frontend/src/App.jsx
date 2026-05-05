@@ -1,26 +1,49 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
-import AIConversationPanel from "./components/AIConversationPanel.jsx";
-import AssetCenterPanel from "./components/AssetCenterPanel.jsx";
-import AuditLogPanel from "./components/AuditLogPanel.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
-import ConnectorManagementPanel from "./components/ConnectorManagementPanel.jsx";
-import CodeWorkspacePanel from "./components/CodeWorkspacePanel.jsx";
-import HumanCollaborationPanel from "./components/HumanCollaborationPanel.jsx";
 import LeaderboardPanel from "./components/LeaderboardPanel.jsx";
-import ModelReportPanel from "./components/ModelReportPanel.jsx";
-import PredictionDemoPanel from "./components/PredictionDemoPanel.jsx";
-import QuotaManagementPanel from "./components/QuotaManagementPanel.jsx";
-import RoutingPolicyPanel from "./components/RoutingPolicyPanel.jsx";
 import SystemPanel from "./components/SystemPanel.jsx";
 import TaskCard from "./components/TaskCard.jsx";
 import TaskForm from "./components/TaskForm.jsx";
-import TeamMembersPanel from "./components/TeamMembersPanel.jsx";
 import TeamOnboarding from "./components/TeamOnboarding.jsx";
 import TokenUsagePanel, { TokenUsageCard, formatTokenValue, hasTokenUsage } from "./components/TokenUsagePanel.jsx";
-import WorkflowStagePanel from "./components/WorkflowStagePanel.jsx";
 import { api } from "./lib/api.js";
 import { readSupabaseAuthSettings, supabase, supabaseReady } from "./lib/supabase.js";
+
+const PAGE_LOADERS = {
+  agents: () => import("./components/MultiAgentCollaborationPanel.jsx"),
+  assets: () => import("./components/AssetCenterPanel.jsx"),
+  audit: () => import("./components/AuditLogPanel.jsx"),
+  code: () => import("./components/CodeWorkspacePanel.jsx"),
+  connectors: () => import("./components/ConnectorManagementPanel.jsx"),
+  conversations: () => import("./components/AIConversationPanel.jsx"),
+  demo: () => import("./components/PredictionDemoPanel.jsx"),
+  human: () => import("./components/HumanCollaborationPanel.jsx"),
+  quotas: () => import("./components/QuotaManagementPanel.jsx"),
+  report: () => import("./components/ModelReportPanel.jsx"),
+  routing: () => import("./components/RoutingPolicyPanel.jsx"),
+  team: () => import("./components/TeamMembersPanel.jsx"),
+  workflow: () => import("./components/WorkflowStagePanel.jsx"),
+};
+
+function preloadPageComponent(pageId) {
+  const loader = PAGE_LOADERS[pageId];
+  if (loader) void loader();
+}
+
+const AIConversationPanel = lazy(PAGE_LOADERS.conversations);
+const AssetCenterPanel = lazy(PAGE_LOADERS.assets);
+const AuditLogPanel = lazy(PAGE_LOADERS.audit);
+const CodeWorkspacePanel = lazy(PAGE_LOADERS.code);
+const ConnectorManagementPanel = lazy(PAGE_LOADERS.connectors);
+const HumanCollaborationPanel = lazy(PAGE_LOADERS.human);
+const ModelReportPanel = lazy(PAGE_LOADERS.report);
+const MultiAgentCollaborationPanel = lazy(PAGE_LOADERS.agents);
+const PredictionDemoPanel = lazy(PAGE_LOADERS.demo);
+const QuotaManagementPanel = lazy(PAGE_LOADERS.quotas);
+const RoutingPolicyPanel = lazy(PAGE_LOADERS.routing);
+const TeamMembersPanel = lazy(PAGE_LOADERS.team);
+const WorkflowStagePanel = lazy(PAGE_LOADERS.workflow);
 
 const NAV_GROUPS = [
   { id: "work", label: "日常使用" },
@@ -31,6 +54,7 @@ const NAV_GROUPS = [
 
 const NAV_ITEMS = [
   { id: "tasks", label: "开始建模", short: "建", group: "work", helper: "新建与运行" },
+  { id: "agents", label: "Agent 协同", short: "智", group: "work", helper: "多智能体" },
   { id: "workflow", label: "运行进度", short: "进", group: "work", helper: "阶段与日志" },
   { id: "report", label: "模型报告", short: "报", group: "work", helper: "结果解释" },
   { id: "demo", label: "在线预测", short: "测", group: "work", helper: "试用模型" },
@@ -337,6 +361,9 @@ function translateServerMessage(message) {
 }
 function getErrorMessage(error) { return error instanceof Error && error.message ? translateServerMessage(error.message) : `收到未知错误：${String(error)}`; }
 
+function RouteLoading() {
+  return <div className="empty-state">正在极速打开页面...</div>;
+}
 export default function App() {
   const [activePage, setActivePage] = useState("tasks");
   const [health, setHealth] = useState(null);
@@ -700,22 +727,42 @@ export default function App() {
     }
   }
 
+  function warmPage(pageId) {
+    preloadPageComponent(pageId);
+    if (!session?.access_token || !activeTeamId) return;
+
+    if (pageId === "usage") {
+      if (usageState === "idle") void loadUsageSummary();
+      if (tokenLedgerState === "idle") void loadTokenLedgers();
+      return;
+    }
+    if (pageId === "quotas" && quotaState === "idle") void loadQuotaSummary();
+    if (pageId === "routing" && routingState === "idle") void loadRoutingPolicies();
+    if (pageId === "assets" && assetState === "idle") void loadAssets();
+    if (pageId === "audit" && auditState === "idle") void loadAuditLogs();
+    if (pageId === "team") {
+      if (!teamMembers.length && !teamBusy) void loadTeamMembers();
+      if (teamSettingsState === "idle") void loadTeamSettings();
+    }
+    if (pageId === "conversations" && selectedTask?.id && taskAIConversationsState === "idle") {
+      void loadTaskAIConversations(selectedTask.id);
+    }
+    if (pageId === "report" && selectedTask?.id && taskModelReportState === "idle") {
+      void loadTaskModelReport(selectedTask.id);
+    }
+  }
+
   async function refreshWorkspaceData() {
-    await Promise.all([
-      loadHealth(),
-      loadTasks(),
-      loadUsageSummary(),
-      loadTokenLedgers(),
-      loadConnectors(),
-      loadTeamMembers(),
-      loadTeamSettings(),
-      loadQuotaSummary(),
-      loadRoutingPolicies(),
-      loadAssets(),
-      loadAuditLogs(),
-    ]);
-    await loadTaskAIConversations();
-    await loadTaskModelReport();
+    const loaders = [loadHealth, loadTasks, loadConnectors];
+    if (activePage === "usage") loaders.push(loadUsageSummary, loadTokenLedgers);
+    if (activePage === "quotas") loaders.push(loadQuotaSummary);
+    if (activePage === "routing") loaders.push(loadRoutingPolicies);
+    if (activePage === "assets") loaders.push(loadAssets);
+    if (activePage === "audit") loaders.push(loadAuditLogs);
+    if (activePage === "team") loaders.push(loadTeamMembers, loadTeamSettings);
+    if (activePage === "conversations") loaders.push(loadTaskAIConversations);
+    if (activePage === "report") loaders.push(loadTaskModelReport);
+    await Promise.all(loaders.map((loader) => loader()));
   }
 
   useEffect(() => {
@@ -825,19 +872,43 @@ export default function App() {
       setAuditError("");
       return;
     }
+    setTeamMembers([]);
+    setTeamSettings(null);
+    setTeamSettingsState("idle");
+    setInviteInfo(null);
     void Promise.all([
       loadTasks(),
-      loadUsageSummary(),
-      loadTokenLedgers(),
       loadConnectors(),
-      loadTeamMembers(),
-      loadTeamSettings(),
-      loadQuotaSummary(),
-      loadRoutingPolicies(),
-      loadAssets(),
-      loadAuditLogs(),
     ]);
   }, [activeTeamId, session?.access_token, teamCanManage]);
+
+  useEffect(() => {
+    if (!activeTeamId || !session?.access_token) return;
+    if (activePage === "usage") void Promise.all([loadUsageSummary(), loadTokenLedgers()]);
+    if (activePage === "quotas") void loadQuotaSummary();
+    if (activePage === "routing") void loadRoutingPolicies();
+    if (activePage === "assets") void loadAssets();
+    if (activePage === "audit") void loadAuditLogs();
+    if (activePage === "team") void Promise.all([loadTeamMembers(), loadTeamSettings()]);
+  }, [activePage, activeTeamId, session?.access_token, teamCanManage]);
+
+  useEffect(() => {
+    if (!session) return undefined;
+    const pageIds = visibleNavItems.map((item) => item.id).filter((id) => id !== activePage && PAGE_LOADERS[id]);
+    if (!pageIds.length) return undefined;
+
+    const preloadVisiblePages = () => {
+      pageIds.forEach(preloadPageComponent);
+    };
+
+    if ("requestIdleCallback" in window) {
+      const idleId = window.requestIdleCallback(preloadVisiblePages, { timeout: 2500 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timerId = window.setTimeout(preloadVisiblePages, 800);
+    return () => window.clearTimeout(timerId);
+  }, [activePage, session, visibleNavItems]);
 
   useEffect(() => {
     if (!tasks.length) {
@@ -858,6 +929,7 @@ export default function App() {
   }, [selectedTask?.id]);
 
   useEffect(() => {
+    if (activePage !== "conversations") return;
     if (!selectedTask?.id || !session?.access_token || !activeTeamId) {
       setTaskAIConversations(null);
       setTaskAIConversationsState("idle");
@@ -866,6 +938,7 @@ export default function App() {
     }
     void loadTaskAIConversations(selectedTask.id);
   }, [
+    activePage,
     activeTeamId,
     selectedTask?.id,
     selectedTask?.updated_at,
@@ -875,6 +948,7 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (activePage !== "report") return;
     if (!selectedTask?.id || !session?.access_token || !activeTeamId) {
       setTaskModelReport(null);
       setTaskModelReportState("idle");
@@ -883,6 +957,7 @@ export default function App() {
     }
     void loadTaskModelReport(selectedTask.id);
   }, [
+    activePage,
     activeTeamId,
     selectedTask?.id,
     selectedTask?.updated_at,
@@ -1827,7 +1902,7 @@ export default function App() {
         <section className="section-card task-link-card">
           <div>
             <h3>AI 记录</h3>
-            <p>{taskAIConversationsState === "loading" ? "刷新中..." : conversationCount ? `${conversationCount} 组问答` : "暂无记录"}</p>
+            <p>{taskAIConversationsState === "loading" ? "刷新中..." : conversationCount ? `${conversationCount} 组问答` : "进入 AI 记录页后加载"}</p>
           </div>
           <button type="button" className="ghost-button" onClick={() => setActivePage("conversations")}>
             打开记录
@@ -1941,7 +2016,7 @@ export default function App() {
                 <section key={group.id} className="nav-group" aria-label={group.label}>
                   <p>{group.label}</p>
                   {items.map((item) => (
-                    <button key={item.id} type="button" className={cn("nav-item", activePage === item.id && "active")} onClick={() => setActivePage(item.id)}>
+                    <button key={item.id} type="button" className={cn("nav-item", activePage === item.id && "active")} onPointerEnter={() => warmPage(item.id)} onFocus={() => warmPage(item.id)} onClick={() => setActivePage(item.id)}>
                       <span className="nav-icon">{item.short}</span>
                       <span className="nav-copy"><strong>{item.label}</strong><em>{item.helper}</em></span>
                     </button>
@@ -1970,6 +2045,7 @@ export default function App() {
           </header>
 
           <div className="page-scroll">
+            <Suspense fallback={<RouteLoading />}>
             {activePage === "tasks" ? (
               <>
                 <section className="task-command-center">
@@ -2074,6 +2150,28 @@ export default function App() {
                   selectedTask={selectedTask}
                   requestContext={requestContext}
                   onSelectTask={setSelectedTaskId}
+                  onOpenHumanCollaboration={handleOpenHumanCollaboration}
+                />
+              </>
+            ) : null}
+
+            {activePage === "agents" ? (
+              <>
+                <section className="page-header">
+                  <div>
+                    <p className="eyebrow">Multi-Agent</p>
+                    <h1>多 Agent 协同中心</h1>
+                    <p className="page-copy">把需求解析、数据分析、特征工程、模型选择、训练验证和报告生成拆成可观察的协作 Agent，展示它们的状态、产物流向和实时事件。</p>
+                  </div>
+                </section>
+
+                <MultiAgentCollaborationPanel
+                  tasks={tasks}
+                  tasksLoading={tasksState === "loading"}
+                  selectedTask={selectedTask}
+                  requestContext={requestContext}
+                  onSelectTask={setSelectedTaskId}
+                  onOpenWorkflow={() => setActivePage("workflow")}
                   onOpenHumanCollaboration={handleOpenHumanCollaboration}
                 />
               </>
@@ -2384,6 +2482,7 @@ export default function App() {
               </>
             ) : null}
             {activePage === "system" ? <SystemPanel health={health} loading={healthLoading} error={healthError} onRefresh={() => void loadHealth()} /> : null}
+            </Suspense>
           </div>
         </div>
       </div>

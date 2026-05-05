@@ -1,4 +1,7 @@
 ﻿const API_ROOT = import.meta.env.VITE_API_ROOT;
+const GET_CACHE_TTL_MS = 30_000;
+const getCache = new Map();
+const inFlightGets = new Map();
 
 if (typeof API_ROOT !== "string" || !API_ROOT.trim()) {
   throw new Error("VITE_API_ROOT 未配置，请先在 frontend/.env.local 中设置后端 API 根路径。");
@@ -15,22 +18,60 @@ function buildHeaders(accessToken, teamId, headers) {
   return nextHeaders;
 }
 
-async function request(path, options = {}) {
-  const { accessToken, teamId, headers, ...fetchOptions } = options;
-  const response = await fetch(`${API_ROOT}${path}`, {
-    ...fetchOptions,
-    headers: buildHeaders(accessToken, teamId, headers),
-  });
+function clonePayload(payload) {
+  if (typeof structuredClone === "function") return structuredClone(payload);
+  return JSON.parse(JSON.stringify(payload));
+}
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    if (typeof payload.detail === "string" && payload.detail) {
-      throw new Error(payload.detail);
+function getCacheKey(path, accessToken, teamId) {
+  return `${teamId ?? ""}|${accessToken ? accessToken.slice(-16) : ""}|${path}`;
+}
+
+function clearApiCache() {
+  getCache.clear();
+  inFlightGets.clear();
+}
+
+async function request(path, options = {}) {
+  const { accessToken, teamId, headers, noCache = false, ...fetchOptions } = options;
+  const method = String(fetchOptions.method ?? "GET").toUpperCase();
+  const canCache = method === "GET" && !noCache;
+  const cacheKey = canCache ? getCacheKey(path, accessToken, teamId) : "";
+
+  if (canCache) {
+    const cached = getCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < GET_CACHE_TTL_MS) {
+      return clonePayload(cached.payload);
     }
-    throw new Error(`接口 ${path} 返回 HTTP ${response.status}，但响应体没有 detail 字段。`);
+    const pending = inFlightGets.get(cacheKey);
+    if (pending) return clonePayload(await pending);
   }
 
-  return response.json();
+  if (method !== "GET") {
+    clearApiCache();
+  }
+
+  const requestPromise = fetch(`${API_ROOT}${path}`, {
+    ...fetchOptions,
+    headers: buildHeaders(accessToken, teamId, headers),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      if (typeof payload.detail === "string" && payload.detail) {
+        throw new Error(payload.detail);
+      }
+      throw new Error(`接口 ${path} 返回 HTTP ${response.status}，但响应体没有 detail 字段。`);
+    }
+
+    const payload = await response.json();
+    if (canCache) getCache.set(cacheKey, { cachedAt: Date.now(), payload });
+    return payload;
+  }).finally(() => {
+    if (canCache) inFlightGets.delete(cacheKey);
+  });
+
+  if (canCache) inFlightGets.set(cacheKey, requestPromise);
+  return clonePayload(await requestPromise);
 }
 
 async function requestBlob(path, options = {}) {
@@ -370,3 +411,4 @@ export const api = {
     });
   },
 };
+
