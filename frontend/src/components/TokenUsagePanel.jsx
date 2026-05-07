@@ -6,6 +6,8 @@ const STATUS_LABELS = {
   failed: "失败",
 };
 
+const TABLE_RENDER_LIMIT = 200;
+
 function asNonNegativeInteger(value) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
@@ -138,6 +140,8 @@ export default function TokenUsagePanel({
 }) {
   const items = Array.isArray(summary?.items) ? summary.items : [];
   const ledgerItems = Array.isArray(ledgers?.items) ? ledgers.items : [];
+  const visibleItems = items.slice(0, TABLE_RENDER_LIMIT);
+  const visibleLedgerItems = ledgerItems.slice(0, TABLE_RENDER_LIMIT);
 
   return (
     <div className="detail-stack">
@@ -194,6 +198,7 @@ export default function TokenUsagePanel({
           </div>
         </div>
 
+        {items.length > TABLE_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染前 {TABLE_RENDER_LIMIT} 条任务级明细，避免大表格拖慢页面。</div> : null}
         {items.length ? (
           <div className="table-wrap">
             <table>
@@ -209,7 +214,7 @@ export default function TokenUsagePanel({
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => {
+                {visibleItems.map((item) => {
                   const combinedReport = hasTokenUsage(item.analysis_token_usage) || hasTokenUsage(item.run_token_usage)
                     ? item.combined_token_usage
                     : null;
@@ -271,6 +276,7 @@ export default function TokenUsagePanel({
         {!canViewLedgers ? <div className="empty-state">当前账号不是团队管理员，不能查看团队级调用流水。</div> : null}
         {canViewLedgers && ledgersLoading && !ledgerItems.length ? <div className="empty-state">正在读取 Token 调用流水...</div> : null}
 
+        {canViewLedgers && ledgerItems.length > TABLE_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染最近 {TABLE_RENDER_LIMIT} 条 Token 流水，避免大表格拖慢页面。</div> : null}
         {canViewLedgers && ledgerItems.length ? (
           <div className="table-wrap">
             <table>
@@ -285,7 +291,7 @@ export default function TokenUsagePanel({
                 </tr>
               </thead>
               <tbody>
-                {ledgerItems.map((ledger) => (
+                {visibleLedgerItems.map((ledger) => (
                   <tr key={ledger.id}>
                     <td>{formatDateTime(ledger.created_at)}</td>
                     <td>

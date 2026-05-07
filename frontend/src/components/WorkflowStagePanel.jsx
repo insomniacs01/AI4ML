@@ -53,6 +53,26 @@ function formatDuration(value) {
   return `${Math.round(value / 360) / 10} 小时`;
 }
 
+function formatProgressStatus(status) {
+  const labels = {
+    not_started: "未开始",
+    running: "运行中",
+    stale: "疑似卡住",
+    completed: "已完成",
+    failed: "失败",
+    unknown: "状态不完整",
+  };
+  return labels[status] ?? status ?? "未知";
+}
+
+function getProgressTone(progress) {
+  if (progress?.stale || progress?.status === "stale") return "danger";
+  if (progress?.status === "completed") return "success";
+  if (progress?.status === "failed") return "danger";
+  if (progress?.status === "running") return "info";
+  return "warning";
+}
+
 function normalizeArtifactRefs(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
@@ -72,11 +92,16 @@ export default function WorkflowStagePanel({
   tasksLoading,
   selectedTask,
   requestContext,
+  runProgress,
+  runProgressState,
+  runProgressError,
+  onRefreshRunProgress,
   onSelectTask,
   onOpenHumanCollaboration,
 }) {
   const [snapshot, setSnapshot] = useState(null);
   const [state, setState] = useState("idle");
+  const [manualRefreshState, setManualRefreshState] = useState("idle");
   const [error, setError] = useState("");
 
   const stages = useMemo(() => (Array.isArray(snapshot?.stages) ? snapshot.stages : []), [snapshot]);
@@ -92,7 +117,7 @@ export default function WorkflowStagePanel({
     let active = true;
     const cached = getCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId);
     if (cached) setSnapshot(cached);
-    setState(cached ? "ready" : "loading");
+    setState(cached ? "refreshing" : "loading");
     setError("");
     api.taskHumanCollaboration(selectedTask.id, requestContext)
       .then((payload) => {
@@ -114,7 +139,7 @@ export default function WorkflowStagePanel({
 
   async function handleRefresh() {
     if (!selectedTask?.id) return;
-    setState("loading");
+    setManualRefreshState("loading");
     setError("");
     try {
       const payload = await api.taskHumanCollaboration(selectedTask.id, { ...requestContext, noCache: true });
@@ -124,6 +149,7 @@ export default function WorkflowStagePanel({
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally {
       setState("ready");
+      setManualRefreshState("idle");
     }
   }
 
@@ -135,8 +161,8 @@ export default function WorkflowStagePanel({
             <h3>任务切换</h3>
             <p>工作流阶段和人工复核节点都围绕当前选中的任务展示。</p>
           </div>
-          <button type="button" className="chip-button" onClick={handleRefresh} disabled={!selectedTask?.id || state === "loading"}>
-            {state === "loading" ? "刷新中..." : "刷新阶段"}
+          <button type="button" className="chip-button" onClick={handleRefresh} disabled={!selectedTask?.id || manualRefreshState === "loading"}>
+            {manualRefreshState === "loading" ? "刷新中..." : "刷新阶段"}
           </button>
         </div>
 
@@ -158,6 +184,51 @@ export default function WorkflowStagePanel({
                 <p>{task.dataset_filename || "未上传数据集"}</p>
               </button>
             ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="section-card">
+        <div className="section-head">
+          <div>
+            <h3>真实运行诊断</h3>
+            <p>直接读取 MLZero 运行目录里的日志与产物，判断是否仍在推进。</p>
+          </div>
+          <button type="button" className="chip-button" onClick={onRefreshRunProgress} disabled={!selectedTask?.id || runProgressState === "loading" || runProgressState === "refreshing"}>
+            {runProgressState === "loading" || runProgressState === "refreshing" ? "诊断中..." : "刷新诊断"}
+          </button>
+        </div>
+        {runProgressError ? <div className="error-banner">{runProgressError}</div> : null}
+        {!selectedTask ? <div className="empty-state compact">先选择一个任务。</div> : null}
+        {selectedTask && !runProgress && !runProgressError ? <div className="empty-state compact">暂无运行诊断。运行任务后这里会显示真实日志状态。</div> : null}
+        {runProgress ? (
+          <div className={`callout task-run-progress-card ${runProgress.stale ? "danger" : ""}`}>
+            <div className="section-head compact">
+              <div>
+                <h3>{formatProgressStatus(runProgress.status)}</h3>
+                <p>{runProgress.current_activity || "暂无可解析的运行活动。"}</p>
+              </div>
+              <span className={`runtime-pill ${getProgressTone(runProgress)}`}>{runProgress.progress_percent ?? 0}%</span>
+            </div>
+            <div className="task-run-progress-meter" aria-label="运行进度">
+              <span style={{ width: `${Math.max(0, Math.min(100, runProgress.progress_percent ?? 0))}%` }} />
+            </div>
+            <div className="summary-grid">
+              <article className="summary-item"><span>最后日志</span><strong>{formatDateTime(runProgress.last_log_at)}</strong></article>
+              <article className="summary-item"><span>无更新时间</span><strong>{formatDuration(runProgress.seconds_since_last_update)}</strong></article>
+              <article className="summary-item"><span>summary</span><strong>{runProgress.artifacts?.has_run_summary ? "已找到" : "未找到"}</strong></article>
+              <article className="summary-item"><span>leaderboard</span><strong>{runProgress.artifacts?.has_leaderboard ? "已找到" : "未找到"}</strong></article>
+              <article className="summary-item"><span>token_usage</span><strong>{runProgress.artifacts?.has_token_usage ? "已找到" : "未找到"}</strong></article>
+              <article className="summary-item"><span>生成代码</span><strong>{runProgress.artifacts?.has_generated_code ? "已找到" : "未找到"}</strong></article>
+            </div>
+            {runProgress.stale_reason ? <p className="danger-text">{runProgress.stale_reason}</p> : null}
+            {runProgress.output_dir ? <p className="mono-text task-run-progress-path">{runProgress.output_dir}</p> : null}
+            {Array.isArray(runProgress.latest_log_lines) && runProgress.latest_log_lines.length ? (
+              <details className="callout workflow-log-excerpt">
+                <summary>查看最后日志</summary>
+                <pre className="code-block">{runProgress.latest_log_lines.slice(-40).join("\n")}</pre>
+              </details>
+            ) : null}
           </div>
         ) : null}
       </section>

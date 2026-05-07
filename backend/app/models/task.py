@@ -41,6 +41,40 @@ class RunAttempt(BaseModel):
     token_usage: Optional[TokenUsageReport] = None
 
 
+class TaskRunProgressArtifactSummary(BaseModel):
+    has_run_summary: bool = False
+    has_leaderboard: bool = False
+    has_token_usage: bool = False
+    has_generated_code: bool = False
+    run_summary_path: Optional[str] = None
+    leaderboard_path: Optional[str] = None
+    token_usage_path: Optional[str] = None
+    generated_code_path: Optional[str] = None
+    best_model: Optional[str] = None
+    metric_name: Optional[str] = None
+    metric_value: Optional[float] = None
+    validation_score: Optional[float] = None
+    candidate_model_count: Optional[int] = None
+
+
+class TaskRunProgressResponse(BaseModel):
+    task: "TaskRecord"
+    output_dir: Optional[str] = None
+    status: Literal["not_started", "running", "stale", "completed", "failed", "unknown"] = "unknown"
+    progress_percent: int = 0
+    current_stage: Optional["WorkflowStage"] = None
+    current_activity: str = ""
+    last_log_at: Optional[datetime] = None
+    seconds_since_last_update: Optional[float] = None
+    stale: bool = False
+    stale_reason: Optional[str] = None
+    repaired: bool = False
+    repair_action: Optional[str] = None
+    artifacts: TaskRunProgressArtifactSummary = Field(default_factory=TaskRunProgressArtifactSummary)
+    latest_log_lines: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class DatasetColumnProfile(BaseModel):
     name: str
     inferred_type: Literal["integer", "number", "datetime", "text", "empty", "mixed"]
@@ -252,6 +286,13 @@ class TaskWorkflowConfigUpdateRequest(BaseModel):
     interaction_policies: list[TaskInteractionPolicyInput] = Field(default_factory=list)
 
 
+class TaskSemanticUpdateRequest(BaseModel):
+    label_column: str = Field(min_length=1, max_length=120)
+    problem_type: Literal["classification", "regression"]
+    metric_name: str = Field(min_length=1, max_length=120)
+    correction_note: Optional[str] = Field(default=None, max_length=4000)
+
+
 class TaskRunRequest(BaseModel):
     time_limit: int = Field(default=20, ge=5, le=300)
     rerun_from_stage: Optional[WorkflowStage] = None
@@ -361,8 +402,10 @@ class TaskRecord(BaseModel):
     id: str
     team_id: str
     created_by: str
+    creator_user_id: str | None = None
     name: str
     description: str
+    workflow_id: str | None = None
     label_column: Optional[str] = None
     problem_type: Optional[Literal["classification", "regression"]] = None
     status: TaskStatus = TaskStatus.draft
@@ -373,6 +416,8 @@ class TaskRecord(BaseModel):
     analysis_token_usage: Optional[TokenUsageReport] = None
     last_run: Optional[RunSummary] = None
     last_run_attempt: Optional[RunAttempt] = None
+    routing_policy_id: Optional[str] = None
+    routing_source: Optional[str] = None
     structured_requirements: Optional[dict[str, Any]] = None
     stage_routing: list[TaskStageRoutingRecord] = Field(default_factory=list)
     interaction_policies: list[TaskInteractionPolicyRecord] = Field(default_factory=list)
@@ -392,6 +437,103 @@ class TaskHumanCollaborationResponse(BaseModel):
     next_run_guidance: TaskHumanGuidancePreview = Field(default_factory=TaskHumanGuidancePreview)
     open_request_count: int = 0
     can_resume: bool = False
+
+
+class TaskAgentRecord(BaseModel):
+    id: str
+    stage: WorkflowStage | str
+    name: str
+    role: str
+    short_role: str
+    status: WorkflowStageStatus
+    progress: int = 0
+    current_task: str
+    model_name: Optional[str] = None
+    connector_id: Optional[str] = None
+    selection_source: Optional[str] = None
+    artifact_refs: list[str] = Field(default_factory=list)
+    artifact_count: int = 0
+    last_action_at: Optional[datetime] = None
+    runtime_id: Optional[str] = None
+    runtime_source: Literal["persistent_agent_runtime", "stage_record_projection"] = "stage_record_projection"
+    worker_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    log_excerpt: Optional[str] = None
+    x: int = 0
+    y: int = 0
+
+
+class TaskAgentRuntimeRecord(BaseModel):
+    id: str
+    team_id: str
+    task_id: str
+    agent_id: str
+    stage: WorkflowStage | str
+    name: str
+    role: str
+    short_role: str
+    status: WorkflowStageStatus
+    progress: int = 0
+    current_task: str
+    selected_connector_id: Optional[str] = None
+    model_name: Optional[str] = None
+    selection_source: Optional[str] = None
+    artifact_refs: Optional[Any] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    log_excerpt: Optional[str] = None
+    worker_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskAgentEventRecord(BaseModel):
+    id: str
+    team_id: Optional[str] = None
+    task_id: Optional[str] = None
+    agent_id: str
+    stage: WorkflowStage | str
+    kind: Literal["agent", "stage", "human_request"]
+    status: str
+    text: str
+    time: Optional[datetime] = None
+    artifact_refs: list[str] = Field(default_factory=list)
+
+
+class TaskAgentMessageRecord(BaseModel):
+    id: str
+    team_id: Optional[str] = None
+    task_id: Optional[str] = None
+    from_agent_id: str
+    to_agent_id: Optional[str] = None
+    stage: WorkflowStage | str
+    message_type: Literal[
+        "coordination",
+        "handoff",
+        "acknowledgement",
+        "blocker",
+        "human_review",
+        "result",
+    ] = "coordination"
+    status: str = "sent"
+    content: str
+    payload: Optional[dict[str, Any]] = None
+    artifact_refs: list[str] = Field(default_factory=list)
+    correlation_id: Optional[str] = None
+    time: Optional[datetime] = None
+
+
+class TaskAgentCollaborationResponse(BaseModel):
+    task: TaskRecord
+    runtime_mode: Literal["persistent_agent_runtime", "stage_agent_orchestrator"] = "stage_agent_orchestrator"
+    stages: list[WorkflowStageRecord] = Field(default_factory=list)
+    requests: list[TaskHumanRequestRecord] = Field(default_factory=list)
+    agents: list[TaskAgentRecord] = Field(default_factory=list)
+    events: list[TaskAgentEventRecord] = Field(default_factory=list)
+    messages: list[TaskAgentMessageRecord] = Field(default_factory=list)
 
 
 class TaskTokenUsageSummaryItem(BaseModel):

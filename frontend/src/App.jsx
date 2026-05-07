@@ -72,6 +72,7 @@ const NAV_ITEMS = [
 ];
 
 const MAX_KEPT_ROUTE_PANES = 2;
+const TASK_QUEUE_RENDER_LIMIT = 60;
 
 function createEmptyTaskPolicy() {
   return {
@@ -121,6 +122,7 @@ const TASK_STATUS_LABELS = {
   paused_for_review: "等待复核",
   waiting_human: "等待人工协同",
   running: "运行中",
+  stale: "疑似卡住",
   completed: "已完成",
   failed: "失败",
   published: "已发布",
@@ -132,6 +134,7 @@ const TASK_STATUS_TONES = {
   paused_for_review: "warning",
   waiting_human: "warning",
   running: "info",
+  stale: "danger",
   completed: "success",
   failed: "danger",
   published: "success",
@@ -158,6 +161,30 @@ function formatDateTime(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
+function formatElapsedSeconds(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "暂无";
+  if (value < 60) return `${Math.round(value)} 秒`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟`;
+  return `${Math.round(value / 360) / 10} 小时`;
+}
+function formatProgressStatus(status) {
+  const labels = {
+    not_started: "未开始",
+    running: "运行中",
+    stale: "疑似卡住",
+    completed: "已完成",
+    failed: "失败",
+    unknown: "状态不完整",
+  };
+  return labels[status] ?? status ?? "未知";
+}
+function getProgressTone(progress) {
+  if (progress?.stale || progress?.status === "stale") return "danger";
+  if (progress?.status === "completed") return "success";
+  if (progress?.status === "failed") return "danger";
+  if (progress?.status === "running") return "info";
+  return "warning";
+}
 function formatMetricValue(value) {
   if (typeof value !== "number" || Number.isNaN(value)) return "暂无";
   return Math.abs(value) >= 1 ? value.toFixed(4) : value.toPrecision(4);
@@ -166,6 +193,15 @@ function formatMetricName(name) { return name ? METRIC_LABELS[name] ?? name : "�
 function formatProblemType(problemType) { return problemType ? PROBLEM_TYPE_LABELS[problemType] ?? problemType : "未解析"; }
 function formatTaskStatus(status) { return TASK_STATUS_LABELS[status] ?? status; }
 function getTaskStatusTone(status) { return TASK_STATUS_TONES[status] ?? "warning"; }
+function getTaskRuntimeStatus(task, runtimeProgress) {
+  const progressStatus = runtimeProgress?.status;
+  if (progressStatus === "stale") return "stale";
+  if (progressStatus === "completed") return "completed";
+  if (progressStatus === "failed") return "failed";
+  if (progressStatus === "running") return "running";
+  if (progressStatus === "unknown" || progressStatus === "not_started") return task?.status ?? "draft";
+  return task?.status ?? "draft";
+}
 function combineTokenUsageReports(...reports) {
   const availableReports = reports.filter((report) => hasTokenUsage(report));
   if (!availableReports.length) return null;
@@ -227,7 +263,7 @@ function getTaskSummary(task) {
   if (task?.label_column) return `已识别目标列 ${task.label_column}，任务类型待补全。`;
   return `已识别任务类型 ${formatProblemType(task.problem_type)}，目标列待补全。`;
 }
-function getTaskNextStep(task) {
+function getTaskNextStep(task, runtimeStatus = task?.status) {
   if (!task) {
     return {
       tone: "info",
@@ -264,11 +300,20 @@ function getTaskNextStep(task) {
       page: "human",
     };
   }
-  if (task.status === "running") {
+  if (runtimeStatus === "running") {
     return {
       tone: "info",
       title: "等待本次运行完成",
       body: "运行结束后会回写指标、候选模型和输出目录。",
+      action: "查看运行进度",
+      page: "workflow",
+    };
+  }
+  if (runtimeStatus === "stale") {
+    return {
+      tone: "danger",
+      title: "任务疑似卡住",
+      body: task.notes || "运行目录长时间没有更新，先打开运行进度看最后活动，再决定是否继续。",
       action: "查看运行进度",
       page: "workflow",
     };
@@ -299,7 +344,7 @@ function getTaskNextStep(task) {
     page: "report",
   };
 }
-function getTaskLifecycleSteps(task) {
+function getTaskLifecycleSteps(task, runtimeStatus = task?.status) {
   return [
     { key: "task", label: "任务", state: task ? "done" : "active" },
     { key: "dataset", label: "数据", state: task?.dataset_filename ? "done" : task ? "active" : "pending" },
@@ -311,17 +356,36 @@ function getTaskLifecycleSteps(task) {
     {
       key: "run",
       label: "训练",
-      state: task?.last_run ? "done" : task?.status === "failed" ? "danger" : task?.status === "running" ? "active" : "pending",
+      state: runtimeStatus === "running" ? "active" : runtimeStatus === "stale" ? "danger" : task?.last_run ? "done" : runtimeStatus === "failed" ? "danger" : "pending",
     },
   ];
 }
 function getAnalysisSourceLabel(task) {
   const source = getTaskAnalysis(task)?.analysis_source;
   if (!source) return "未标注";
-  return source === "ai_connector" ? "当前运行时 AI 连接器" : String(source);
+  if (source === "ai_connector") return "当前运行时 AI 连接器";
+  if (source === "human_correction") return "人工修正";
+  return String(source);
 }
 function getTeamRoleLabel(role) { return TEAM_ROLE_LABELS[role] ?? role ?? "未识别角色"; }
-function mergeTaskIntoList(items, nextTask) { return [nextTask, ...items.filter((task) => task.id !== nextTask.id)]; }
+function getTaskCreatedAtMs(task) {
+  const value = task?.created_at ? new Date(task.created_at).getTime() : 0;
+  return Number.isNaN(value) ? 0 : value;
+}
+function sortTasksForDisplay(items) {
+  return [...(items ?? [])].sort((left, right) => {
+    const createdDelta = getTaskCreatedAtMs(right) - getTaskCreatedAtMs(left);
+    if (createdDelta !== 0) return createdDelta;
+    return String(right?.id ?? "").localeCompare(String(left?.id ?? ""));
+  });
+}
+function mergeTaskIntoList(items, nextTask) {
+  const existingIndex = items.findIndex((task) => task.id === nextTask.id);
+  if (existingIndex < 0) return sortTasksForDisplay([nextTask, ...items]);
+  const nextItems = [...items];
+  nextItems[existingIndex] = { ...items[existingIndex], ...nextTask };
+  return nextItems;
+}
 function mergeConnectorIntoList(items, nextConnector) {
   const nextItems = items.map((item) => item.id === nextConnector.id ? nextConnector : nextConnector.is_active ? { ...item, is_active: false } : item);
   return nextItems.some((item) => item.id === nextConnector.id) ? nextItems : [nextConnector, ...nextItems];
@@ -329,8 +393,11 @@ function mergeConnectorIntoList(items, nextConnector) {
 function getUserLabel(user) { return user?.user_metadata?.display_name || user?.email || user?.id || ""; }
 function buildTaskCreationMessage(task) {
   if (task.status === "paused_for_review") return "任务已创建，但根据任务策略自动进入人工复核。请先处理人机协同节点。";
+  if (task.status === "waiting_human") return "任务已创建并自动进入工作流，当前等待人工协同节点处理。";
+  if (task.status === "completed" && task.last_run) return `任务已创建、CSV 已上传，自动工作流已完成。${formatMetricName(task.last_run.metric_name)}：${formatMetricValue(task.last_run.metric_value)}。`;
+  if (task.status === "failed") return "任务已创建并自动进入工作流，但本次运行失败。请查看运行进度里的真实错误和产物目录。";
   return task.label_column && task.problem_type
-    ? "任务已创建，CSV 已上传，并且阶段路由对应的 AI 已完成任务解析。"
+    ? "任务已创建，CSV 已上传，并且阶段路由对应的 AI 已完成任务解析；MLZero 已自动启动或已进入可观察阶段。"
     : "任务已创建，CSV 已上传，但 AI 解析还未完成。请检查阶段路由或当前激活连接器后重试。";
 }
 function translateServerMessage(message) {
@@ -409,12 +476,14 @@ export default function App() {
   const [tokenLedgerState, setTokenLedgerState] = useState("idle");
   const [tokenLedgerError, setTokenLedgerError] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [taskPanelMode, setTaskPanelMode] = useState("create");
   const [taskForm, setTaskForm] = useState(EMPTY_TASK_FORM);
   const [taskFile, setTaskFile] = useState(null);
   const [taskUploadToken, setTaskUploadToken] = useState(0);
   const [submittingTask, setSubmittingTask] = useState(false);
   const [runningTaskId, setRunningTaskId] = useState("");
   const [analyzingTaskId, setAnalyzingTaskId] = useState("");
+  const [semanticSavingTaskId, setSemanticSavingTaskId] = useState("");
   const [deletingTaskId, setDeletingTaskId] = useState("");
   const [taskMessage, setTaskMessage] = useState("");
   const [taskError, setTaskError] = useState("");
@@ -426,6 +495,10 @@ export default function App() {
   const [taskModelReport, setTaskModelReport] = useState(null);
   const [taskModelReportState, setTaskModelReportState] = useState("idle");
   const [taskModelReportError, setTaskModelReportError] = useState("");
+  const [taskRunProgress, setTaskRunProgress] = useState(null);
+  const [taskRunProgressByTaskId, setTaskRunProgressByTaskId] = useState({});
+  const [taskRunProgressState, setTaskRunProgressState] = useState("idle");
+  const [taskRunProgressError, setTaskRunProgressError] = useState("");
   const [humanRequestPreset, setHumanRequestPreset] = useState(null);
   const [connectors, setConnectors] = useState([]);
   const [connectorsState, setConnectorsState] = useState("idle");
@@ -447,7 +520,7 @@ export default function App() {
   const [quotaState, setQuotaState] = useState("idle");
   const [quotaError, setQuotaError] = useState("");
   const [quotaMessage, setQuotaMessage] = useState("");
-  const [quotaSavingMemberId, setQuotaSavingMemberId] = useState("");
+  const [quotaSavingKey, setQuotaSavingKey] = useState("");
   const [routingPolicies, setRoutingPolicies] = useState([]);
   const [routingState, setRoutingState] = useState("idle");
   const [routingError, setRoutingError] = useState("");
@@ -479,7 +552,21 @@ export default function App() {
   const activeNavItem = useMemo(() => visibleNavItems.find((item) => item.id === activePage) ?? visibleNavItems[0] ?? null, [activePage, visibleNavItems]);
   const completedTaskCount = useMemo(() => tasks.filter((task) => task.status === "completed" || task.last_run).length, [tasks]);
   const waitingTaskCount = useMemo(() => tasks.filter((task) => ["paused_for_review", "waiting_human"].includes(task.status)).length, [tasks]);
-  const workspaceNextStep = useMemo(() => getTaskNextStep(selectedTask), [selectedTask]);
+  const selectedTaskRunProgress = useMemo(
+    () => (selectedTask?.id ? taskRunProgressByTaskId[selectedTask.id] ?? taskRunProgress : null),
+    [selectedTask?.id, taskRunProgress, taskRunProgressByTaskId],
+  );
+  const runningTaskProgressIds = useMemo(
+    () => tasks
+      .filter((task) => task.status === "running")
+      .map((task) => task.id)
+      .slice(0, 4),
+    [tasks],
+  );
+  const workspaceNextStep = useMemo(
+    () => getTaskNextStep(selectedTask, getTaskRuntimeStatus(selectedTask, selectedTaskRunProgress)),
+    [selectedTask, selectedTaskRunProgress],
+  );
 
   async function loadHealth() {
     setHealthLoading(true);
@@ -584,7 +671,7 @@ export default function App() {
       return;
     }
     setTasksState("loading");
-    try { setTasks((await api.listTasks(requestContext)).items ?? []); } catch (error) { setTaskError(getErrorMessage(error)); } finally { setTasksState("ready"); }
+    try { setTasks(sortTasksForDisplay((await api.listTasks(requestContext)).items ?? [])); } catch (error) { setTaskError(getErrorMessage(error)); } finally { setTasksState("ready"); }
   }
 
   async function loadTaskAIConversations(taskId = selectedTask?.id) {
@@ -622,6 +709,36 @@ export default function App() {
       setTaskModelReportError(getErrorMessage(error));
     } finally {
       setTaskModelReportState("ready");
+    }
+  }
+
+  async function loadTaskRunProgress(taskId = selectedTask?.id, options = {}) {
+    const { background = false, silent = false } = options;
+    if (!session?.access_token || !activeTeamId || !taskId) {
+      setTaskRunProgress(null);
+      if (!background) setTaskRunProgressByTaskId({});
+      setTaskRunProgressState("idle");
+      setTaskRunProgressError("");
+      return null;
+    }
+    if (!background) setTaskRunProgressState((current) => current === "ready" ? "refreshing" : "loading");
+    setTaskRunProgressError("");
+    try {
+      const progress = await api.taskRunProgress(taskId, requestContext);
+      if (!background) setTaskRunProgress(progress);
+      setTaskRunProgressByTaskId((current) => ({ ...current, [taskId]: progress }));
+      if (progress?.task?.id) {
+        setTasks((current) => mergeTaskIntoList(current, progress.task));
+        if (progress.repaired && !silent) {
+          setTaskMessage("检测到任务运行目录长时间无更新，已把任务从“运行中”修正为失败，并保留真实产物目录。");
+        }
+      }
+      return progress;
+    } catch (error) {
+      setTaskRunProgressError(getErrorMessage(error));
+      return null;
+    } finally {
+      if (!background) setTaskRunProgressState("ready");
     }
   }
 
@@ -746,16 +863,29 @@ export default function App() {
   }
 
   async function refreshWorkspaceData() {
-    const loaders = [loadHealth, loadTasks, loadConnectors];
+    if (activePage === "system") return loadHealth();
+    if (activePage === "tasks") return loadTasks();
+    if (activePage === "workflow") return selectedTask?.id ? loadTaskRunProgress(selectedTask.id) : loadTasks();
+    if (activePage === "usage") return Promise.allSettled([loadUsageSummary(), loadTokenLedgers()]);
+    if (activePage === "quotas") return loadQuotaSummary();
+    if (activePage === "routing") return loadRoutingPolicies();
+    if (activePage === "assets") return loadAssets();
+    if (activePage === "audit") return loadAuditLogs();
+    if (activePage === "team") return Promise.allSettled([loadTeamMembers(), loadTeamSettings()]);
+    if (activePage === "conversations") return loadTaskAIConversations();
+    if (activePage === "report") return loadTaskModelReport();
+    if (activePage === "connectors") return loadConnectors();
+    return loadTasks();
+  }
+
+  async function refreshActiveTaskHeavyData(taskId) {
+    const loaders = [];
     if (activePage === "usage") loaders.push(loadUsageSummary, loadTokenLedgers);
-    if (activePage === "quotas") loaders.push(loadQuotaSummary);
-    if (activePage === "routing") loaders.push(loadRoutingPolicies);
-    if (activePage === "assets") loaders.push(loadAssets);
-    if (activePage === "audit") loaders.push(loadAuditLogs);
-    if (activePage === "team") loaders.push(loadTeamMembers, loadTeamSettings);
-    if (activePage === "conversations") loaders.push(loadTaskAIConversations);
-    if (activePage === "report") loaders.push(loadTaskModelReport);
-    await Promise.all(loaders.map((loader) => loader()));
+    if (activePage === "conversations" && taskId) loaders.push(() => loadTaskAIConversations(taskId));
+    if (activePage === "report" && taskId) loaders.push(() => loadTaskModelReport(taskId));
+    if ((activePage === "tasks" || activePage === "workflow") && taskId) loaders.push(() => loadTaskRunProgress(taskId));
+    if (!loaders.length) return;
+    await Promise.allSettled(loaders.map((loader) => loader()));
   }
 
   useEffect(() => {
@@ -919,7 +1049,72 @@ export default function App() {
 
   useEffect(() => {
     setTaskChatError("");
+    setTaskRunProgress(null);
+    setTaskRunProgressError("");
+    setTaskRunProgressState("idle");
   }, [selectedTask?.id]);
+
+  useEffect(() => {
+    if (!selectedTask?.id || !session?.access_token || !activeTeamId) {
+      setTaskRunProgress(null);
+      setTaskRunProgressState("idle");
+      setTaskRunProgressError("");
+      return undefined;
+    }
+    const runRequestInFlight = runningTaskId === selectedTask.id;
+    const shouldInspect = activePage === "workflow"
+      || runRequestInFlight
+      || selectedTask.status === "running";
+    if (!shouldInspect) return undefined;
+
+    let active = true;
+    const refresh = async (options = {}) => {
+      if (!active) return;
+      await loadTaskRunProgress(selectedTask.id, options);
+    };
+    void refresh();
+    if (selectedTask.status !== "running" && !runRequestInFlight) {
+      return () => { active = false; };
+    }
+    const intervalId = window.setInterval(() => {
+      void refresh({ background: true, silent: true });
+    }, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    activePage,
+    activeTeamId,
+    selectedTask?.id,
+    selectedTask?.status,
+    selectedTask?.last_run_attempt?.output_dir,
+    selectedTask?.last_run?.output_dir,
+    runningTaskId,
+    session?.access_token,
+  ]);
+
+  useEffect(() => {
+    if (!session?.access_token || !activeTeamId || !runningTaskProgressIds.length) return undefined;
+    let active = true;
+    const refreshLiveTasks = async () => {
+      if (!active) return;
+      await Promise.allSettled(
+        runningTaskProgressIds.map((taskId) => loadTaskRunProgress(taskId, {
+          background: true,
+          silent: taskId !== selectedTask?.id,
+        })),
+      );
+    };
+    void refreshLiveTasks();
+    const intervalId = window.setInterval(() => {
+      void refreshLiveTasks();
+    }, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [activeTeamId, runningTaskProgressIds.join("|"), selectedTask?.id, session?.access_token]);
 
   useEffect(() => {
     if (activePage !== "conversations") return;
@@ -1124,25 +1319,29 @@ export default function App() {
           .filter((item) => item.assignee_value && item.title && item.summary),
       }, requestContext);
       createdTaskId = createdTask.id;
-      const uploadedTask = await api.uploadDataset(createdTask.id, taskFile, requestContext);
+      setTasks((current) => mergeTaskIntoList(current, createdTask));
+      setSelectedTaskId(createdTask.id);
+      setTaskPanelMode("queue");
+      setAnalyzingTaskId(createdTask.id);
+      setTaskMessage("任务已创建，正在上传 CSV 并执行 AI 解析。");
+      const uploadedTask = await api.uploadDataset(createdTask.id, taskFile, requestContext, {
+        autoRun: false,
+        timeLimit: DEFAULT_RUN_TIME_LIMIT,
+      });
       setTasks((current) => mergeTaskIntoList(current, uploadedTask));
       setSelectedTaskId(uploadedTask.id);
       setTaskForm(EMPTY_TASK_FORM);
       setTaskFile(null);
       setTaskUploadToken((current) => current + 1);
-      await Promise.all([loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(uploadedTask.id), loadTaskModelReport(uploadedTask.id)]);
-      setTaskMessage(buildTaskCreationMessage(uploadedTask));
+      void refreshActiveTaskHeavyData(uploadedTask.id);
+      setTaskMessage(`${buildTaskCreationMessage(uploadedTask)} 已开始启动 MLZero，运行进度会读取真实日志和产物目录。`);
+      void handleRunTask(uploadedTask.id);
     } catch (error) {
-      await Promise.allSettled([
-        loadTasks(),
-        loadUsageSummary(),
-        loadTokenLedgers(),
-        createdTaskId ? loadTaskAIConversations(createdTaskId) : Promise.resolve(),
-        createdTaskId ? loadTaskModelReport(createdTaskId) : Promise.resolve(),
-      ]);
+      await Promise.allSettled([loadTasks(), refreshActiveTaskHeavyData(createdTaskId)]);
       if (createdTaskId) setSelectedTaskId(createdTaskId);
       setTaskError(getErrorMessage(error));
     } finally {
+      setAnalyzingTaskId((current) => current === createdTaskId ? "" : current);
       setSubmittingTask(false);
     }
   }
@@ -1155,25 +1354,63 @@ export default function App() {
       const updatedTask = await api.analyzeTask(taskId, requestContext);
       setTasks((current) => mergeTaskIntoList(current, updatedTask));
       setSelectedTaskId(updatedTask.id);
-      await Promise.all([loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
+      void refreshActiveTaskHeavyData(updatedTask.id);
       setTaskMessage(`任务“${updatedTask.name}”已通过当前运行时 AI 重新解析。`);
     } catch (error) {
-      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
+      await Promise.allSettled([loadTasks(), refreshActiveTaskHeavyData(taskId)]);
       setTaskError(getErrorMessage(error));
     } finally {
       setAnalyzingTaskId("");
     }
   }
 
+  async function handleUpdateTaskSemantics(event, task) {
+    event.preventDefault();
+    if (!task?.id) return;
+    const formData = new FormData(event.currentTarget);
+    const payload = {
+      label_column: String(formData.get("label_column") ?? "").trim(),
+      problem_type: String(formData.get("problem_type") ?? "").trim(),
+      metric_name: String(formData.get("metric_name") ?? "").trim(),
+      correction_note: String(formData.get("correction_note") ?? "").trim() || null,
+    };
+    if (!payload.label_column || !payload.problem_type || !payload.metric_name) {
+      setTaskError("请完整填写目标列、任务类型和评估指标。");
+      return;
+    }
+    setSemanticSavingTaskId(task.id);
+    setTaskError("");
+    setTaskMessage("");
+    try {
+      const updatedTask = await api.updateTaskSemantics(task.id, payload, requestContext);
+      setTasks((current) => mergeTaskIntoList(current, updatedTask));
+      setSelectedTaskId(updatedTask.id);
+      void refreshActiveTaskHeavyData(updatedTask.id);
+      setTaskMessage("任务语义已人工修正，旧运行结果已从当前任务状态中移除。请重新运行 MLZero 生成新的真实结果。");
+    } catch (error) {
+      await Promise.allSettled([loadTasks(), refreshActiveTaskHeavyData(task.id)]);
+      setTaskError(getErrorMessage(error));
+    } finally {
+      setSemanticSavingTaskId("");
+    }
+  }
+
   async function handleRunTask(taskId) {
     setRunningTaskId(taskId);
     setTaskError("");
-    setTaskMessage("");
+    setTaskMessage("MLZero 已启动，正在读取真实日志和产物进度。");
+    setTaskRunProgressError("");
+    setTasks((current) => current.map((task) => (
+      task.id === taskId
+        ? { ...task, status: "running", notes: "MLZero 正在运行，正在读取真实日志和产物进度。" }
+        : task
+    )));
+    setSelectedTaskId(taskId);
     try {
       const updatedTask = await api.runTask(taskId, DEFAULT_RUN_TIME_LIMIT, requestContext);
       setTasks((current) => mergeTaskIntoList(current, updatedTask));
       setSelectedTaskId(updatedTask.id);
-      await Promise.all([loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(updatedTask.id), loadTaskModelReport(updatedTask.id)]);
+      void refreshActiveTaskHeavyData(updatedTask.id);
       if (updatedTask.status === "paused_for_review") {
         setTaskMessage("任务已根据人工参与策略自动暂停，等待处理协同节点。");
       } else if (updatedTask.last_run) {
@@ -1182,7 +1419,7 @@ export default function App() {
         setTaskMessage("任务状态已更新。");
       }
     } catch (error) {
-      await Promise.allSettled([loadTasks(), loadUsageSummary(), loadTokenLedgers(), loadTaskAIConversations(taskId), loadTaskModelReport(taskId)]);
+      await Promise.allSettled([loadTasks(), refreshActiveTaskHeavyData(taskId)]);
       setTaskError(getErrorMessage(error));
     } finally {
       setRunningTaskId("");
@@ -1484,18 +1721,31 @@ export default function App() {
     }
   }
 
-  async function handleSaveTeamQuota(memberId, payload) {
-    setQuotaSavingMemberId(memberId);
+  async function handleSaveTeamQuota(quota, payload) {
+    const scopeType = quota?.scope_type ?? "member";
+    const scopeKey = quota?.scope_key || quota?.user_id || quota?.connector_id || quota?.team_id;
+    if (!scopeKey) {
+      setQuotaError("缺少配额作用域标识，无法保存。");
+      return;
+    }
+    const quotaKey = `${scopeType}:${scopeKey}`;
+    setQuotaSavingKey(quotaKey);
     setQuotaError("");
     setQuotaMessage("");
     try {
-      await api.adjustTeamQuota(memberId, payload, requestContext);
+      await api.adjustTeamQuotaScope({
+        ...payload,
+        scope_type: scopeType,
+        scope_key: scopeKey,
+        user_id: scopeType === "member" ? scopeKey : undefined,
+        connector_id: scopeType === "connector" ? scopeKey : undefined,
+      }, requestContext);
       await Promise.all([loadQuotaSummary(), loadAuditLogs()]);
-      setQuotaMessage("成员配额已更新。");
+      setQuotaMessage("配额已更新。");
     } catch (error) {
       setQuotaError(getErrorMessage(error));
     } finally {
-      setQuotaSavingMemberId("");
+      setQuotaSavingKey("");
     }
   }
 
@@ -1693,20 +1943,66 @@ export default function App() {
     const runUsage = getTaskRunUsage(selectedTask);
     const combinedUsage = combineTokenUsageReports(analysisUsage, runUsage);
     const lastRunAttempt = getTaskRunAttempt(selectedTask);
-    const showingFailedAttempt = selectedTask.status === "failed" && lastRunAttempt;
+    const runProgress = selectedTaskRunProgress?.task?.id === selectedTask.id ? selectedTaskRunProgress : null;
+    const runtimeStatus = getTaskRuntimeStatus(selectedTask, runProgress);
+    const runtimeProgressLabel = formatProgressStatus(runProgress?.status);
+    const showingFailedAttempt = runtimeStatus === "failed" && lastRunAttempt;
     const rerunStage = getTaskRerunStage(selectedTask);
     const conversationCount = Array.isArray(taskAIConversations?.items) ? taskAIConversations.items.length : 0;
     const datasetProfile = getTaskDatasetProfile(selectedTask);
     const datasetColumns = Array.isArray(datasetProfile?.columns) ? datasetProfile.columns : [];
     const previewRows = Array.isArray(datasetProfile?.preview_rows) ? datasetProfile.preview_rows : [];
-    const nextStep = getTaskNextStep(selectedTask);
-    const lifecycleSteps = getTaskLifecycleSteps(selectedTask);
+    const nextStep = getTaskNextStep(selectedTask, runtimeStatus);
+    const lifecycleSteps = getTaskLifecycleSteps(selectedTask, runtimeStatus);
     const canRunSelectedTask = Boolean(selectedTask.dataset_filename)
       && runningTaskId !== selectedTask.id
+      && runtimeStatus !== "running"
       && !["waiting_human", "paused_for_review"].includes(selectedTask.status);
     const canAnalyzeSelectedTask = Boolean(selectedTask.dataset_filename)
       && analyzingTaskId !== selectedTask.id
-      && runningTaskId !== selectedTask.id;
+      && runningTaskId !== selectedTask.id
+      && runtimeStatus !== "running";
+    const semanticCorrectionForm = selectedTask.dataset_filename ? (
+      <form key={`semantic-${selectedTask.id}`} className="task-form semantic-correction-form" onSubmit={(event) => void handleUpdateTaskSemantics(event, selectedTask)}>
+        <div className="section-head compact">
+          <div>
+            <h3>人工修正解析结论</h3>
+            <p>目标列、任务类型和指标会写回任务语义，并清理当前任务上的旧运行结果。</p>
+          </div>
+          <button type="submit" className="primary-button" disabled={semanticSavingTaskId === selectedTask.id}>
+            {semanticSavingTaskId === selectedTask.id ? "保存中..." : "保存修正"}
+          </button>
+        </div>
+        <div className="semantic-correction-grid">
+          <label className="field">
+            <span>目标列</span>
+            {datasetColumns.length ? (
+              <select name="label_column" defaultValue={selectedTask.label_column ?? ""}>
+                <option value="">请选择目标列</option>
+                {datasetColumns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
+              </select>
+            ) : (
+              <input name="label_column" defaultValue={selectedTask.label_column ?? ""} placeholder="输入 CSV 中的目标列名" />
+            )}
+          </label>
+          <label className="field">
+            <span>任务类型</span>
+            <select name="problem_type" defaultValue={selectedTask.problem_type ?? "classification"}>
+              <option value="classification">分类</option>
+              <option value="regression">回归</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>评估指标</span>
+            <input name="metric_name" defaultValue={getTaskMetricName(selectedTask) ?? ""} placeholder="accuracy / rmse / roc_auc" />
+          </label>
+        </div>
+        <label className="field">
+          <span>修正说明</span>
+          <textarea name="correction_note" rows={3} defaultValue={analysis?.correction_note ?? ""} placeholder="说明为什么采用这组目标列、任务类型和指标。" />
+        </label>
+      </form>
+    ) : null;
 
     function handleNextStepClick() {
       if (nextStep.action === "AI 解析") {
@@ -1729,7 +2025,7 @@ export default function App() {
               <h3>{selectedTask.name}</h3>
               <p className="task-description-large">{selectedTask.description}</p>
             </div>
-            <span className={`runtime-pill ${getTaskStatusTone(selectedTask.status)}`}>{formatTaskStatus(selectedTask.status)}</span>
+            <span className={`runtime-pill ${getTaskStatusTone(runtimeStatus)}`}>{formatTaskStatus(runtimeStatus)}</span>
           </div>
 
           <div className="task-next-action">
@@ -1765,6 +2061,44 @@ export default function App() {
               <strong>下一次运行会从{formatWorkflowStage(rerunStage)}开始</strong>
               <p>后端会执行严格增量重跑：上游阶段复用已有真实产物，下游阶段写入新的运行目录和 `incremental_rerun_manifest.json`。</p>
             </div>
+          ) : null}
+          {taskRunProgressError ? <div className="error-banner">{taskRunProgressError}</div> : null}
+          {runProgress ? (
+            <div className={`callout task-run-progress-card ${runProgress.stale ? "danger" : ""}`}>
+              <div className="section-head compact">
+                <div>
+                  <h3>真实运行诊断</h3>
+                  <p>{runProgress.current_activity || "暂无可解析的运行活动。"}</p>
+                </div>
+                <span className={`runtime-pill ${getProgressTone(runProgress)}`}>{runtimeProgressLabel}</span>
+              </div>
+              <div className="task-run-progress-meter" aria-label="运行进度">
+                <span style={{ width: `${Math.max(0, Math.min(100, runProgress.progress_percent ?? 0))}%` }} />
+              </div>
+              <div className="summary-grid">
+                <article className="summary-item"><span>推断阶段</span><strong>{formatWorkflowStage(runProgress.current_stage)}</strong></article>
+                <article className="summary-item"><span>进度估计</span><strong>{runProgress.progress_percent ?? 0}%</strong></article>
+                <article className="summary-item"><span>最后日志</span><strong>{formatDateTime(runProgress.last_log_at)}</strong></article>
+                <article className="summary-item"><span>无更新时间</span><strong>{formatElapsedSeconds(runProgress.seconds_since_last_update)}</strong></article>
+                <article className="summary-item"><span>结果产物</span><strong>{runProgress.artifacts?.has_run_summary ? "有 summary" : "无 summary"}</strong></article>
+                <article className="summary-item"><span>Token 用量</span><strong>{runProgress.artifacts?.has_token_usage ? "已记录" : "未记录"}</strong></article>
+              </div>
+              {runProgress.stale_reason ? <p className="danger-text">{runProgress.stale_reason}</p> : null}
+              {runProgress.output_dir ? <p className="mono-text task-run-progress-path">{runProgress.output_dir}</p> : null}
+              {Array.isArray(runProgress.warnings) && runProgress.warnings.length ? (
+                <div className="chip-list">
+                  {runProgress.warnings.map((warning) => <span key={warning} className="chip warning">{warning}</span>)}
+                </div>
+              ) : null}
+              {Array.isArray(runProgress.latest_log_lines) && runProgress.latest_log_lines.length ? (
+                <details className="callout workflow-log-excerpt">
+                  <summary>查看最后日志</summary>
+                  <pre className="code-block">{runProgress.latest_log_lines.slice(-30).join("\n")}</pre>
+                </details>
+              ) : null}
+            </div>
+          ) : runtimeStatus === "running" || taskRunProgressState === "loading" ? (
+            <div className="callout">正在读取真实运行日志和产物状态...</div>
           ) : null}
 
           <div className="button-row task-action-row">
@@ -1847,9 +2181,15 @@ export default function App() {
                 <article className="summary-item"><span>列名数量</span><strong>{Array.isArray(analysis.column_names) ? analysis.column_names.length : 0}</strong></article>
               </div>
               <div className="callout"><strong>AI 推断理由</strong><p>{analysis.reasoning ?? "暂无"}</p></div>
+              {semanticCorrectionForm}
               {analysis.raw_response ? <details className="callout"><summary>查看 AI 原始返回</summary><pre className="code-block">{analysis.raw_response}</pre></details> : null}
             </div>
-          ) : <div className="empty-state">这个任务还没有拿到 AI 解析结果。</div>}
+          ) : (
+            <div className="detail-stack">
+              <div className="empty-state">这个任务还没有拿到 AI 解析结果。</div>
+              {semanticCorrectionForm}
+            </div>
+          )}
         </details>
 
         <details className="section-card task-detail-fold">
@@ -1957,7 +2297,7 @@ export default function App() {
             <TokenUsageCard
               title="AI 解析 Token"
               report={analysisUsage}
-              description="这里记录的是任务上传后或手动点击“AI 解析”时，当前运行时连接器实际返回的 token 使用量。"
+              description="这里记录任务上传后或手动点击“AI 解析”时的 token。Provider 不返回 usage 时，后端会使用显式配置的 tokenizer 复算，否则直接失败。"
               emptyText="当前还没有记录到 AI 解析 token。老任务如果是在这个模块完成之前创建的，也可能没有历史数据。"
               embedded
             />
@@ -2085,15 +2425,15 @@ export default function App() {
                     <strong>新建任务</strong>
                     <p>{tasks.length ? `${tasks.length} 个任务` : "填写需求并上传 CSV"}</p>
                   </article>
-                  <article className={selectedTask?.label_column && selectedTask?.problem_type ? "task-step-card done" : selectedTask?.dataset_filename ? "task-step-card active" : "task-step-card"}>
+                  <article className={selectedTaskRunProgress?.status === "stale" ? "task-step-card danger" : selectedTaskRunProgress?.status === "running" ? "task-step-card active" : selectedTask?.label_column && selectedTask?.problem_type ? "task-step-card done" : selectedTask?.dataset_filename ? "task-step-card active" : "task-step-card"}>
                     <span>3</span>
                     <strong>AI 解析</strong>
-                    <p>{selectedTask ? getTaskAnalysisStatus(selectedTask) : "等待任务"}</p>
+                    <p>{selectedTaskRunProgress?.current_activity || (selectedTask ? getTaskAnalysisStatus(selectedTask) : "等待任务")}</p>
                   </article>
-                  <article className={selectedTask?.last_run ? "task-step-card done" : selectedTask?.status === "failed" ? "task-step-card danger" : selectedTask?.status === "running" ? "task-step-card active" : "task-step-card"}>
+                  <article className={selectedTaskRunProgress?.status === "stale" ? "task-step-card danger" : selectedTaskRunProgress?.status === "running" ? "task-step-card active" : selectedTask?.last_run ? "task-step-card done" : selectedTask?.status === "failed" ? "task-step-card danger" : "task-step-card"}>
                     <span>4</span>
                     <strong>训练结果</strong>
-                    <p>{selectedTask?.last_run ? formatMetricName(selectedTask.last_run.metric_name) : selectedTask ? formatTaskStatus(selectedTask.status) : "等待运行"}</p>
+                    <p>{selectedTaskRunProgress?.current_activity || (selectedTask?.last_run ? formatMetricName(selectedTask.last_run.metric_name) : selectedTask ? formatTaskStatus(selectedTask.status) : "等待运行")}</p>
                   </article>
                 </div>
 
@@ -2110,22 +2450,49 @@ export default function App() {
                 {taskMessage ? <div className="notice-banner">{taskMessage}</div> : null}
                 {taskError ? <div className="error-banner">{taskError}</div> : null}
                 <div className="task-workspace-grid task-console-grid">
-                  <TaskForm form={taskForm} connectors={connectors} selectedFile={taskFile} fileInputKey={taskUploadToken} submitting={submittingTask} onFieldChange={handleTaskFormFieldChange} onStageRoutingChange={handleTaskStageRoutingChange} onAddPolicy={handleAddTaskPolicy} onPolicyChange={handleTaskPolicyChange} onRemovePolicy={handleRemoveTaskPolicy} onFileChange={(event) => setTaskFile(event.target.files?.[0] ?? null)} onSubmit={handleTaskSubmit} />
-                  <section className="section-card task-list-card task-panel">
-                    <div className="section-head">
+                  <section className="section-card task-control-panel">
+                    <div className="task-control-head">
                       <div>
-                        <p className="eyebrow">任务队列</p>
-                        <h3>选择一个任务</h3>
+                        <p className="eyebrow">工作区</p>
+                        <h3>{taskPanelMode === "create" ? "创建新模型任务" : "任务队列"}</h3>
                       </div>
-                      <button type="button" className="ghost-button" onClick={() => void loadTasks()} disabled={tasksState === "loading"}>
-                        {tasksState === "loading" ? "刷新中..." : "刷新"}
-                      </button>
+                      <div className="segmented-control task-mode-tabs" role="tablist" aria-label="任务工作区">
+                        <button type="button" className={taskPanelMode === "create" ? "active" : ""} onClick={() => setTaskPanelMode("create")}>新建</button>
+                        <button type="button" className={taskPanelMode === "queue" ? "active" : ""} onClick={() => setTaskPanelMode("queue")}>队列</button>
+                      </div>
                     </div>
-                    {tasksState === "loading" && !tasks.length ? <div className="empty-state">正在读取任务列表...</div> : null}
-                    {!tasks.length && tasksState !== "loading" ? <div className="empty-state">还没有任务。</div> : null}
-                    {tasks.length ? <div className="task-cards">{tasks.map((task) => <TaskCard key={task.id} task={task} selected={selectedTask?.id === task.id} running={runningTaskId === task.id} analyzing={analyzingTaskId === task.id} deleting={deletingTaskId === task.id} onSelect={setSelectedTaskId} onAnalyze={handleAnalyzeTask} onRun={handleRunTask} onDelete={handleDeleteTask} onOpenHumanCollaboration={(nextTaskId) => handleOpenHumanCollaboration(nextTaskId)} />)}</div> : null}
+                    <div className="task-control-body">
+                      {taskPanelMode === "create" ? (
+                        <TaskForm form={taskForm} connectors={connectors} selectedFile={taskFile} fileInputKey={taskUploadToken} submitting={submittingTask} onFieldChange={handleTaskFormFieldChange} onStageRoutingChange={handleTaskStageRoutingChange} onAddPolicy={handleAddTaskPolicy} onPolicyChange={handleTaskPolicyChange} onRemovePolicy={handleRemoveTaskPolicy} onFileChange={(event) => setTaskFile(event.target.files?.[0] ?? null)} onSubmit={handleTaskSubmit} />
+                      ) : (
+                        <section className="task-list-card task-panel">
+                          <div className="section-head">
+                            <div>
+                              <p className="eyebrow">任务队列</p>
+                              <h3>选择一个任务</h3>
+                            </div>
+                            <button type="button" className="ghost-button" onClick={() => void loadTasks()} disabled={tasksState === "loading"}>
+                              {tasksState === "loading" ? "刷新中..." : "刷新"}
+                            </button>
+                          </div>
+                          {tasksState === "loading" && !tasks.length ? <div className="empty-state">正在读取任务列表...</div> : null}
+                          {!tasks.length && tasksState !== "loading" ? <div className="empty-state">还没有任务。</div> : null}
+                          {tasks.length > TASK_QUEUE_RENDER_LIMIT ? <div className="notice-banner compact">当前只渲染最近 {TASK_QUEUE_RENDER_LIMIT} 个任务，避免大量任务卡片拖慢页面。旧任务仍可通过刷新后的列表顺序查看。</div> : null}
+                          {tasks.length ? <div className="task-cards">{tasks.slice(0, TASK_QUEUE_RENDER_LIMIT).map((task) => <TaskCard key={task.id} task={task} selected={selectedTask?.id === task.id} running={runningTaskId === task.id} analyzing={analyzingTaskId === task.id} deleting={deletingTaskId === task.id} runtimeProgress={taskRunProgressByTaskId[task.id] ?? null} onSelect={setSelectedTaskId} onAnalyze={handleAnalyzeTask} onRun={handleRunTask} onDelete={handleDeleteTask} onOpenWorkflow={(nextTaskId) => { setSelectedTaskId(nextTaskId); setActivePage("workflow"); }} onOpenHumanCollaboration={(nextTaskId) => handleOpenHumanCollaboration(nextTaskId)} />)}</div> : null}
+                        </section>
+                      )}
+                    </div>
                   </section>
-                  {renderTaskDetail()}
+                  <section className="task-focus-panel">
+                    <div className="task-focus-head">
+                      <div>
+                        <p className="eyebrow">当前任务</p>
+                        <h3>{selectedTask?.name ?? "暂无选中任务"}</h3>
+                      </div>
+                      <button type="button" className="chip-button" onClick={() => setTaskPanelMode("queue")}>切换任务</button>
+                    </div>
+                    {renderTaskDetail()}
+                  </section>
                 </div>
             </RoutePane>
 
@@ -2143,6 +2510,10 @@ export default function App() {
                   tasksLoading={tasksState === "loading"}
                   selectedTask={selectedTask}
                   requestContext={requestContext}
+                  runProgress={selectedTaskRunProgress?.task?.id === selectedTask?.id ? selectedTaskRunProgress : null}
+                  runProgressState={taskRunProgressState}
+                  runProgressError={taskRunProgressError}
+                  onRefreshRunProgress={() => selectedTask?.id ? void loadTaskRunProgress(selectedTask.id) : undefined}
                   onSelectTask={setSelectedTaskId}
                   onOpenHumanCollaboration={handleOpenHumanCollaboration}
                 />
@@ -2360,13 +2731,13 @@ export default function App() {
                   <div>
                     <p className="eyebrow">Quotas</p>
                     <h1>配额管理</h1>
-                    <p className="page-copy">管理员可以在这里按成员调整 token 总额度，当前版本先做真实额度记录与人工调整。</p>
+                    <p className="page-copy">管理员可以在这里按团队、成员、连接器三个作用域调整 token 总额度，并查看真实消耗。</p>
                   </div>
                 </section>
                 <QuotaManagementPanel
                   quotas={quotaSummary}
                   loading={quotaState === "loading"}
-                  savingMemberId={quotaSavingMemberId}
+                  savingQuotaKey={quotaSavingKey}
                   message={quotaMessage}
                   error={quotaError || (!teamCanManage ? "当前账号不是团队管理员，无法查看或调整成员配额。" : "")}
                   onRefresh={() => void loadQuotaSummary()}

@@ -14,6 +14,9 @@ from backend.app.models.task import (
     HumanInteractionRequestStatus,
     RunSummary,
     TaskCreateRequest,
+    TaskAgentEventRecord,
+    TaskAgentMessageRecord,
+    TaskAgentRuntimeRecord,
     TaskHumanRequestRecord,
     TaskInteractionPolicyInput,
     TaskInteractionPolicyRecord,
@@ -41,7 +44,7 @@ class TaskStore:
         payload = self._request_json(
             path=(
                 "ai_tasks"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+                f"?select={self._task_list_select()}&team_id=eq.{quote(team_id, safe='')}"
                 "&order=created_at.desc"
             ),
             access_token=access_token,
@@ -49,6 +52,35 @@ class TaskStore:
         if not isinstance(payload, list):
             raise ConnectionError("Unexpected task list response from Supabase.")
         return [self._task_from_payload(item) for item in payload]
+
+    @staticmethod
+    def _task_list_select() -> str:
+        return ",".join(
+            [
+                "id",
+                "team_id",
+                "created_by",
+                "creator_user_id",
+                "name",
+                "description",
+                "workflow_id",
+                "label_column",
+                "problem_type",
+                "status",
+                "dataset_filename",
+                "dataset_path",
+                "notes",
+                "analysis_token_usage",
+                "last_run",
+                "last_run_attempt",
+                "routing_policy_id",
+                "routing_source",
+                "stage_routing",
+                "interaction_policies",
+                "created_at",
+                "updated_at",
+            ]
+        )
 
     def create_task(self, payload: TaskCreateRequest, *, team_id: str, created_by: str, access_token: str) -> TaskRecord:
         created_payload = self._request_json(
@@ -67,7 +99,9 @@ class TaskStore:
                 "interaction_policies": self._serialize_interaction_policy_inputs(payload.interaction_policies),
             },
         )
-        return self._task_from_payload(self._unwrap_single_record(created_payload, "task create"))
+        task = self._task_from_payload(self._unwrap_single_record(created_payload, "task create"))
+        self._write_task_manifest(task)
+        return task
 
     def get_task(self, team_id: str, task_id: str, *, access_token: str) -> TaskRecord | None:
         payload = self._request_json(
@@ -96,7 +130,9 @@ class TaskStore:
             method="PATCH",
             body=self._task_to_payload(task),
         )
-        return self._task_from_payload(self._unwrap_single_record(updated_payload, "task update"))
+        saved_task = self._task_from_payload(self._unwrap_single_record(updated_payload, "task update"))
+        self._write_task_manifest(saved_task)
+        return saved_task
 
     def save_dataset(self, team_id: str, task_id: str, filename: str, content: bytes) -> Path:
         task_dir = self._task_dir(team_id, task_id)
@@ -104,7 +140,7 @@ class TaskStore:
         suffix = Path(filename).suffix.lower()
         if suffix != ".csv":
             raise ValueError(f"dataset filename must end with .csv: {filename}")
-        dataset_path = task_dir / f"dataset{suffix}"
+        dataset_path = task_dir / "dataset.csv"
         dataset_path.write_bytes(content)
         return dataset_path
 
@@ -122,7 +158,7 @@ class TaskStore:
         suffix = Path(filename).suffix.lower()
         if suffix != ".csv":
             raise ValueError(f"dataset filename must end with .csv: {filename}")
-        return task_dir / f"dataset{suffix}"
+        return task_dir / "dataset.csv"
 
     def delete_task(self, team_id: str, task_id: str, *, access_token: str) -> bool:
         existing = self.get_task(team_id, task_id, access_token=access_token)
@@ -229,6 +265,228 @@ class TaskStore:
             body=body,
         )
         return self._stage_record_from_payload(self._unwrap_single_record(created_payload, "workflow stage create"))
+
+    def list_agent_runs(self, team_id: str, task_id: str, *, access_token: str) -> list[TaskAgentRuntimeRecord]:
+        payload = self._request_json(
+            path=(
+                "task_agent_runs"
+                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+                f"&task_id=eq.{quote(task_id, safe='')}"
+                "&order=updated_at.desc"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, list):
+            raise ConnectionError("Unexpected task agent runs response from Supabase.")
+
+        latest_by_agent: dict[str, TaskAgentRuntimeRecord] = {}
+        for item in payload:
+            record = self._agent_runtime_from_payload(item)
+            if record.agent_id not in latest_by_agent:
+                latest_by_agent[record.agent_id] = record
+        return list(latest_by_agent.values())
+
+    def upsert_agent_run(
+        self,
+        *,
+        team_id: str,
+        task_id: str,
+        agent_id: str,
+        stage: WorkflowStage,
+        name: str,
+        role: str,
+        short_role: str,
+        status: WorkflowStageStatus,
+        progress: int,
+        current_task: str,
+        access_token: str,
+        selected_connector_id: str | None = None,
+        model_name: str | None = None,
+        selection_source: str | None = None,
+        artifact_refs: Any | None = None,
+        log_excerpt: str | None = None,
+        worker_id: str | None = None,
+    ) -> TaskAgentRuntimeRecord:
+        normalized_stage = normalize_workflow_stage(stage)
+        existing = self._request_json(
+            path=(
+                "task_agent_runs"
+                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+                f"&task_id=eq.{quote(task_id, safe='')}"
+                f"&agent_id=eq.{quote(agent_id, safe='')}"
+                "&order=updated_at.desc"
+                "&limit=1"
+            ),
+            access_token=access_token,
+        )
+        existing_record = None
+        if isinstance(existing, list) and existing:
+            existing_record = self._agent_runtime_from_payload(existing[0])
+        started_at, finished_at, duration_seconds = self._resolve_stage_timing(
+            existing_record,
+            status=status,
+        )
+        body = {
+            "team_id": team_id,
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "stage": self._enum_value(normalized_stage),
+            "name": name,
+            "role": role,
+            "short_role": short_role,
+            "status": self._enum_value(status),
+            "progress": max(0, min(int(progress), 100)),
+            "current_task": current_task,
+            "selected_connector_id": selected_connector_id,
+            "model_name": model_name,
+            "selection_source": selection_source,
+            "artifact_refs": artifact_refs,
+            "started_at": started_at.isoformat() if started_at else None,
+            "finished_at": finished_at.isoformat() if finished_at else None,
+            "duration_seconds": duration_seconds,
+            "log_excerpt": log_excerpt if log_excerpt is not None else (existing_record.log_excerpt if existing_record else None),
+            "worker_id": worker_id,
+        }
+        if existing_record is not None:
+            updated_payload = self._request_json(
+                path=f"task_agent_runs?id=eq.{quote(existing_record.id, safe='')}",
+                access_token=access_token,
+                method="PATCH",
+                body=body,
+            )
+            return self._agent_runtime_from_payload(self._unwrap_single_record(updated_payload, "task agent run update"))
+
+        created_payload = self._request_json(
+            path="task_agent_runs",
+            access_token=access_token,
+            method="POST",
+            body=body,
+        )
+        return self._agent_runtime_from_payload(self._unwrap_single_record(created_payload, "task agent run create"))
+
+    def list_agent_events(
+        self,
+        team_id: str,
+        task_id: str,
+        *,
+        access_token: str,
+        limit: int = 80,
+    ) -> list[TaskAgentEventRecord]:
+        payload = self._request_json(
+            path=(
+                "task_agent_events"
+                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+                f"&task_id=eq.{quote(task_id, safe='')}"
+                "&order=created_at.desc"
+                f"&limit={max(1, min(limit, 200))}"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, list):
+            raise ConnectionError("Unexpected task agent events response from Supabase.")
+        return [self._agent_event_from_payload(item) for item in payload]
+
+    def append_agent_event(
+        self,
+        *,
+        team_id: str,
+        task_id: str,
+        agent_id: str,
+        stage: WorkflowStage,
+        kind: str,
+        status: str,
+        text: str,
+        access_token: str,
+        artifact_refs: Any | None = None,
+    ) -> TaskAgentEventRecord:
+        created_payload = self._request_json(
+            path="task_agent_events",
+            access_token=access_token,
+            method="POST",
+            body={
+                "team_id": team_id,
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "stage": normalize_workflow_stage(stage).value,
+                "kind": kind,
+                "status": status,
+                "text": text,
+                "artifact_refs": artifact_refs,
+            },
+        )
+        return self._agent_event_from_payload(self._unwrap_single_record(created_payload, "task agent event create"))
+
+    def list_agent_messages(
+        self,
+        team_id: str,
+        task_id: str,
+        *,
+        access_token: str,
+        limit: int = 120,
+    ) -> list[TaskAgentMessageRecord]:
+        payload = self._request_json(
+            path=(
+                "task_agent_messages"
+                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+                f"&task_id=eq.{quote(task_id, safe='')}"
+                "&order=created_at.desc"
+                f"&limit={max(1, min(limit, 300))}"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, list):
+            raise ConnectionError("Unexpected task agent messages response from Supabase.")
+        return [self._agent_message_from_payload(item) for item in payload]
+
+    def append_agent_message(
+        self,
+        *,
+        team_id: str,
+        task_id: str,
+        from_agent_id: str,
+        stage: WorkflowStage,
+        message_type: str,
+        content: str,
+        access_token: str,
+        to_agent_id: str | None = None,
+        status: str = "sent",
+        payload: dict[str, Any] | None = None,
+        artifact_refs: Any | None = None,
+        correlation_id: str | None = None,
+    ) -> TaskAgentMessageRecord:
+        if correlation_id:
+            existing = self._request_json(
+                path=(
+                    "task_agent_messages"
+                    f"?select=*&team_id=eq.{quote(team_id, safe='')}"
+                    f"&task_id=eq.{quote(task_id, safe='')}"
+                    f"&correlation_id=eq.{quote(correlation_id, safe='')}"
+                    "&limit=1"
+                ),
+                access_token=access_token,
+            )
+            if isinstance(existing, list) and existing:
+                return self._agent_message_from_payload(existing[0])
+
+        created_payload = self._request_json(
+            path="task_agent_messages",
+            access_token=access_token,
+            method="POST",
+            body={
+                "team_id": team_id,
+                "task_id": task_id,
+                "from_agent_id": from_agent_id,
+                "to_agent_id": to_agent_id,
+                "stage": normalize_workflow_stage(stage).value,
+                "message_type": message_type,
+                "status": status,
+                "content": content,
+                "payload": payload,
+                "artifact_refs": artifact_refs,
+                "correlation_id": correlation_id,
+            },
+        )
+        return self._agent_message_from_payload(self._unwrap_single_record(created_payload, "task agent message create"))
 
     def list_human_requests(self, team_id: str, task_id: str, *, access_token: str) -> list[TaskHumanRequestRecord]:
         payload = self._request_json(
@@ -504,7 +762,22 @@ class TaskStore:
         )
 
     def _task_dir(self, team_id: str, task_id: str) -> Path:
-        return self.dataset_root_dir / team_id / task_id
+        return self.dataset_root_dir / task_id
+
+    def task_storage_uri(self, task_id: str) -> str:
+        return f"storage/tasks/{task_id}"
+
+    def run_storage_uri(self, task_id: str, run_id: str) -> str:
+        return f"storage/mlzero_runs/{task_id}/{run_id}"
+
+    def _write_task_manifest(self, task: TaskRecord) -> None:
+        manifest_dir = self._task_dir(task.team_id, task.id)
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = manifest_dir / "task.json"
+        manifest_path.write_text(
+            json.dumps(task.model_dump(mode="json"), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     def _request_json(
         self,
@@ -608,9 +881,46 @@ class TaskStore:
             record.stage = normalize_workflow_stage(str(record.stage))
         return record
 
+    @classmethod
+    def _agent_runtime_from_payload(cls, payload: dict[str, Any]) -> TaskAgentRuntimeRecord:
+        record = TaskAgentRuntimeRecord.model_validate(payload)
+        if isinstance(record.stage, WorkflowStage):
+            record.stage = normalize_workflow_stage(record.stage)
+        else:
+            record.stage = normalize_workflow_stage(str(record.stage))
+        return record
+
+    @classmethod
+    def _agent_event_from_payload(cls, payload: dict[str, Any]) -> TaskAgentEventRecord:
+        event_payload = dict(payload)
+        if "time" not in event_payload:
+            event_payload["time"] = event_payload.get("created_at")
+        event_payload["artifact_refs"] = cls._flatten_artifact_refs(event_payload.get("artifact_refs"))
+        record = TaskAgentEventRecord.model_validate(event_payload)
+        if isinstance(record.stage, WorkflowStage):
+            record.stage = normalize_workflow_stage(record.stage)
+        else:
+            record.stage = normalize_workflow_stage(str(record.stage))
+        return record
+
+    @classmethod
+    def _agent_message_from_payload(cls, payload: dict[str, Any]) -> TaskAgentMessageRecord:
+        message_payload = dict(payload)
+        if "time" not in message_payload:
+            message_payload["time"] = message_payload.get("created_at")
+        message_payload["artifact_refs"] = cls._flatten_artifact_refs(message_payload.get("artifact_refs"))
+        if not isinstance(message_payload.get("payload"), dict):
+            message_payload["payload"] = None
+        record = TaskAgentMessageRecord.model_validate(message_payload)
+        if isinstance(record.stage, WorkflowStage):
+            record.stage = normalize_workflow_stage(record.stage)
+        else:
+            record.stage = normalize_workflow_stage(str(record.stage))
+        return record
+
     @staticmethod
     def _resolve_stage_timing(
-        existing: WorkflowStageRecord | None,
+        existing: WorkflowStageRecord | TaskAgentRuntimeRecord | None,
         *,
         status: WorkflowStageStatus,
     ) -> tuple[datetime | None, datetime | None, float | None]:
@@ -650,6 +960,9 @@ class TaskStore:
         return {
             "name": task.name,
             "description": task.description,
+            "workflow_id": task.workflow_id,
+            "created_by": task.created_by,
+            "creator_user_id": task.creator_user_id or task.created_by,
             "label_column": task.label_column,
             "problem_type": task.problem_type,
             "status": task.status.value if hasattr(task.status, "value") else str(task.status),
@@ -660,6 +973,8 @@ class TaskStore:
             "analysis_token_usage": task.analysis_token_usage.model_dump() if task.analysis_token_usage else None,
             "last_run": task.last_run.model_dump(mode="json") if task.last_run else None,
             "last_run_attempt": task.last_run_attempt.model_dump(mode="json") if task.last_run_attempt else None,
+            "routing_policy_id": task.routing_policy_id,
+            "routing_source": task.routing_source,
             "structured_requirements": task.structured_requirements,
             "stage_routing": cls._serialize_stage_routing_records(task.stage_routing),
             "interaction_policies": cls._serialize_interaction_policy_records(task.interaction_policies),
@@ -686,9 +1001,9 @@ class TaskStore:
                 "connector_id": item.connector_id,
                 "connector_display_name": item.connector_display_name,
                 "model_name": item.model_name,
-                "fallback_connector_id": None,
-                "fallback_connector_display_name": None,
-                "fallback_model_name": None,
+                "fallback_connector_id": item.fallback_connector_id,
+                "fallback_connector_display_name": item.fallback_connector_display_name,
+                "fallback_model_name": item.fallback_model_name,
                 "selection_source": item.selection_source,
             }
             for item in items
@@ -737,6 +1052,24 @@ class TaskStore:
     @staticmethod
     def _enum_value(value: Any) -> Any:
         return value.value if hasattr(value, "value") else value
+
+    @staticmethod
+    def _flatten_artifact_refs(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value] if value else []
+        if isinstance(value, list):
+            return [str(item) for item in value if item]
+        if isinstance(value, dict):
+            flattened: list[str] = []
+            for key, item in value.items():
+                if isinstance(item, list):
+                    flattened.extend(str(child) for child in item if child)
+                elif item:
+                    flattened.append(f"{key}: {item}")
+            return flattened
+        return [str(value)]
 
 
 def _coerce_non_negative_int(value: Any) -> int:

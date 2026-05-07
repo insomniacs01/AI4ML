@@ -1,4 +1,8 @@
+import { useEffect, useState } from "react";
+
 import LeaderboardPanel from "./LeaderboardPanel.jsx";
+
+const REPORT_MARKDOWN_PREVIEW_CHARS = 16_000;
 
 function formatDateTime(value) {
   if (!value) return "暂无";
@@ -37,6 +41,10 @@ export default function ModelReportPanel({
   onRefreshReport,
   formatMetricName,
 }) {
+  const [markdownExpanded, setMarkdownExpanded] = useState(false);
+  useEffect(() => {
+    setMarkdownExpanded(false);
+  }, [report?.task_id, selectedTask?.id]);
   const analysis = selectedTask?.structured_requirements && typeof selectedTask.structured_requirements === "object"
     ? selectedTask.structured_requirements
     : null;
@@ -269,7 +277,16 @@ export default function ModelReportPanel({
                   <p>这是后端基于真实记录生成的可导出文本。</p>
                 </div>
               </div>
-              <pre className="conversation-state-body">{report.report_markdown}</pre>
+              <pre className="conversation-state-body">
+                {markdownExpanded || report.report_markdown.length <= REPORT_MARKDOWN_PREVIEW_CHARS
+                  ? report.report_markdown
+                  : report.report_markdown.slice(0, REPORT_MARKDOWN_PREVIEW_CHARS)}
+              </pre>
+              {report.report_markdown.length > REPORT_MARKDOWN_PREVIEW_CHARS ? (
+                <button type="button" className="ghost-button large-text-toggle" onClick={() => setMarkdownExpanded((value) => !value)}>
+                  {markdownExpanded ? "收起报告全文" : `展开报告全文（已省略 ${(report.report_markdown.length - REPORT_MARKDOWN_PREVIEW_CHARS).toLocaleString("zh-CN")} 字）`}
+                </button>
+              ) : null}
             </section>
           ) : null}
         </>

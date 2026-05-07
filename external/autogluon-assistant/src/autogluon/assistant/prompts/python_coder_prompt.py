@@ -36,6 +36,7 @@ ONLY save files to the working directory: {per_iteration_output_folder}.
 Requirements:
 - Use train.csv as the primary dataset. If test.csv is missing, do NOT assume it exists; use a validation approach that works with the selected library and report a validation score.
 - If test.csv exists, predict the full test set without dropping rows and preserve original row order and indices.
+- If the task description or user instruction specifies a label/target column, use that exact column as the target. Never silently replace it with the last CSV column.
 - Remove training samples without valid labels from training data only, unless explicitly instructed otherwise.
 - Remove unnecessary index columns such as 'Unnamed: 0' when appropriate.
 - Do not stop at a single baseline when labeled training data is available. Compare multiple candidate models and persist a ranked leaderboard of the candidates you actually evaluated.
@@ -50,7 +51,7 @@ Requirements:
 - If a model is trained, save it in a timestamped folder under {per_iteration_output_folder}.
 - Save prediction results to {per_iteration_output_folder}. If there is no test set, save validation artifacts instead.
 - Print the final validation score clearly when labeled training data is available, and persist any summary artifacts needed by downstream evaluation.
-- Save a machine-readable run summary to {per_iteration_output_folder}/run_summary.json with at least: metric_name, metric_value, validation_score, best_model, tool, and candidate_model_count.
+- Save a machine-readable run summary to {per_iteration_output_folder}/run_summary.json with at least: metric_name, metric_value, validation_score, best_model, tool, candidate_model_count, target_column, and problem_type.
 - Save the compared candidates to {per_iteration_output_folder}/leaderboard.json or {per_iteration_output_folder}/leaderboard.csv. Each row should include exact fields model and validation_score, plus fit_time and pred_time when available.
 - If the task metric is naturally lower-is-better (for example RMSE), still persist a higher-is-better validation_score for search and comparison, while also saving the raw metric in run_summary.json.
 - Add only brief comments when they genuinely help readability.

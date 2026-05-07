@@ -14,6 +14,8 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+.hypothesis/
+.ipynb_checkpoints/
 
 # Node / frontend build output
 node_modules/
@@ -23,6 +25,9 @@ build/
 coverage/
 frontend/dist/
 frontend/.vite/
+frontend/node_modules/.vite/
+playwright-report/
+test-results/
 
 # Local environment and secrets
 .env
@@ -38,14 +43,18 @@ frontend/.env.*
 *.key
 *.p12
 *.pfx
+*.crt
+*.cer
 
 # Logs and runtime process files
+logs/
 *.log
 *.pid
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+frontend/vite-dev*.log
 
 # OS / editor files
 .DS_Store
@@ -53,8 +62,13 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+*.swp
+*.swo
 
-# Local model weights, generated task data, and run artifacts
+# Local datasets, model weights, generated task data, and run artifacts
+data/*
+!data/samples/
+!data/samples/**
 local/models/
 storage/*
 !storage/run_force_llm_full.py
@@ -62,9 +76,21 @@ tmp/
 tmp_*/
 tmp-*/
 tmp_executor_verify/
+.cache/
+*.tmp
+*.bak
+*.orig
 
 # Nested upstream repository metadata
 external/**/.git/
+
+# Local databases and service state
+*.db
+*.sqlite
+*.sqlite3
+supabase/.branches/
+supabase/.temp/
+supabase/.cache/
 
 # Office temporary lock files
 ~$*

@@ -57,6 +57,10 @@ def create_openai_chat(config, session_name: str) -> AssistantChatOpenAI:
         "default_headers": {"User-Agent": os.environ.get("OPENAI_USER_AGENT", "Mozilla/5.0")},
     }
 
+    request_timeout = os.environ.get("OPENAI_REQUEST_TIMEOUT") or getattr(config, "request_timeout", None)
+    if request_timeout is not None:
+        kwargs["timeout"] = float(request_timeout)
+
     if hasattr(config, "temperature"):
         kwargs["temperature"] = config.temperature
 

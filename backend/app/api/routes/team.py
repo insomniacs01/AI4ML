@@ -33,6 +33,7 @@ from backend.app.models.governance import (
     TeamMemberStatusUpdateResponse,
     TeamQuotaAdjustRequest,
     TeamQuotaAdjustResponse,
+    TeamQuotaScopeAdjustRequest,
     TeamQuotasResponse,
     TeamSettingsResponse,
     TeamSettingsUpdateRequest,
@@ -41,7 +42,7 @@ from backend.app.models.governance import (
 from backend.app.services.governance_store import GovernanceStore
 
 
-router = APIRouter(prefix="/team", tags=["team"])
+router = APIRouter(tags=["team"])
 
 
 @lru_cache
@@ -276,6 +277,53 @@ def list_team_quotas(team_access: TeamAccessContext = Depends(require_team_admin
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return TeamQuotasResponse(team_id=team_access.team_id, items=items)
+
+
+@router.post("/quotas/adjust", response_model=TeamQuotaAdjustResponse)
+def adjust_team_quota_scope(
+    payload: TeamQuotaScopeAdjustRequest,
+    team_access: TeamAccessContext = Depends(require_team_admin_access),
+) -> TeamQuotaAdjustResponse:
+    scope_type = payload.scope_type
+    scope_key = payload.scope_key
+    if scope_type == "member":
+        scope_key = payload.user_id or scope_key
+    elif scope_type == "connector":
+        scope_key = payload.connector_id or scope_key
+    elif scope_type == "team":
+        scope_key = scope_key or team_access.team_id
+    if not scope_key:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="quota scope_key is required.")
+
+    store = get_governance_store()
+    try:
+        quota = store.adjust_quota_scope(
+            team_access.team_id,
+            scope_type=scope_type,
+            scope_key=scope_key,
+            token_quota=payload.token_quota,
+            status=payload.status,
+            warning_threshold=payload.warning_threshold,
+            access_token=team_access.access_token,
+        )
+        store.create_audit_log(
+            team_access.team_id,
+            team_access.user.id,
+            action="team.quota.scope.adjust",
+            resource_type="quota_account",
+            resource_id=f"{scope_type}:{scope_key}",
+            detail={
+                "scope_type": scope_type,
+                "scope_key": scope_key,
+                "token_quota": payload.token_quota,
+                "status": payload.status,
+                "warning_threshold": payload.warning_threshold,
+            },
+            access_token=team_access.access_token,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return TeamQuotaAdjustResponse(detail="团队配额已更新。", quota=quota)
 
 
 @router.post("/quotas/{member_id}/adjust", response_model=TeamQuotaAdjustResponse)

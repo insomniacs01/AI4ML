@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from hashlib import sha256
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -42,6 +43,11 @@ def _default_runtime_root() -> Path:
 DEFAULT_RUNTIME_ROOT = _default_runtime_root()
 
 
+def _default_backend_instance_lock_path() -> Path:
+    repo_key = sha256(str(REPO_ROOT).encode("utf-8")).hexdigest()[:12]
+    return DEFAULT_RUNTIME_ROOT / f"backend-{repo_key}.lock"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AI4ML_",
@@ -54,8 +60,9 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     repo_root: Path = REPO_ROOT
     storage_dir: Path = REPO_ROOT / "storage" / "tasks"
-    run_output_dir: Path = DEFAULT_RUNTIME_ROOT / "mlzero_runs"
-    mlzero_runtime_dir: Path = DEFAULT_RUNTIME_ROOT / "mlzero_runtime"
+    run_output_dir: Path = REPO_ROOT / "storage" / "mlzero_runs"
+    mlzero_runtime_dir: Path = REPO_ROOT / "storage" / "mlzero_runtime"
+    backend_instance_lock_path: Path = Field(default_factory=_default_backend_instance_lock_path)
     mlzero_config_path: Path = REPO_ROOT / "backend" / "config" / "mlzero-local-openai.yaml"
     mlzero_model_path: Path = REPO_ROOT / "local" / "models" / "Qwen2.5-Coder-0.5B-Instruct-Q4_K_M.gguf"
     mlzero_mamba_executable: Path = Path.home() / ".local" / "miniforge3" / "bin" / "mamba"
@@ -69,7 +76,7 @@ class Settings(BaseSettings):
     mlzero_context_size: int = 4096
     mlzero_server_threads: int = -1
     mlzero_max_iterations: int = 6
-    mlzero_continuous_improvement: bool = True
+    mlzero_continuous_improvement: bool = False
     mlzero_min_candidate_models: int = 3
     mlzero_openai_api_key: str = "local"
     mlzero_hf_endpoint: str = "https://hf-mirror.com"
@@ -79,6 +86,7 @@ class Settings(BaseSettings):
     mlzero_provider_wire_api: Literal["chat_completions", "responses"] = "chat_completions"
     mlzero_provider_user_agent: str = "Mozilla/5.0"
     mlzero_provider_request_timeout_seconds: int = 30
+    mlzero_tokenizer_model_alias: str = ""
     connector_secret_key: str = ""
 
     # ---- User / Auth settings ----

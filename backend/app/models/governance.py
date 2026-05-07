@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 TeamMemberRole = Literal["admin", "member", "team_owner", "business_user", "developer_user"]
 TeamMemberStatus = Literal["invited", "active", "frozen", "removed"]
 QuotaStatus = Literal["active", "frozen", "exhausted"]
+QuotaScopeType = Literal["member", "team", "connector"]
 AssetType = Literal["dataset", "model", "workflow", "report"]
 TeamStatus = Literal["active", "disabled", "archived"]
 
@@ -102,11 +103,15 @@ class TeamMemberStatusUpdateResponse(BaseModel):
 
 class TeamQuotaRecord(BaseModel):
     team_id: str
-    user_id: str
-    role: TeamMemberRole | str
-    member_status: TeamMemberStatus | str = "active"
+    scope_type: QuotaScopeType = "member"
+    scope_key: str = ""
+    user_id: str | None = None
+    connector_id: str | None = None
+    role: TeamMemberRole | str | None = None
+    member_status: TeamMemberStatus | str | None = None
     display_name: str | None = None
     email: str | None = None
+    connector_display_name: str | None = None
     token_quota: int = 0
     token_used: int = 0
     token_remaining: int = 0
@@ -121,6 +126,16 @@ class TeamQuotasResponse(BaseModel):
 
 
 class TeamQuotaAdjustRequest(BaseModel):
+    token_quota: int | None = Field(default=None, ge=0)
+    status: QuotaStatus | None = None
+    warning_threshold: int | None = Field(default=None, ge=0)
+
+
+class TeamQuotaScopeAdjustRequest(BaseModel):
+    scope_type: QuotaScopeType = "member"
+    scope_key: str | None = Field(default=None, max_length=200)
+    user_id: str | None = Field(default=None, max_length=64)
+    connector_id: str | None = Field(default=None, max_length=64)
     token_quota: int | None = Field(default=None, ge=0)
     status: QuotaStatus | None = None
     warning_threshold: int | None = Field(default=None, ge=0)

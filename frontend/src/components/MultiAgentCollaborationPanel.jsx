@@ -90,10 +90,45 @@ const TASK_STATUS_LABELS = {
   published: "已发布",
 };
 
+const RUNTIME_MODE_LABELS = {
+  persistent_agent_runtime: "持久化 Agent Runtime",
+  stage_agent_orchestrator: "阶段快照兼容模式",
+};
+
+const EVENT_KIND_LABELS = {
+  agent: "Agent Runtime",
+  stage: "阶段事件",
+  human_request: "人工节点",
+};
+
+const MESSAGE_TYPE_LABELS = {
+  coordination: "协作安排",
+  handoff: "阶段交接",
+  acknowledgement: "接收确认",
+  blocker: "阻塞通知",
+  human_review: "人工节点",
+  result: "结果广播",
+};
+
 function formatDateTime(value) {
   if (!value) return "暂无";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function formatDuration(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "暂无";
+  if (value < 1) return `${Math.round(value * 1000)} ms`;
+  if (value < 60) return `${value.toFixed(1)} s`;
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
+  return `${minutes}m ${seconds}s`;
+}
+
+function compactIdentifier(value) {
+  if (!value) return "未记录";
+  const text = String(value);
+  return text.length > 34 ? `${text.slice(0, 18)}...${text.slice(-10)}` : text;
 }
 
 function getAgentTone(status) {
@@ -172,6 +207,81 @@ function buildEvents(agents, requests) {
     .slice(0, 12);
 }
 
+function buildAgentsFromSnapshot(snapshot, stages, requests) {
+  if (!Array.isArray(snapshot?.agents)) return [];
+  return snapshot.agents.map((agent) => {
+    const definition = AGENT_DEFINITIONS.find((item) => item.id === agent.id) ?? {};
+    const status = agent.status ?? "pending";
+    return {
+      id: agent.id,
+      name: agent.name ?? definition.name ?? agent.id,
+      role: agent.role ?? definition.role ?? agent.stage,
+      shortRole: agent.short_role ?? definition.shortRole ?? agent.role ?? "Agent",
+      description: definition.description ?? "",
+      x: typeof agent.x === "number" ? agent.x : definition.x ?? 0,
+      y: typeof agent.y === "number" ? agent.y : definition.y ?? 0,
+      stage: stages.find((stage) => stage.stage === agent.stage) ?? null,
+      status,
+      tone: getAgentTone(status),
+      progress: typeof agent.progress === "number" ? agent.progress : getProgress(status),
+      currentTask: agent.current_task ?? definition.description ?? "",
+      modelName: agent.model_name || "未指定",
+      connector: agent.connector_id || "未指定",
+      selectionSource: agent.selection_source || "未记录",
+      artifactCount: typeof agent.artifact_count === "number" ? agent.artifact_count : normalizeArtifactCount(agent.artifact_refs),
+      artifactRefs: Array.isArray(agent.artifact_refs) ? agent.artifact_refs : [],
+      lastActionAt: agent.last_action_at,
+      runtimeId: agent.runtime_id ?? null,
+      runtimeSource: agent.runtime_source ?? "stage_record_projection",
+      workerId: agent.worker_id ?? null,
+      startedAt: agent.started_at ?? null,
+      finishedAt: agent.finished_at ?? null,
+      durationSeconds: agent.duration_seconds ?? null,
+      logExcerpt: agent.log_excerpt ?? "",
+    };
+  });
+}
+
+function buildEventsFromSnapshot(snapshot, agents, requests) {
+  if (!Array.isArray(snapshot?.events)) return [];
+  return snapshot.events.map((event) => ({
+    id: event.id,
+    time: event.time,
+    text: event.text,
+    kind: event.kind ?? "stage",
+    status: event.status ?? "",
+    artifactRefs: Array.isArray(event.artifact_refs) ? event.artifact_refs : [],
+    tone: event.kind === "human_request" ? "waiting" : getAgentTone(event.status),
+  }));
+}
+
+function buildMessagesFromSnapshot(snapshot) {
+  if (!Array.isArray(snapshot?.messages)) return [];
+  return snapshot.messages.map((message) => ({
+    id: message.id,
+    time: message.time,
+    fromAgentId: message.from_agent_id,
+    toAgentId: message.to_agent_id,
+    type: message.message_type ?? "coordination",
+    status: message.status ?? "sent",
+    content: message.content ?? "",
+    artifactRefs: Array.isArray(message.artifact_refs) ? message.artifact_refs : [],
+    fromAgentName: message.payload?.from_agent_name,
+    fromAgentRole: message.payload?.from_agent_role,
+    toAgentName: message.payload?.to_agent_name,
+    toAgentRole: message.payload?.to_agent_role,
+  }));
+}
+
+function getAgentDisplayName(agentId, agents) {
+  const agent = agents.find((item) => item.id === agentId);
+  return agent?.name ?? agentId ?? "全体";
+}
+
+function isAgentSnapshot(payload) {
+  return Boolean(payload) && Array.isArray(payload.agents) && Array.isArray(payload.events);
+}
+
 export default function MultiAgentCollaborationPanel({
   tasks,
   tasksLoading,
@@ -187,12 +297,17 @@ export default function MultiAgentCollaborationPanel({
 
   const stages = useMemo(() => (Array.isArray(snapshot?.stages) ? snapshot.stages : []), [snapshot]);
   const requests = useMemo(() => (Array.isArray(snapshot?.requests) ? snapshot.requests : []), [snapshot]);
-  const agents = useMemo(() => buildAgents(stages, requests), [stages, requests]);
-  const events = useMemo(() => buildEvents(agents, requests), [agents, requests]);
+  const agents = useMemo(() => buildAgentsFromSnapshot(snapshot, stages, requests), [snapshot, stages, requests]);
+  const events = useMemo(() => buildEventsFromSnapshot(snapshot, agents, requests), [snapshot, agents, requests]);
+  const messages = useMemo(() => buildMessagesFromSnapshot(snapshot), [snapshot]);
 
   const completedCount = agents.filter((agent) => agent.status === "completed").length;
   const activeCount = agents.filter((agent) => ["running", "waiting_human"].includes(agent.status)).length;
   const artifactCount = agents.reduce((count, agent) => count + agent.artifactCount, 0);
+  const messageCount = messages.length;
+  const isPersistentRuntime = snapshot?.runtime_mode === "persistent_agent_runtime";
+  const runtimeModeLabel = RUNTIME_MODE_LABELS[snapshot?.runtime_mode] ?? "未读取";
+  const persistentAgentCount = agents.filter((agent) => agent.runtimeSource === "persistent_agent_runtime").length;
 
   useEffect(() => {
     if (!selectedTask?.id || !requestContext?.accessToken || !requestContext?.teamId) {
@@ -202,13 +317,15 @@ export default function MultiAgentCollaborationPanel({
       return;
     }
     let active = true;
-    const cached = getCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId);
+    const cachedPayload = getCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId);
+    const cached = isAgentSnapshot(cachedPayload) ? cachedPayload : null;
     if (cached) setSnapshot(cached);
     setState(cached ? "ready" : "loading");
     setError("");
-    api.taskHumanCollaboration(selectedTask.id, requestContext)
+    api.taskAgentCollaboration(selectedTask.id, requestContext)
       .then((payload) => {
         if (!active) return;
+        if (!isAgentSnapshot(payload)) throw new Error("后端 Agent 快照缺少 agents/events 字段。");
         setCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId, payload);
         setSnapshot(payload);
         setState("ready");
@@ -229,7 +346,8 @@ export default function MultiAgentCollaborationPanel({
     setState("loading");
     setError("");
     try {
-      const payload = await api.taskHumanCollaboration(selectedTask.id, { ...requestContext, noCache: true });
+      const payload = await api.taskAgentCollaboration(selectedTask.id, { ...requestContext, noCache: true });
+      if (!isAgentSnapshot(payload)) throw new Error("后端 Agent 快照缺少 agents/events 字段。");
       setCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId, payload);
       setSnapshot(payload);
     } catch (refreshError) {
@@ -245,7 +363,7 @@ export default function MultiAgentCollaborationPanel({
         <div className="section-head">
           <div>
             <h3>任务上下文</h3>
-            <p>选择一个任务后，下面的 Agent 状态会读取该任务的真实阶段快照。</p>
+            <p>选择一个任务后，下面的 Agent 状态会读取后端持久化 Agent Runtime 与事件流。</p>
           </div>
           <div className="agent-toolbar-actions">
             {tasks?.length ? (
@@ -273,10 +391,15 @@ export default function MultiAgentCollaborationPanel({
           <div>
             <p className="eyebrow">Agent Collaboration</p>
             <h3>多 Agent 协同拓扑</h3>
-            <p>节点代表 AI4ML 工作流中的协作 Agent，连线代表阶段产物和决策流向。</p>
+            <p>节点代表 AI4ML 工作流中的 6 个后端 Agent Runtime，连线代表阶段产物和决策流向。</p>
           </div>
           <div className="agent-console-actions">
             {selectedTask ? <span className="runtime-pill info">{selectedTask.name}</span> : null}
+            {selectedTask ? (
+              <span className={`runtime-pill ${isPersistentRuntime ? "success" : "warning"}`}>
+                运行模式：{runtimeModeLabel}
+              </span>
+            ) : null}
             <button type="button" className="ghost-button" onClick={() => onOpenWorkflow?.()}>
               阶段详情
             </button>
@@ -292,7 +415,9 @@ export default function MultiAgentCollaborationPanel({
               <article><span>Agent 数</span><strong>{agents.length}</strong></article>
               <article><span>已完成</span><strong>{completedCount}</strong></article>
               <article><span>活跃/等待</span><strong>{activeCount}</strong></article>
+              <article><span>持久化 Runtime</span><strong>{persistentAgentCount}</strong></article>
               <article><span>关键产物</span><strong>{artifactCount}</strong></article>
+              <article><span>Agent 通信</span><strong>{messageCount}</strong></article>
             </div>
 
             <div className="agent-network">
@@ -341,7 +466,7 @@ export default function MultiAgentCollaborationPanel({
           <div className="section-head">
             <div>
               <h3>Agent 运行状态</h3>
-              <p>进度值由阶段状态映射而来；模型、连接器、日志和产物来自后端阶段记录。</p>
+              <p>进度、模型、连接器、Runtime 标识、耗时和产物都来自后端持久化记录。</p>
             </div>
             {selectedTask ? (
               <button type="button" className="primary-button" onClick={() => onOpenHumanCollaboration?.(selectedTask.id)}>
@@ -359,6 +484,8 @@ export default function MultiAgentCollaborationPanel({
                   <th>当前工作</th>
                   <th>进度</th>
                   <th>模型</th>
+                  <th>Runtime</th>
+                  <th>耗时</th>
                   <th>最后更新</th>
                 </tr>
               </thead>
@@ -367,7 +494,12 @@ export default function MultiAgentCollaborationPanel({
                   <tr key={agent.id}>
                     <td><span className={`agent-dot ${agent.tone}`} />{agent.name}</td>
                     <td>{agent.role}</td>
-                    <td>{agent.currentTask}</td>
+                    <td>
+                      <div className="agent-task-cell">
+                        <span>{agent.currentTask}</span>
+                        {agent.logExcerpt ? <small>日志：{agent.logExcerpt}</small> : null}
+                      </div>
+                    </td>
                     <td>
                       <div className="agent-progress-cell">
                         <span className={`agent-progress-bar ${agent.tone}`} style={{ width: `${agent.progress}%` }} />
@@ -375,6 +507,18 @@ export default function MultiAgentCollaborationPanel({
                       <small>{agent.progress}%</small>
                     </td>
                     <td>{agent.modelName}</td>
+                    <td>
+                      <div className="agent-runtime-cell">
+                        <strong>{agent.runtimeSource === "persistent_agent_runtime" ? "持久化" : "阶段投影"}</strong>
+                        <small title={agent.workerId || agent.runtimeId || ""}>{compactIdentifier(agent.workerId || agent.runtimeId)}</small>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="agent-runtime-cell">
+                        <strong>{formatDuration(agent.durationSeconds)}</strong>
+                        <small>开始：{formatDateTime(agent.startedAt)}</small>
+                      </div>
+                    </td>
                     <td>{formatDateTime(agent.lastActionAt)}</td>
                   </tr>
                 ))}
@@ -387,7 +531,7 @@ export default function MultiAgentCollaborationPanel({
           <div className="section-head">
             <div>
               <h3>实时日志</h3>
-              <p>按更新时间展示 Agent 阶段事件和人工协同事件。</p>
+              <p>按更新时间展示后端 Agent Runtime 事件、阶段事件和人工协同事件。</p>
             </div>
           </div>
           {!events.length ? <div className="empty-state compact">当前任务还没有可展示的 Agent 事件。</div> : null}
@@ -395,7 +539,11 @@ export default function MultiAgentCollaborationPanel({
             <div className="agent-event-list">
               {events.map((event) => (
                 <article key={event.id} className={`agent-event ${event.tone}`}>
-                  <span>{formatDateTime(event.time)}</span>
+                  <span>
+                    {formatDateTime(event.time)}
+                    <em>{EVENT_KIND_LABELS[event.kind] ?? event.kind}</em>
+                    {event.artifactRefs.length ? <em>{event.artifactRefs.length} 个产物</em> : null}
+                  </span>
                   <p>{event.text}</p>
                 </article>
               ))}
@@ -403,6 +551,37 @@ export default function MultiAgentCollaborationPanel({
           ) : null}
         </section>
       </div>
+
+      <section className="section-card agent-message-card">
+        <div className="section-head">
+          <div>
+            <h3>Agent 讨论流</h3>
+            <p>展示后端在阶段推进中持久化的 Agent 间协作、交接、确认和阻塞消息。</p>
+          </div>
+        </div>
+        {!messages.length ? <div className="empty-state compact">当前任务还没有 Agent 间通信记录。</div> : null}
+        {messages.length ? (
+          <div className="agent-message-list">
+            {messages.map((message) => {
+              const fromName = message.fromAgentName || getAgentDisplayName(message.fromAgentId, agents);
+              const toName = message.toAgentName || getAgentDisplayName(message.toAgentId, agents);
+              return (
+                <article key={message.id} className={`agent-message ${message.type}`}>
+                  <div className="agent-message-route">
+                    <strong>{fromName}</strong>
+                    <span>→</span>
+                    <strong>{toName}</strong>
+                    <em>{MESSAGE_TYPE_LABELS[message.type] ?? message.type}</em>
+                    {message.artifactRefs.length ? <em>{message.artifactRefs.length} 个产物</em> : null}
+                  </div>
+                  <p>{message.content}</p>
+                  <small>{formatDateTime(message.time)}</small>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 }

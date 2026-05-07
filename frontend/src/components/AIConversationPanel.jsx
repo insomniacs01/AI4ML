@@ -5,6 +5,11 @@ const PHASE_LABELS = {
   mlzero: "MLZero 执行",
 };
 
+const LARGE_TEXT_PREVIEW_CHARS = 12_000;
+const MESSAGE_RENDER_LIMIT = 80;
+const SYSTEM_TURN_RENDER_LIMIT = 60;
+const INTERNAL_STATE_RENDER_LIMIT = 60;
+
 const STAGE_LABELS = {
   task_analysis: "任务解析",
   python_coder: "Python 代码生成",
@@ -245,6 +250,16 @@ function ConversationMetric({ label, value }) {
   );
 }
 
+function getPreviewText(value, limit = LARGE_TEXT_PREVIEW_CHARS) {
+  const text = getMessageText(value);
+  if (text.length <= limit) return { text, truncated: false, omitted: 0 };
+  return {
+    text: text.slice(0, limit),
+    truncated: true,
+    omitted: text.length - limit,
+  };
+}
+
 export default function AIConversationPanel({
   tasks,
   tasksLoading,
@@ -262,14 +277,19 @@ export default function AIConversationPanel({
 }) {
   const [draftPrompt, setDraftPrompt] = useState("");
   const [activeView, setActiveView] = useState("chat");
+  const [expandedTextIds, setExpandedTextIds] = useState(() => new Set());
 
   useEffect(() => {
     setDraftPrompt("");
+    setExpandedTextIds(new Set());
   }, [selectedTask?.id]);
 
   const items = Array.isArray(conversationData?.items) ? conversationData.items : [];
   const interactiveMessages = Array.isArray(conversationData?.interactive_messages) ? conversationData.interactive_messages : [];
   const internalStates = Array.isArray(conversationData?.internal_states) ? conversationData.internal_states : [];
+  const visibleInteractiveMessages = interactiveMessages.slice(-MESSAGE_RENDER_LIMIT);
+  const visibleItems = items.slice(0, SYSTEM_TURN_RENDER_LIMIT);
+  const visibleInternalStates = internalStates.slice(0, INTERNAL_STATE_RENDER_LIMIT);
   const warnings = Array.isArray(conversationData?.warnings) ? conversationData.warnings : [];
   const taskItems = Array.isArray(tasks) ? tasks : [];
   const latestAssistantMessage = useMemo(
@@ -291,6 +311,31 @@ export default function AIConversationPanel({
     onOpenHumanCollaboration(
       selectedTask.id,
       buildHumanRequestPresetFromConversation(selectedTask, normalizedPrompt, latestAssistantMessage),
+    );
+  }
+
+  function renderLargeText(id, value) {
+    const expanded = expandedTextIds.has(id);
+    const preview = getPreviewText(value);
+    const displayText = expanded ? getMessageText(value) : preview.text;
+    return (
+      <>
+        <pre>{displayText}</pre>
+        {preview.truncated ? (
+          <button
+            type="button"
+            className="ghost-button large-text-toggle"
+            onClick={() => setExpandedTextIds((current) => {
+              const next = new Set(current);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })}
+          >
+            {expanded ? "收起全文" : `展开全文（已省略 ${preview.omitted.toLocaleString("zh-CN")} 字）`}
+          </button>
+        ) : null}
+      </>
     );
   }
 
@@ -404,7 +449,9 @@ export default function AIConversationPanel({
                     {chatSending ? "正在等待 AI 回复..." : "还没有手动聊天记录。"}
                   </div>
                 ) : (
-                  interactiveMessages.map((message) => {
+                  <>
+                  {interactiveMessages.length > MESSAGE_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染最近 {MESSAGE_RENDER_LIMIT} 条对话，避免长对话拖慢页面。</div> : null}
+                  {visibleInteractiveMessages.map((message) => {
                     const isUser = message.role === "user";
                     return (
                       <article key={message.id} className={cx("ai-chat-message", isUser ? "is-user" : "is-assistant")}>
@@ -421,11 +468,11 @@ export default function AIConversationPanel({
                               <strong>{isUser ? "你发出的 prompt" : formatInteractiveOrigin(message.origin)}</strong>
                               <span>{getInteractiveMessageMeta(message)}</span>
                             </div>
-                            <pre>{getMessageText(message.content)}</pre>
+                            {renderLargeText(`interactive-${message.id}-content`, message.content)}
                             {message.composed_prompt ? (
                               <details className="ai-chat-raw">
                                 <summary>完整上下文</summary>
-                                <pre>{getMessageText(message.composed_prompt)}</pre>
+                                {renderLargeText(`interactive-${message.id}-composed`, message.composed_prompt)}
                               </details>
                             ) : null}
                           </div>
@@ -438,7 +485,8 @@ export default function AIConversationPanel({
                         </div>
                       </article>
                     );
-                  })
+                  })}
+                  </>
                 )}
               </div>
 
@@ -481,7 +529,8 @@ export default function AIConversationPanel({
                 </div>
               ) : (
                 <div className="ai-system-turn-list">
-                  {items.map((item, index) => (
+                  {items.length > SYSTEM_TURN_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染前 {SYSTEM_TURN_RENDER_LIMIT} 组系统记录，避免大日志拖慢页面。</div> : null}
+                  {visibleItems.map((item, index) => (
                     <details key={item.id} className="ai-system-turn" open={index === 0}>
                       <summary>
                         <div>
@@ -496,7 +545,7 @@ export default function AIConversationPanel({
                             <strong>Prompt</strong>
                             <span>{PROMPT_EXPLANATIONS[item.stage] ?? "当前阶段原始提示词。"}</span>
                           </div>
-                          <pre>{getMessageText(item.prompt)}</pre>
+                          {renderLargeText(`system-${item.id}-prompt`, item.prompt)}
                           {item.prompt_path ? <p className="ai-filepath">{item.prompt_path}</p> : null}
                         </article>
                         <article className="ai-system-block response">
@@ -504,7 +553,7 @@ export default function AIConversationPanel({
                             <strong>{formatOrigin(item.origin)}</strong>
                             <span>{getResponseNote(item.origin)}</span>
                           </div>
-                          <pre>{getMessageText(item.response)}</pre>
+                          {renderLargeText(`system-${item.id}-response`, item.response)}
                           {item.response_path ? <p className="ai-filepath">{item.response_path}</p> : null}
                           <span className={`runtime-pill ${getOriginTone(item.origin)}`}>{formatOrigin(item.origin)}</span>
                         </article>
@@ -522,7 +571,8 @@ export default function AIConversationPanel({
                 <div className="empty-state ai-chat-empty">当前运行目录里还没有可展示的内部状态文件。</div>
               ) : (
                 <div className="ai-state-list">
-                  {internalStates.map((item) => (
+                  {internalStates.length > INTERNAL_STATE_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染前 {INTERNAL_STATE_RENDER_LIMIT} 个内部状态文件，避免大日志拖慢页面。</div> : null}
+                  {visibleInternalStates.map((item) => (
                     <details key={item.id} className="ai-state-card">
                       <summary>
                         <div>
@@ -536,7 +586,7 @@ export default function AIConversationPanel({
                       <div className="ai-state-content">
                         {item.description ? <p>{item.description}</p> : null}
                         <p className="ai-filepath">{item.path}</p>
-                        <pre>{getMessageText(item.content)}</pre>
+                        {renderLargeText(`state-${item.id}-content`, item.content)}
                       </div>
                     </details>
                   ))}

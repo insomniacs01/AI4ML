@@ -42,6 +42,7 @@ EDITABLE_LANGUAGES = {"python", "shell", "powershell", "batch", "sql"}
 MAX_ARTIFACT_SIZE_BYTES = 2 * 1024 * 1024
 MAX_SAVE_SIZE_BYTES = 2 * 1024 * 1024
 VERSION_MANIFEST_NAME = ".ai4ml_code_workspace_versions.json"
+NODE_SCAN_LIMIT = 16
 GROUP_ORDER = {
     "generation": 0,
     "result": 1,
@@ -264,7 +265,7 @@ def _require_existing_run_output_dir(task: TaskRecord) -> Path:
 
 def _collect_workspace_entries(run_output_dir: Path) -> list[TaskCodeArtifactEntry]:
     entries: list[TaskCodeArtifactEntry] = []
-    for path in sorted(run_output_dir.rglob("*")):
+    for path in _iter_workspace_candidate_files(run_output_dir):
         if not path.is_file():
             continue
         if path.name == VERSION_MANIFEST_NAME:
@@ -809,18 +810,49 @@ def _resolve_artifact_path(run_output_dir: Path, artifact_path: str) -> Path:
 
 
 def _find_default_rerun_path(run_output_dir: Path) -> str | None:
-    candidates = sorted(
-        (
-            path
-            for path in run_output_dir.rglob("generated_code.py")
-            if path.is_file() and "best_run" not in path.parts
-        ),
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    )
+    candidates = [
+        path
+        for path in [
+            run_output_dir / "generated_code.py",
+            *[node_dir / "generated_code.py" for node_dir in _recent_node_dirs(run_output_dir)],
+        ]
+        if path.is_file() and "best_run" not in path.parts
+    ]
+    candidates = sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True)
     if not candidates:
         return None
     return candidates[0].relative_to(run_output_dir).as_posix()
+
+
+def _iter_workspace_candidate_files(run_output_dir: Path) -> list[Path]:
+    roots = [run_output_dir]
+    roots.extend(_recent_node_dirs(run_output_dir))
+    for node_dir in _recent_node_dirs(run_output_dir):
+        roots.extend([node_dir / "states", node_dir / "output", node_dir / "logs"])
+
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        try:
+            children = list(root.iterdir())
+        except OSError:
+            continue
+        for path in children:
+            if not path.is_file() or path in seen:
+                continue
+            seen.add(path)
+            candidates.append(path)
+    return sorted(candidates)
+
+
+def _recent_node_dirs(run_output_dir: Path, *, limit: int = NODE_SCAN_LIMIT) -> list[Path]:
+    try:
+        node_dirs = [path for path in run_output_dir.iterdir() if path.is_dir() and path.name.startswith("node_")]
+    except OSError:
+        return []
+    return sorted(node_dirs, key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)[:limit]
 
 
 def _sha256_file(path: Path) -> str:

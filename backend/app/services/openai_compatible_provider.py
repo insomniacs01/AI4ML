@@ -8,13 +8,14 @@ from urllib.request import Request, urlopen
 
 from backend.app.core.config import Settings
 from backend.app.models.task import TokenUsageReport
-from backend.app.services.token_usage import extract_provider_token_usage
+from backend.app.services.token_usage import extract_provider_token_usage, make_provider_tokenizer_usage_report
 
 
 @dataclass
 class ProviderCallResult:
     text: str
     token_usage: TokenUsageReport | None
+    token_usage_calculation_method: str | None = None
 
 
 def call_openai_compatible_provider(
@@ -64,9 +65,23 @@ def call_openai_compatible_provider(
     if not text:
         raise RuntimeError("AI 返回了空内容。")
 
+    token_usage = extract_provider_token_usage(payload)
+    calculation_method = "provider_reported_usage" if token_usage is not None else None
+    if token_usage is None:
+        token_usage = make_provider_tokenizer_usage_report(
+            prompt=prompt,
+            system_message=system_message,
+            response_text=text,
+            model_name=settings.mlzero_model_alias,
+            tokenizer_model_name=settings.mlzero_tokenizer_model_alias or None,
+            wire_api=settings.mlzero_provider_wire_api,
+        )
+        calculation_method = "tokenizer_estimate"
+
     return ProviderCallResult(
         text=text,
-        token_usage=extract_provider_token_usage(payload),
+        token_usage=token_usage,
+        token_usage_calculation_method=calculation_method,
     )
 
 

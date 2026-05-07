@@ -79,6 +79,7 @@ class MLZeroExecutor(BaseExecutor):
         env["OPENAI_BASE_URL"] = self.settings.mlzero_provider_base_url
         env["OPENAI_WIRE_API"] = self.settings.mlzero_provider_wire_api
         env["OPENAI_USER_AGENT"] = self.settings.mlzero_provider_user_agent
+        env["OPENAI_REQUEST_TIMEOUT"] = str(self.settings.mlzero_provider_request_timeout_seconds)
         env["HF_ENDPOINT"] = self.settings.mlzero_hf_endpoint
         env["HF_HUB_OFFLINE"] = "1"
         env["TRANSFORMERS_OFFLINE"] = "1"
@@ -126,7 +127,7 @@ class MLZeroExecutor(BaseExecutor):
             raise MLZeroRunError(self._build_failure_message(result, output_dir), output_dir=output_dir)
 
         try:
-            return self._build_summary(output_dir)
+            return self._build_summary(output_dir, task=task)
         except Exception as exc:  # noqa: BLE001
             raise MLZeroRunError(str(exc), output_dir=output_dir) from exc
 
@@ -146,11 +147,12 @@ class MLZeroExecutor(BaseExecutor):
             "Read the provided train.csv and validate the task against the actual data.",
             "Create your own train/validation split from train.csv when you need validation. Do not require a separate test file for this task.",
             "If AI-parsed task metadata is provided below, treat it as the preferred interpretation unless the CSV clearly contradicts it.",
+            "If a label column is provided below, use that exact column as the target. Never silently replace it with the last CSV column.",
             "If generated code fails because of CSV parsing, column names, dtypes, missing values, or model assumptions, inspect the error and revise the code instead of requiring precomputed task metadata.",
             f"When labeled training data is available, compare at least {self.settings.mlzero_min_candidate_models} candidate models or use an AutoML library that internally compares multiple candidates.",
             "For tabular classification and regression in this project runtime, use autogluon.tabular and fix its configuration directly instead of switching libraries.",
             "Persist machine-readable artifacts in the output folder: run_summary.json plus leaderboard.json or leaderboard.csv.",
-            "run_summary.json must include exact keys best_model, metric_name, metric_value, validation_score, tool, and candidate_model_count.",
+            "run_summary.json must include exact keys best_model, metric_name, metric_value, validation_score, tool, candidate_model_count, target_column, and problem_type.",
             "Each leaderboard row must include exact fields model and validation_score, and should include fit_time and pred_time when available.",
             "Do not stop after a single simple baseline if multiple candidate models are feasible within the time budget.",
         ]
@@ -203,6 +205,7 @@ class MLZeroExecutor(BaseExecutor):
             f"Solve the task '{task.name}' using train.csv. "
             f"User request: {task.description}. "
             "Read the CSV yourself, inspect the columns and sample values, and use any provided AI-parsed task metadata as the default interpretation. "
+            "If a label column is provided, use that exact column as the target and do not replace it with the last CSV column. "
             "Assume train.csv is the only guaranteed dataset file unless you explicitly verify otherwise. "
             "Do not assume test.csv exists; if you need validation, split train.csv yourself. "
             "Write and run the required data loading, preprocessing, training, and validation code. "
@@ -210,7 +213,7 @@ class MLZeroExecutor(BaseExecutor):
             f"Evaluate at least {self.settings.mlzero_min_candidate_models} candidate models when labeled training data is available. "
             "For tabular classification and regression in this project runtime, use autogluon.tabular and correct its configuration directly instead of switching to sklearn or another library. "
             "Save a machine-readable run_summary.json and leaderboard.json or leaderboard.csv into the provided output folder. "
-            "run_summary.json must include exact keys best_model, metric_name, metric_value, validation_score, tool, and candidate_model_count. "
+            "run_summary.json must include exact keys best_model, metric_name, metric_value, validation_score, tool, candidate_model_count, target_column, and problem_type. "
             "Each leaderboard row must include exact fields model and validation_score, and should include fit_time and pred_time when available. "
             "If the user-facing metric is lower-is-better, still persist a higher-is-better validation_score for search while also saving the raw metric in run_summary.json. "
             "Report the selected target column, inferred problem type, best model, metric name, final metric value, and final validation score. "
@@ -528,8 +531,35 @@ class MLZeroExecutor(BaseExecutor):
             reverse=True,
         )
 
-    def _build_summary(self, output_dir: Path) -> RunSummary:
+    def _validate_summary_matches_task(self, payload: dict[str, Any], task: TaskRecord | None) -> None:
+        if task is None or not task.label_column:
+            return
+
+        summary_target = self._coerce_str(payload.get("target_column"))
+        if summary_target is None:
+            raise RuntimeError(
+                "run_summary.json is missing target_column; refusing to accept an ambiguous MLZero result."
+            )
+        if summary_target != task.label_column:
+            raise RuntimeError(
+                "run_summary.json target_column does not match the task label column. "
+                f"task_label_column={task.label_column!r}, run_summary_target_column={summary_target!r}"
+            )
+
+        summary_problem_type = self._coerce_str(payload.get("problem_type"))
+        if task.problem_type and summary_problem_type is not None:
+            normalized_summary_problem = summary_problem_type
+            if normalized_summary_problem in {"binary", "multiclass"}:
+                normalized_summary_problem = "classification"
+            if normalized_summary_problem != task.problem_type:
+                raise RuntimeError(
+                    "run_summary.json problem_type does not match the task problem type. "
+                    f"task_problem_type={task.problem_type!r}, run_summary_problem_type={summary_problem_type!r}"
+                )
+
+    def _build_summary(self, output_dir: Path, *, task: TaskRecord | None = None) -> RunSummary:
         run_summary_payload, run_summary_path = self._require_run_summary_payload(output_dir)
+        self._validate_summary_matches_task(run_summary_payload, task)
         best_model = self._require_summary_string(run_summary_payload, "best_model")
         metric_name = self._require_summary_string(run_summary_payload, "metric_name")
         metric_value = self._require_summary_float(run_summary_payload, "metric_value")

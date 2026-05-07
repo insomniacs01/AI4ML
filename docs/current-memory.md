@@ -1534,3 +1534,208 @@
   2. 对治理类列表接口增加后端短缓存或批量聚合，减少 Supabase 多次 round-trip。
   3. 对代码工作区、AI 记录、报告等页面加更细粒度的本地状态缓存。
   4. 视需要保存每个 `RoutePane` 的滚动位置，做到更接近桌面软件的切页体验。
+
+## 2026-05-06 P0 final clarification and Agent Runtime closure
+
+- 用户追问 P0 是否已经“完美闭环”，重点指出：
+  - “智能体进度可视化已有真实 Agent 阶段快照，但本质是阶段 Agent 编排视图，不是 6 个独立后端 Agent 进程。”
+- 本轮已把这一项从阶段投影升级为后端持久化 Agent Runtime 闭环：
+  - 新增/扩展模型：`TaskAgentRecord`、`TaskAgentRuntimeRecord`、`TaskAgentEventRecord`、`TaskAgentCollaborationResponse`。
+  - 新增服务：`backend/app/services/task_agent_collaboration.py`。
+  - `task_agent_runs` 表持久化 6 个后端 Agent Runtime 记录。
+  - `task_agent_events` 表记录 Agent Runtime 事件流。
+  - `_record_workflow_stage()` 写阶段记录时同步 upsert 对应 Agent Runtime，并追加真实 Agent 事件。
+  - `GET /api/tasks/{task_id}/agent-collaboration` 读取 `task_agent_runs` / `task_agent_events`，返回 `runtime_mode = persistent_agent_runtime`。
+  - 旧任务首次打开 Agent 协同视图时会补齐缺失的 6 条 Runtime 记录，但不会反复刷新已有 Runtime 时间戳。
+- 前端 `MultiAgentCollaborationPanel` 已改为展示持久化 Runtime 口径：
+  - 运行模式：持久化 Agent Runtime / 阶段快照兼容模式。
+  - Runtime 数量、`runtime_id` / `worker_id`、耗时、开始时间、日志摘录、事件类型和产物数量。
+- Supabase schema 已新增并启用：
+  - `task_agent_runs`
+  - `task_agent_events`
+  - 对应索引、updated_at trigger、RLS enable 和 member policy。
+- 当前准确口径：
+  - P0 “智能体工作进度可视化”已经闭环为“6 个后端持久化 Agent Runtime 单元 + 事件流”。
+  - 它仍按 AI4ML 阶段顺序编排执行，不声称启动了 6 个并行 OS 进程。
+  - 不要为了迎合“多 Agent”表述而伪造并行 worker、假日志或假产物。
+
+### P0 需求口径调整
+
+- 用户确认当前任务创建设计更合理：
+  - 创建任务只要求 `name` / `description`。
+  - `problem_type` 创建时可为空。
+  - 上传 CSV 后由 AI 解析，或由人工语义修正表单确认后回写。
+- 已同步修改需求文档口径：
+  - `MON-智算社区-2-需求-0420.docx`
+  - `tools/req_0420_paras.txt`
+  - `docs/requirements-coverage-matrix.md`
+- 后续不要再把“创建任务时 `problem_type` 必填”当作 P0 缺口；这已经从需求上改为可空、后置解析/确认。
+
+### 当前 P0 判断
+
+- P0 当前可判定为已闭环。
+- 剩余曾被提到的点不建议作为 P0 硬闭环：
+  - 邮件邀请系统：是产品化增强，当前邀请码/团队成员/RLS 已能支撑 P0 权限闭环。
+  - 独立 `RoleBinding` 表：当前 `team_members.role` + 后端依赖鉴权 + Supabase RLS 更直接，除非后续要做细粒度可配置 RBAC。
+  - 6 个并行后端进程：当前持久化 Runtime 更诚实；真正分布式 worker 应作为后续架构增强，而不是为了页面表述硬做。
+  - 任务文件目录按 `team_id/task_id` 分层：数据库已按团队隔离，`task_id` 全局唯一；这属于后续存储口径统一或兼容迁移，不阻塞 P0。
+
+### 本轮验证
+
+- 已执行并通过：
+  - `.\.venv\Scripts\python.exe -m compileall backend\app`
+  - `.\.venv\Scripts\python.exe -m unittest discover backend\tests`
+  - `npm run build`
+- 最近一次后端测试结果：
+  - 29 个测试通过。
+- 前端开发服务已启动并返回 HTTP 200：
+  - `http://127.0.0.1:5173`
+
+### 当前注意事项
+
+- 上线或本地 Supabase 验收前必须执行最新 `supabase/schema.sql`，否则 `task_agent_runs` / `task_agent_events` 不存在会导致 Agent 协同视图落库失败。
+- 当前工作区有很多用户/既有未提交改动；后续继续修改时不要回滚无关文件。
+
+## 2026-05-06 Agent-to-Agent communication closure
+
+- 用户要求：当前流程不能只是按顺序执行，而要让不同 Agent 之间互相交流、交换信息、安排任务并共同完成目标。
+- 本轮已把 Agent 协同从“Runtime + 事件流”继续升级为“Runtime + 事件流 + 持久化 Agent 间消息流”：
+  - 新增模型：`TaskAgentMessageRecord`，并在 `TaskAgentCollaborationResponse.messages` 返回。
+  - 新增 Supabase 表：`task_agent_messages`，字段包括 `from_agent_id`、`to_agent_id`、`stage`、`message_type`、`status`、`content`、`payload`、`artifact_refs`、`correlation_id`。
+  - `task_agent_messages` 已增加索引、唯一 `correlation_id` 防重复、RLS enable 和团队成员 policy。
+  - `TaskStore` 新增 `list_agent_messages()` 和 `append_agent_message()`。
+  - `backend/app/services/task_agent_collaboration.py` 新增 `append_stage_agent_messages()`，在真实阶段状态变化时写入 Agent 间消息：
+    - `coordination`：上游 Agent 运行中，通知下游预备接收输出。
+    - `handoff`：上游 Agent 完成后向下游交接摘要和真实产物引用。
+    - `acknowledgement`：下游 Agent 确认接收上游结果。
+    - `blocker`：失败时通知下游等待修复或人工决策。
+    - `human_review`：等待人工节点时通知后续交接被暂停。
+    - `result`：最终报告 Agent 广播完成结果。
+  - `_record_workflow_stage()` 现在每次写阶段记录和 Agent Runtime 事件时，也会同步写入真实 Agent 间消息。
+  - `GET /api/tasks/{task_id}/agent-collaboration` 现在读取并返回 `task_agent_messages`。
+  - 前端 `MultiAgentCollaborationPanel` 新增“Agent 讨论流”，展示发送 Agent、接收 Agent、消息类型、内容、时间和真实产物数量。
+- 当前准确口径：
+  - Agent 之间现在具备持久化的“协作消息 / 交接消息 / 接收确认 / 阻塞通知”能力。
+  - 这些消息由真实阶段推进和运行结果触发，不是前端伪造聊天记录。
+  - 当前仍不是独立 LLM worker 之间自由辩论或并行规划；它是围绕 AI4ML 阶段编排的真实 Agent-to-Agent 协调消息总线。
+- 本轮验证：
+  - `.\.venv\Scripts\python.exe -m compileall backend\app`
+  - `.\.venv\Scripts\python.exe -m unittest backend.tests.test_p0_closure_services`
+  - `.\.venv\Scripts\python.exe -m unittest discover backend\tests`
+  - `npm run build`
+  - 当前后端测试结果：31 个测试通过。
+- 上线或本地 Supabase 验收前必须执行最新 `supabase/schema.sql`，否则 `task_agent_messages` 表不存在会导致 Agent 讨论流无法落库或读取。
+
+## 2026-05-06 MLZero long-run observability and stale-state repair
+
+- 用户反馈一个任务“跑了一天还在运行中”，页面进度不可用，无法判断是慢、卡住还是后台已经断了。
+- 本轮排查的具体任务：
+  - task id：`184e3ce7`
+  - 数据集：`GAID_MASTER_V2_COMPILATION_FINAL.csv`
+  - 真实运行目录：`C:\Users\LENOVO\AppData\Local\AI4ML\mlzero_runs\184e3ce7\20260505T080950Z`
+  - 最后文件/日志更新时间：`2026-05-05 16:29:49`
+  - 当前未发现与该 task id 或 output_dir 匹配的本地 MLZero/Python 子进程。
+- 真实产物状态：
+  - 已有 `run_summary.json`
+  - 已有 `leaderboard.csv`
+  - 已有生成代码产物
+  - 缺少 `token_usage.json`
+  - 最佳模型可从产物中读到：`WeightedEnsemble_L2`
+  - 指标：`rmse = 0.0006200115833211335`
+- 准确定性：
+  - 这不是仍在正常运行的任务。
+  - 它是一个“运行目录长时间无更新 + 后台进程不存在 + 部分产物存在但缺 token_usage”的陈旧/中断状态。
+  - 按项目严格规则，缺少 `token_usage.json` 不能标为完整成功。
+
+### 本轮实现
+
+- 新增真实运行诊断服务：
+  - `backend/app/services/task_run_progress.py`
+  - 读取真实 MLZero 输出目录、日志、summary、leaderboard、token usage、generated code。
+  - 同时扫描配置的 `settings.run_output_dir` 和 Windows `%LOCALAPPDATA%\AI4ML\mlzero_runs\<task_id>`，避免数据库没有记录 `last_run_attempt` 时找不到真实目录。
+  - 对 `running` 任务只认任务进入 running 后产生或更新过的运行目录，避免重新运行时误拿上一次成功目录当当前进度。
+- 新增 API：
+  - `GET /api/tasks/{task_id}/run-progress`
+  - 团队 scoped 路径也可用：`GET /api/teams/{team_id}/tasks/{task_id}/run-progress`
+- 新增响应模型：
+  - `TaskRunProgressArtifactSummary`
+  - `TaskRunProgressResponse`
+- stale 判定：
+  - 如果任务仍是 `running`，但运行目录超过 1 小时无日志/产物更新，则标记为 `stale`。
+  - 如果确认没有匹配的本地 Python/MLZero 进程，会把任务从 `running` 自动修正为 `failed`。
+  - 自动修正会保留真实 output_dir、阶段记录、日志摘要、审计事件 `task.run.stale_repair`。
+  - 如果无法确认进程状态且静默时间不足 6 小时，不会贸然自动改写任务状态。
+- 前端新增真实进度入口：
+  - `frontend/src/lib/api.js` 增加 `taskRunProgress(...)`。
+  - 任务详情和工作流页显示“真实运行诊断”卡片。
+  - 任务卡片新增“进度”按钮。
+  - 选中 running / failed / 有运行尝试的任务时自动读取诊断；running 时每 10 秒轮询。
+- 前端运行流程体验修正：
+  - 点击“运行 MLZero”后，前端立即把该任务显示为 `running` 并开始读取真实进度，不再等长请求返回后才更新页面。
+  - 新建任务的自动流程从“上传接口里串行跑完整 MLZero”改为：先上传/AI 解析，再由前端单独触发 MLZero run，这样训练阶段从开始就可观察。
+  - 当任务状态是 `running` 时，任务卡片和详情页禁止重复运行、重复解析和删除。
+
+### 重要口径
+
+- 这次加的是“运行状态可观察性 + 陈旧状态修复”，不是“结果兜底”。
+- 不能把部分产物直接当成功结果：
+  - 有 `run_summary.json` / `leaderboard.csv` 但缺 `token_usage.json` 时，必须继续显示为失败或状态不完整。
+  - 不允许为了让页面好看而伪造 token usage、伪造完成状态、伪造成功报告。
+- 后续如果要支持“失败但可恢复的部分结果导入”，必须明确标注为 recoverable/partial，并仍然不能绕过 token usage 严格口径。
+
+### 本轮验证
+
+- 已执行并通过：
+  - `.\.venv\Scripts\python.exe -m unittest backend.tests.test_p0_closure_services`
+  - `.\.venv\Scripts\python.exe -m unittest discover backend\tests`
+  - `.\.venv\Scripts\python.exe -m compileall backend\app`
+  - `cd frontend && npm run build`
+- 当前后端测试结果：33 个测试通过。
+- 本地接口验证：
+  - `http://127.0.0.1:8000/api/health` 返回 HTTP 200。
+  - OpenAPI 中已包含 `/api/tasks/{task_id}/run-progress` 和 `/api/teams/{team_id}/tasks/{task_id}/run-progress`。
+  - `http://127.0.0.1:5173` 前端服务返回 HTTP 200。
+
+### 后续建议
+
+- 优先在登录后的真实前端里打开任务 `184e3ce7` 的“进度/工作流进度”，触发 run-progress 接口，让后台把陈旧 `running` 状态修正为 `failed`。
+- 下一步可做“停止/标记中断”手动入口，但要继续遵守真实进程检测和产物保留原则。
+- 如果用户继续反馈训练耗时过长，下一步再做运行策略优化，例如默认更短时间预算、减少连续改进轮数、或者把 MCTS iteration / last log line 更细粒度地展示到 UI。
+
+## 2026-05-06 frontend/backend stability and duplicate uvicorn guard
+
+- 用户连续反馈：
+  - 页面任务卡片顺序上下跳动，诊断按钮在“诊断中/刷新诊断”之间闪动。
+  - 所有页面加载慢，连接器、配额等页面出现 `Failed to fetch` 或长时间卡住。
+  - 连接器保存从原本约 5 秒变成十多分钟无结果。
+  - 明确要求：不能用“前端几秒后停止等待/超时取消请求”来假装加速；所有业务请求不能被前端主动超时中断。
+- 本轮排查出的关键故障：
+  - 之前为性能加的前端请求超时/AbortController 是错误方向，会让连接器、配额等真实业务请求被前端直接取消。
+  - 本地 8000 端口一度同时存在两套 `uvicorn --reload` 相关进程，导致后端健康检查和前端代理请求卡死。
+  - 旧的 Vite/HMR 模块会让浏览器继续显示旧错误，例如 `DEFAULT_GET_TIMEOUT_MS is not defined` 或旧的 `Failed to fetch`。
+- 已撤销/修正：
+  - `frontend/src/lib/api.js` 不再有 `DEFAULT_GET_TIMEOUT_MS`、`timeoutMs`、`AbortController`、`已停止等待`、`超过 X 秒` 等前端中断逻辑。
+  - 前端网络错误只做可读提示，不主动取消真实业务请求。
+  - `frontend/vite.config.js` 的 `/api` 代理固定到 `http://127.0.0.1:8000`，避免 Windows 下 `localhost` 解析或代理链路不稳定。
+  - 清理过 `frontend/dist` 旧包并重新构建，避免旧 hash bundle 残留。
+- 新增后端单实例保护：
+  - 新文件：`backend/app/core/backend_instance.py`
+  - 新配置：`Settings.backend_instance_lock_path`
+  - 锁文件默认放在系统本地运行目录，例如 Windows `%LOCALAPPDATA%\AI4ML\backend-<repo_hash>.lock`，不放在 repo 内，避免触发 `uvicorn --reload`。
+  - `backend/app/main.py` 在创建 FastAPI app 前就尝试获取锁；第二套后端启动会直接退出。
+  - 第二套启动时的明确提示：
+    - `AI4ML backend startup blocked: AI4ML backend is already running for this workspace. Stop the existing uvicorn process on port 8000 before starting another one.`
+  - 目的：同一 workspace 同一台机器只允许一套 AI4ML 后端实例运行，避免两套 `uvicorn --reload` 抢 8000 或把页面业务请求卡死。
+- 新增测试：
+  - `backend/tests/test_backend_instance_lock.py`
+  - 覆盖：同一个锁文件第二次获取失败；释放后可再次获取。
+- 当前验证结果：
+  - `.\.venv\Scripts\python.exe -m unittest discover backend\tests`：36 个测试通过。
+  - `npm run build`：通过。
+  - 第一套后端启动后 `http://127.0.0.1:8000/api/health` 返回 HTTP 200。
+  - `http://127.0.0.1:5173/api/health` 返回 HTTP 200。
+  - 第二套后端启动命令退出码为 1，并提示已有后端实例正在运行；不会留下第二个后端进程。
+- 重要后续口径：
+  - 性能优化不能再通过前端超时/AbortController 中断业务请求实现。
+  - 加速方向应是减少不必要请求、后端轻量查询、缓存只读 GET、限制文件递归扫描、稳定轮询状态，而不是取消真实写请求。
+  - 如果用户看到 `Failed to fetch`，第一优先检查后端进程、5173 代理、浏览器是否加载旧 Vite 模块；不要重新引入前端超时取消。

@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api.js";
 
+const MAX_RENDERED_LINE_NUMBERS = 1200;
+const MAX_VIEWER_PREVIEW_CHARS = 120_000;
+const MAX_PREFETCH_ARTIFACTS = 2;
+
 const CATEGORY_LABELS = {
   code: "代码",
   state: "过程",
@@ -130,7 +134,22 @@ function pickDefaultArtifactPath(items) {
 
 function buildLineNumbers(text) {
   const lineCount = Math.max(1, String(text ?? "").split("\n").length);
-  return Array.from({ length: lineCount }, (_item, index) => index + 1);
+  const renderedLineCount = Math.min(lineCount, MAX_RENDERED_LINE_NUMBERS);
+  return Array.from({ length: renderedLineCount }, (_item, index) => index + 1);
+}
+
+function getLineCount(text) {
+  return Math.max(1, String(text ?? "").split("\n").length);
+}
+
+function getPreviewText(text, maxChars = MAX_VIEWER_PREVIEW_CHARS) {
+  const value = String(text ?? "");
+  if (value.length <= maxChars) return { text: value, truncated: false, omitted: 0 };
+  return {
+    text: value.slice(0, maxChars),
+    truncated: true,
+    omitted: value.length - maxChars,
+  };
 }
 
 function rankArtifactForPrefetch(item) {
@@ -261,6 +280,8 @@ export default function CodeWorkspacePanel({
     [activePath, artifactItems],
   );
   const lineNumbers = useMemo(() => buildLineNumbers(editorValue), [editorValue]);
+  const lineCount = useMemo(() => getLineCount(editorValue), [editorValue]);
+  const viewerPreview = useMemo(() => getPreviewText(editorValue), [editorValue]);
   const selectedTaskId = selectedTask?.id ?? "";
   const selectedTaskHasRun = hasRunArtifacts(selectedTask);
   const runScopeKey = workspaceData?.run_output_dir
@@ -369,7 +390,7 @@ export default function CodeWorkspacePanel({
 
     const candidates = [...artifactItems]
       .sort((left, right) => rankArtifactForPrefetch(left) - rankArtifactForPrefetch(right))
-      .slice(0, 10);
+      .slice(0, MAX_PREFETCH_ARTIFACTS);
 
     for (const item of candidates) {
       const cacheKey = buildArtifactCacheKey(selectedTaskId, item.path, runScopeKey);
@@ -854,6 +875,7 @@ export default function CodeWorkspacePanel({
                       <div className="code-editor-shell">
                         <div ref={gutterRef} className="code-editor-gutter" aria-hidden="true">
                           {lineNumbers.map((lineNumber) => <span key={lineNumber}>{lineNumber}</span>)}
+                          {lineCount > MAX_RENDERED_LINE_NUMBERS ? <span>...</span> : null}
                         </div>
                         <textarea
                           className="code-editor-input"
@@ -867,8 +889,14 @@ export default function CodeWorkspacePanel({
                       <div className="code-viewer-shell">
                         <div className="code-viewer-gutter" aria-hidden="true">
                           {lineNumbers.map((lineNumber) => <span key={lineNumber}>{lineNumber}</span>)}
+                          {lineCount > MAX_RENDERED_LINE_NUMBERS ? <span>...</span> : null}
                         </div>
-                        <pre className="code-viewer-pre">{editorValue}</pre>
+                        <pre className="code-viewer-pre">{viewerPreview.text}</pre>
+                        {viewerPreview.truncated ? (
+                          <div className="large-content-notice">
+                            文件较大，已先预览前 {MAX_VIEWER_PREVIEW_CHARS.toLocaleString("zh-CN")} 个字符，省略 {viewerPreview.omitted.toLocaleString("zh-CN")} 个字符。需要完整内容可下载工件。
+                          </div>
+                        ) : null}
                       </div>
                     )}
                   </>

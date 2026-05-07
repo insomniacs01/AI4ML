@@ -190,6 +190,8 @@ create table if not exists public.ai_tasks (
   id text primary key default substr(replace(gen_random_uuid()::text, '-', ''), 1, 8),
   team_id uuid not null references public.teams(id) on delete cascade,
   created_by uuid not null references public.profiles(user_id) on delete restrict,
+  creator_user_id uuid references public.profiles(user_id) on delete set null,
+  workflow_id text,
   name text not null,
   description text not null,
   label_column text,
@@ -203,6 +205,8 @@ create table if not exists public.ai_tasks (
   last_run jsonb,
   last_run_attempt jsonb,
   structured_requirements jsonb,
+  routing_policy_id text,
+  routing_source text,
   stage_routing jsonb not null default '[]'::jsonb,
   interaction_policies jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default timezone('utc', now()),
@@ -210,11 +214,22 @@ create table if not exists public.ai_tasks (
 );
 
 alter table public.ai_tasks
+  add column if not exists creator_user_id uuid references public.profiles(user_id) on delete set null;
+alter table public.ai_tasks
+  add column if not exists workflow_id text;
+alter table public.ai_tasks
   add column if not exists stage_routing jsonb not null default '[]'::jsonb;
 alter table public.ai_tasks
   add column if not exists interaction_policies jsonb not null default '[]'::jsonb;
 alter table public.ai_tasks
   add column if not exists dataset_profile jsonb;
+alter table public.ai_tasks
+  add column if not exists routing_policy_id text;
+alter table public.ai_tasks
+  add column if not exists routing_source text;
+update public.ai_tasks
+set creator_user_id = created_by
+where creator_user_id is null;
 
 drop trigger if exists ai_tasks_set_updated_at on public.ai_tasks;
 create trigger ai_tasks_set_updated_at
@@ -306,21 +321,67 @@ for each row
 execute function public.set_updated_at();
 
 create table if not exists public.quota_accounts (
+  id uuid primary key default gen_random_uuid(),
   team_id uuid not null references public.teams(id) on delete cascade,
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  user_id uuid references public.profiles(user_id) on delete cascade,
+  connector_id uuid references public.ai_connectors(id) on delete cascade,
+  scope_type text not null default 'member' check (scope_type in ('member', 'team', 'connector')),
+  scope_key text not null default '',
   token_quota integer not null default 0,
   token_used integer not null default 0,
   status text not null default 'active' check (status in ('active', 'frozen', 'exhausted')),
   warning_threshold integer not null default 0,
   created_at timestamptz not null default timezone('utc', now()),
-  updated_at timestamptz not null default timezone('utc', now()),
-  primary key (team_id, user_id)
+  updated_at timestamptz not null default timezone('utc', now())
 );
 
+alter table public.quota_accounts
+  add column if not exists id uuid default gen_random_uuid();
+update public.quota_accounts
+set id = gen_random_uuid()
+where id is null;
+do $$
+begin
+  alter table public.quota_accounts
+    drop constraint if exists quota_accounts_pkey;
+  alter table public.quota_accounts
+    add constraint quota_accounts_pkey primary key (id);
+exception
+  when duplicate_object then null;
+end;
+$$;
+alter table public.quota_accounts
+  alter column user_id drop not null;
+alter table public.quota_accounts
+  add column if not exists connector_id uuid references public.ai_connectors(id) on delete cascade;
+alter table public.quota_accounts
+  add column if not exists scope_type text not null default 'member';
+alter table public.quota_accounts
+  add column if not exists scope_key text not null default '';
+update public.quota_accounts
+set scope_type = coalesce(nullif(scope_type, ''), 'member'),
+    scope_key = coalesce(nullif(scope_key, ''), user_id::text, connector_id::text, team_id::text)
+where scope_key = '' or scope_type is null;
 alter table public.quota_accounts
   add column if not exists status text not null default 'active';
 alter table public.quota_accounts
   add column if not exists warning_threshold integer not null default 0;
+do $$
+begin
+  alter table public.quota_accounts
+    drop constraint if exists quota_accounts_scope_type_check;
+  alter table public.quota_accounts
+    add constraint quota_accounts_scope_type_check
+    check (scope_type in ('member', 'team', 'connector'));
+  alter table public.quota_accounts
+    drop constraint if exists quota_accounts_status_check;
+  alter table public.quota_accounts
+    add constraint quota_accounts_status_check
+    check (status in ('active', 'frozen', 'exhausted'));
+end;
+$$;
+create unique index if not exists quota_accounts_scope_unique_idx
+on public.quota_accounts (team_id, scope_type, scope_key);
 
 drop trigger if exists quota_accounts_set_updated_at on public.quota_accounts;
 create trigger quota_accounts_set_updated_at
@@ -387,6 +448,111 @@ create trigger workflow_stage_records_set_updated_at
 before update on public.workflow_stage_records
 for each row
 execute function public.set_updated_at();
+
+create table if not exists public.task_agent_runs (
+  id uuid primary key default gen_random_uuid(),
+  team_id uuid not null references public.teams(id) on delete cascade,
+  task_id text not null references public.ai_tasks(id) on delete cascade,
+  agent_id text not null,
+  stage text not null,
+  name text not null,
+  role text not null,
+  short_role text not null,
+  status text not null default 'pending',
+  progress integer not null default 0 check (progress >= 0 and progress <= 100),
+  current_task text not null,
+  selected_connector_id uuid references public.ai_connectors(id) on delete set null,
+  model_name text,
+  selection_source text,
+  artifact_refs jsonb,
+  started_at timestamptz,
+  finished_at timestamptz,
+  duration_seconds double precision,
+  log_excerpt text,
+  worker_id text,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+alter table public.task_agent_runs
+  add column if not exists progress integer not null default 0;
+alter table public.task_agent_runs
+  add column if not exists current_task text not null default '';
+alter table public.task_agent_runs
+  add column if not exists selected_connector_id uuid references public.ai_connectors(id) on delete set null;
+alter table public.task_agent_runs
+  add column if not exists artifact_refs jsonb;
+alter table public.task_agent_runs
+  add column if not exists started_at timestamptz;
+alter table public.task_agent_runs
+  add column if not exists finished_at timestamptz;
+alter table public.task_agent_runs
+  add column if not exists duration_seconds double precision;
+alter table public.task_agent_runs
+  add column if not exists log_excerpt text;
+alter table public.task_agent_runs
+  add column if not exists worker_id text;
+
+create unique index if not exists task_agent_runs_current_unique_idx
+on public.task_agent_runs (team_id, task_id, agent_id);
+
+drop trigger if exists task_agent_runs_set_updated_at on public.task_agent_runs;
+create trigger task_agent_runs_set_updated_at
+before update on public.task_agent_runs
+for each row
+execute function public.set_updated_at();
+
+create table if not exists public.task_agent_events (
+  id uuid primary key default gen_random_uuid(),
+  team_id uuid not null references public.teams(id) on delete cascade,
+  task_id text not null references public.ai_tasks(id) on delete cascade,
+  agent_id text not null,
+  stage text not null,
+  kind text not null default 'agent',
+  status text not null,
+  text text not null,
+  artifact_refs jsonb,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+create index if not exists task_agent_events_task_created_idx
+on public.task_agent_events (team_id, task_id, created_at desc);
+
+create table if not exists public.task_agent_messages (
+  id uuid primary key default gen_random_uuid(),
+  team_id uuid not null references public.teams(id) on delete cascade,
+  task_id text not null references public.ai_tasks(id) on delete cascade,
+  from_agent_id text not null,
+  to_agent_id text,
+  stage text not null,
+  message_type text not null default 'coordination',
+  status text not null default 'sent',
+  content text not null,
+  payload jsonb,
+  artifact_refs jsonb,
+  correlation_id text,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+alter table public.task_agent_messages
+  add column if not exists to_agent_id text;
+alter table public.task_agent_messages
+  add column if not exists message_type text not null default 'coordination';
+alter table public.task_agent_messages
+  add column if not exists status text not null default 'sent';
+alter table public.task_agent_messages
+  add column if not exists payload jsonb;
+alter table public.task_agent_messages
+  add column if not exists artifact_refs jsonb;
+alter table public.task_agent_messages
+  add column if not exists correlation_id text;
+
+create index if not exists task_agent_messages_task_created_idx
+on public.task_agent_messages (team_id, task_id, created_at desc);
+
+create unique index if not exists task_agent_messages_correlation_unique_idx
+on public.task_agent_messages (team_id, task_id, correlation_id)
+where correlation_id is not null;
 
 create table if not exists public.human_interaction_requests (
   id uuid primary key default gen_random_uuid(),
@@ -656,9 +822,9 @@ begin
     raise exception 'You do not have access to the requested team.';
   end if;
 
-  insert into public.quota_accounts (team_id, user_id, token_quota, token_used, status)
-  values (target_team_id, target_user_id, 0, greatest(coalesce(token_delta, 0), 0), 'active')
-  on conflict (team_id, user_id) do update
+  insert into public.quota_accounts (team_id, user_id, scope_type, scope_key, token_quota, token_used, status)
+  values (target_team_id, target_user_id, 'member', target_user_id::text, 0, greatest(coalesce(token_delta, 0), 0), 'active')
+  on conflict (team_id, scope_type, scope_key) do update
     set token_used = greatest(public.quota_accounts.token_used + coalesce(token_delta, 0), 0),
         status = case
           when public.quota_accounts.status = 'frozen' then 'frozen'
@@ -733,6 +899,9 @@ alter table public.token_ledgers enable row level security;
 alter table public.quota_accounts enable row level security;
 alter table public.ai_routing_policies enable row level security;
 alter table public.workflow_stage_records enable row level security;
+alter table public.task_agent_runs enable row level security;
+alter table public.task_agent_events enable row level security;
+alter table public.task_agent_messages enable row level security;
 alter table public.human_interaction_requests enable row level security;
 alter table public.platform_assets enable row level security;
 alter table public.audit_logs enable row level security;
@@ -884,6 +1053,30 @@ with check (public.is_member_of_team(team_id));
 drop policy if exists workflow_stage_records_all_if_member on public.workflow_stage_records;
 create policy workflow_stage_records_all_if_member
 on public.workflow_stage_records
+for all
+to authenticated
+using (public.is_member_of_team(team_id))
+with check (public.is_member_of_team(team_id));
+
+drop policy if exists task_agent_runs_all_if_member on public.task_agent_runs;
+create policy task_agent_runs_all_if_member
+on public.task_agent_runs
+for all
+to authenticated
+using (public.is_member_of_team(team_id))
+with check (public.is_member_of_team(team_id));
+
+drop policy if exists task_agent_events_all_if_member on public.task_agent_events;
+create policy task_agent_events_all_if_member
+on public.task_agent_events
+for all
+to authenticated
+using (public.is_member_of_team(team_id))
+with check (public.is_member_of_team(team_id));
+
+drop policy if exists task_agent_messages_all_if_member on public.task_agent_messages;
+create policy task_agent_messages_all_if_member
+on public.task_agent_messages
 for all
 to authenticated
 using (public.is_member_of_team(team_id))

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -28,7 +30,10 @@ from backend.app.models.task import (
     TaskCodeWorkspaceResponse,
     TaskCreateRequest,
     TaskDeleteResponse,
+    TaskAgentCollaborationResponse,
+    TaskAgentRuntimeRecord,
     TaskHumanCollaborationResponse,
+    TaskHumanRequestRecord,
     TaskHumanRequestCreateRequest,
     TaskHumanRequestDecisionRequest,
     TaskInteractionPolicyRecord,
@@ -40,12 +45,15 @@ from backend.app.models.task import (
     TaskPredictionDemoResponse,
     TaskRecord,
     TaskRunRequest,
+    TaskRunProgressResponse,
+    TaskSemanticUpdateRequest,
     TaskStageRoutingOverrideInput,
     TaskStageRoutingRecord,
     TaskStatus,
     TokenUsageResponse,
     TaskWorkflowConfigUpdateRequest,
     WorkflowStage,
+    WorkflowStageRecord,
     WorkflowStageStatus,
     normalize_workflow_stage,
 )
@@ -64,6 +72,11 @@ from backend.app.services.task_code_workspace import (
     resolve_task_code_artifact_file,
     save_task_code_artifact,
 )
+from backend.app.services.task_agent_collaboration import (
+    append_stage_agent_messages,
+    agent_runtime_spec_for_stage,
+    build_task_agent_collaboration_response,
+)
 from backend.app.services.task_human_collaboration import TaskHumanCollaborationService
 from backend.app.services.task_human_context import ensure_task_human_loop, get_task_human_loop
 from backend.app.services.task_incremental_rerun import (
@@ -76,8 +89,10 @@ from backend.app.services.task_incremental_rerun import (
     run_task_incrementally,
 )
 from backend.app.services.task_reporting import build_prediction_demo_response, build_task_model_report
+from backend.app.services.task_run_progress import build_task_run_progress
+from backend.app.services.task_semantics import apply_human_semantic_update
 from backend.app.services.task_store import TaskStore
-from backend.app.services.token_usage import read_token_usage
+from backend.app.services.token_usage import read_mlzero_token_usage, read_token_usage
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -423,6 +438,30 @@ def _sync_task_human_collaboration(
     )
 
 
+AGENT_SCHEMA_MISSING_DETAIL = (
+    "Supabase schema 缺少 Agent 协同表。请在 Supabase SQL Editor 执行最新 supabase/schema.sql，"
+    "确保 task_agent_runs、task_agent_events、task_agent_messages 已创建，并等待 PostgREST schema cache 刷新后重试。"
+)
+
+
+def _is_agent_schema_missing_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "PGRST205" in text and any(
+        table_name in text
+        for table_name in ("task_agent_runs", "task_agent_events", "task_agent_messages")
+    )
+
+
+def _raise_agent_schema_http_error(exc: Exception) -> None:
+    if _is_agent_schema_missing_error(exc):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_SCHEMA_MISSING_DETAIL) from exc
+    raise exc
+
+
+def _is_agent_schema_http_exception(exc: HTTPException) -> bool:
+    return exc.status_code == status.HTTP_409_CONFLICT and str(exc.detail) == AGENT_SCHEMA_MISSING_DETAIL
+
+
 def _record_workflow_stage(
     task: TaskRecord,
     team_access: TeamAccessContext,
@@ -435,7 +474,8 @@ def _record_workflow_stage(
     log_excerpt: str | None = None,
 ) -> None:
     stage_record = selection.stage_record if isinstance(selection, _ResolvedStageSelection) else selection
-    get_task_store().upsert_stage_record(
+    task_store = get_task_store()
+    task_store.upsert_stage_record(
         team_id=task.team_id,
         task_id=task.id,
         stage=stage,
@@ -448,6 +488,77 @@ def _record_workflow_stage(
         artifact_refs=artifact_refs,
         log_excerpt=log_excerpt,
     )
+    agent_spec = agent_runtime_spec_for_stage(stage)
+    agent_name = str(agent_spec["name"])
+    agent_role = str(agent_spec["role"])
+    status_value = stage_status.value if hasattr(stage_status, "value") else str(stage_status)
+    current_task = summary
+    try:
+        task_store.upsert_agent_run(
+            team_id=task.team_id,
+            task_id=task.id,
+            agent_id=str(agent_spec["agent_id"]),
+            stage=stage,
+            name=agent_name,
+            role=agent_role,
+            short_role=str(agent_spec["short_role"]),
+            status=stage_status,
+            progress=_agent_progress_for_status(stage_status),
+            current_task=current_task,
+            access_token=team_access.access_token,
+            selected_connector_id=stage_record.connector_id if stage_record else None,
+            model_name=stage_record.model_name if stage_record else None,
+            selection_source=stage_record.selection_source if stage_record else None,
+            artifact_refs=artifact_refs,
+            log_excerpt=log_excerpt,
+            worker_id=f"backend-agent-worker:{task.id}:{normalize_workflow_stage(stage).value}",
+        )
+        task_store.append_agent_event(
+            team_id=task.team_id,
+            task_id=task.id,
+            agent_id=str(agent_spec["agent_id"]),
+            stage=stage,
+            kind="agent",
+            status=status_value,
+            text=f"{agent_name}（{agent_role}）{_format_stage_status(stage_status)}：{current_task}",
+            artifact_refs=artifact_refs,
+            access_token=team_access.access_token,
+        )
+        append_stage_agent_messages(
+            task_store,
+            task,
+            access_token=team_access.access_token,
+            stage=stage,
+            stage_status=stage_status,
+            summary=current_task,
+            artifact_refs=artifact_refs,
+            log_excerpt=log_excerpt,
+        )
+    except ConnectionError as exc:
+        _raise_agent_schema_http_error(exc)
+
+
+def _format_stage_status(stage_status: WorkflowStageStatus) -> str:
+    labels = {
+        WorkflowStageStatus.pending: "待命",
+        WorkflowStageStatus.running: "执行中",
+        WorkflowStageStatus.waiting_human: "等待人工",
+        WorkflowStageStatus.completed: "已完成",
+        WorkflowStageStatus.failed: "失败",
+    }
+    return labels.get(stage_status, stage_status.value if hasattr(stage_status, "value") else str(stage_status))
+
+
+def _agent_progress_for_status(stage_status: WorkflowStageStatus) -> int:
+    if stage_status == WorkflowStageStatus.completed:
+        return 100
+    if stage_status == WorkflowStageStatus.failed:
+        return 100
+    if stage_status == WorkflowStageStatus.running:
+        return 62
+    if stage_status == WorkflowStageStatus.waiting_human:
+        return 48
+    return 0
 
 
 def _record_stage_selection_map(
@@ -472,6 +583,62 @@ def _record_stage_selection_map(
             artifact_refs=artifact_refs_by_stage.get(stage, artifact_refs) if artifact_refs_by_stage else artifact_refs,
             log_excerpt=log_excerpt_by_stage.get(stage) if log_excerpt_by_stage else None,
         )
+
+
+def _ensure_agent_runtime_records(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    *,
+    stages: list[WorkflowStageRecord],
+    human_requests: list[TaskHumanRequestRecord],
+    agent_runs: list[TaskAgentRuntimeRecord],
+) -> list[TaskAgentRuntimeRecord]:
+    task_store = get_task_store()
+    existing_by_agent = {record.agent_id: record for record in agent_runs}
+    stages_by_key = {normalize_workflow_stage(record.stage).value: record for record in stages}
+    open_request_stages = {
+        normalize_workflow_stage(request.stage).value
+        for request in human_requests
+        if str(request.status.value if hasattr(request.status, "value") else request.status) in {"pending", "open"}
+    }
+
+    created_records: list[TaskAgentRuntimeRecord] = []
+    for stage in PRIMARY_WORKFLOW_STAGES:
+        stage_key = stage.value
+        if stage_key in existing_by_agent:
+            continue
+        stage_record = stages_by_key.get(stage_key)
+        agent_spec = agent_runtime_spec_for_stage(stage)
+        resolved_status = stage_record.status if stage_record else WorkflowStageStatus.pending
+        if stage_key in open_request_stages:
+            resolved_status = WorkflowStageStatus.waiting_human
+        current_task = (
+            stage_record.summary
+            if stage_record and stage_record.summary
+            else str(agent_spec["description"])
+        )
+        created_records.append(
+            task_store.upsert_agent_run(
+                team_id=task.team_id,
+                task_id=task.id,
+                agent_id=stage_key,
+                stage=stage,
+                name=str(agent_spec["name"]),
+                role=str(agent_spec["role"]),
+                short_role=str(agent_spec["short_role"]),
+                status=resolved_status,
+                progress=_agent_progress_for_status(resolved_status),
+                current_task=current_task,
+                access_token=team_access.access_token,
+                selected_connector_id=stage_record.selected_connector_id if stage_record else None,
+                model_name=stage_record.model_name if stage_record else None,
+                selection_source=stage_record.selection_source if stage_record else None,
+                artifact_refs=stage_record.artifact_refs if stage_record else None,
+                log_excerpt=stage_record.log_excerpt if stage_record else None,
+                worker_id=f"backend-agent-worker:{task.id}:{stage_key}",
+            )
+        )
+    return [*agent_runs, *created_records]
 
 
 def _collect_stage_artifacts_by_stage(output_dir: str | None) -> dict[WorkflowStage, list[str]]:
@@ -560,6 +727,149 @@ def _read_run_log_excerpt(output_dir: str | None, *, max_chars: int = 1800) -> s
             text = text[-max_chars:]
         return f"{path.name}\n{text}"
     return None
+
+
+def _repair_stale_running_task(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    progress: TaskRunProgressResponse,
+) -> TaskRunProgressResponse:
+    if task.status != TaskStatus.running or not progress.stale or not progress.output_dir:
+        return progress
+
+    output_dir = progress.output_dir
+    active_process = _has_active_local_run_process(task.id, output_dir)
+    if active_process is True:
+        progress.warnings.append("检测到仍有当前任务相关的本地 Python/MLZero 进程，暂不自动改写任务状态。")
+        return progress
+    if active_process is None and (
+        progress.seconds_since_last_update is None or progress.seconds_since_last_update < 6 * 60 * 60
+    ):
+        progress.warnings.append("无法确认本地进程状态，且运行目录未超过 6 小时无更新，暂不自动改写任务状态。")
+        return progress
+
+    token_usage = read_mlzero_token_usage(output_dir)
+    activity = progress.current_activity or "没有可解析的最后活动。"
+    task.status = TaskStatus.failed
+    task.notes = (
+        f"运行已被判定为中断：{progress.stale_reason or '运行目录长时间无更新。'} "
+        f"最后活动：{activity}"
+    )
+    task.last_run_attempt = RunAttempt(output_dir=output_dir, token_usage=token_usage)
+
+    task_store = get_task_store()
+    saved_task = task_store.save_task(task, access_token=team_access.access_token)
+    task_store.upsert_run_attempt(
+        saved_task,
+        output_dir=output_dir,
+        status="failed",
+        token_usage=token_usage,
+        notes=saved_task.notes,
+        access_token=team_access.access_token,
+    )
+
+    log_excerpt = _read_run_log_excerpt(output_dir) or activity
+    feature_status = WorkflowStageStatus.completed if progress.artifacts.has_generated_code else WorkflowStageStatus.failed
+    model_status = WorkflowStageStatus.completed if progress.artifacts.has_leaderboard else WorkflowStageStatus.failed
+    training_status = WorkflowStageStatus.failed
+    report_status = WorkflowStageStatus.pending
+    if progress.artifacts.has_run_summary and progress.artifacts.has_leaderboard and not progress.artifacts.has_token_usage:
+        training_summary = "训练已产出 run_summary / leaderboard，但缺少 token_usage.json，严格口径下不能判定为完整成功。"
+    else:
+        training_summary = "MLZero 运行目录长时间无更新，训练验证链路已被标记为中断。"
+
+    _record_stage_selection_map(
+        saved_task,
+        team_access,
+        stage_selection_map={},
+        status_by_stage={
+            WorkflowStage.feature_engineering: feature_status,
+            WorkflowStage.model_selection: model_status,
+            WorkflowStage.training_validation: training_status,
+            WorkflowStage.report_generation: report_status,
+        },
+        summary_by_stage={
+            WorkflowStage.feature_engineering: (
+                "已找到生成代码产物。" if feature_status == WorkflowStageStatus.completed else "代码生成阶段未留下可确认产物。"
+            ),
+            WorkflowStage.model_selection: (
+                "已找到候选模型 leaderboard。" if model_status == WorkflowStageStatus.completed else "候选模型比较未留下可确认产物。"
+            ),
+            WorkflowStage.training_validation: training_summary,
+            WorkflowStage.report_generation: "运行中断后未进入完整报告生成。",
+        },
+        artifact_refs=[output_dir],
+        artifact_refs_by_stage=_collect_stage_artifacts_by_stage(output_dir),
+        log_excerpt_by_stage={
+            WorkflowStage.feature_engineering: log_excerpt,
+            WorkflowStage.model_selection: log_excerpt,
+            WorkflowStage.training_validation: log_excerpt,
+            WorkflowStage.report_generation: log_excerpt,
+        },
+    )
+    _write_task_audit(
+        team_access,
+        action="task.run.stale_repair",
+        task_id=saved_task.id,
+        detail={
+            "status": "failed",
+            "output_dir": output_dir,
+            "stale_reason": progress.stale_reason,
+            "last_activity": activity,
+            "has_run_summary": progress.artifacts.has_run_summary,
+            "has_leaderboard": progress.artifacts.has_leaderboard,
+            "has_token_usage": progress.artifacts.has_token_usage,
+        },
+    )
+
+    repaired = build_task_run_progress(saved_task, get_settings())
+    repaired.repaired = True
+    repaired.repair_action = "stale_running_marked_failed"
+    return repaired
+
+
+def _has_active_local_run_process(task_id: str, output_dir: str) -> bool | None:
+    needles = [str(task_id), str(output_dir)]
+    try:
+        if os.name == "nt":
+            result = subprocess.run(  # noqa: S603
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Process | "
+                    "Where-Object { $_.Name -match 'python|mamba|uvicorn' } | "
+                    "Select-Object -ExpandProperty CommandLine",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3,
+                check=False,
+            )
+        else:
+            result = subprocess.run(  # noqa: S603
+                ["ps", "-eo", "args="],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3,
+                check=False,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode != 0:
+        return None
+    current_process_hint = "Get-CimInstance Win32_Process" if os.name == "nt" else "ps -eo"
+    for line in result.stdout.splitlines():
+        if current_process_hint in line:
+            continue
+        if any(needle and needle in line for needle in needles):
+            return True
+    return False
 
 
 def _resolve_requested_rerun_stage(task: TaskRecord, payload: TaskRunRequest) -> WorkflowStage | None:
@@ -869,6 +1179,8 @@ def _run_ai_analysis(
         )
         analysis = analyze_task_with_ai(task, Path(task.dataset_path), runtime_settings)
     except HTTPException as exc:
+        if _is_agent_schema_http_exception(exc):
+            raise
         task.status = TaskStatus.planning
         task.notes = f"AI 解析失败：{exc.detail}"
         saved_task = task_store.save_task(task, access_token=team_access.access_token)
@@ -920,7 +1232,7 @@ def _run_ai_analysis(
         connector_id=selection.connector.id,
         connector_display_name=selection.connector.display_name,
         model_name=selection.model_name,
-        calculation_method="provider_reported_usage",
+        calculation_method=analysis.token_usage_calculation_method or "provider_reported_usage",
     )
     _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
     _record_workflow_stage(
@@ -978,6 +1290,21 @@ def get_task(task_id: str, team_access: TeamAccessContext = Depends(require_team
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     return task
+
+
+@router.get("/{task_id}/run-progress", response_model=TaskRunProgressResponse)
+def get_task_run_progress(
+    task_id: str,
+    repair_stale: bool = Query(default=True),
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskRunProgressResponse:
+    task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    progress = build_task_run_progress(task, get_settings())
+    if repair_stale:
+        progress = _repair_stale_running_task(task, team_access, progress)
+    return progress
 
 
 @router.get("/{task_id}/token-usage", response_model=TokenUsageResponse)
@@ -1069,6 +1396,75 @@ def update_task_workflow_config(
     return saved_task
 
 
+@router.put("/{task_id}/semantic-analysis", response_model=TaskRecord)
+def update_task_semantic_analysis(
+    task_id: str,
+    payload: TaskSemanticUpdateRequest,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskRecord:
+    task_store = get_task_store()
+    task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+
+    try:
+        updated_task = apply_human_semantic_update(
+            task,
+            payload,
+            corrected_by=team_access.user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    saved_task = task_store.save_task(updated_task, access_token=team_access.access_token)
+    runtime_context = _build_runtime_context(team_access)
+    stage_selection_map = _build_stage_selection_map(saved_task, team_access, runtime_context)
+    _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
+    _record_workflow_stage(
+        saved_task,
+        team_access,
+        stage=WorkflowStage.data_analysis,
+        stage_status=WorkflowStageStatus.completed,
+        summary=(
+            f"用户已人工修正任务语义：目标列 {saved_task.label_column}，"
+            f"任务类型 {saved_task.problem_type}，指标 {payload.metric_name.strip().lower()}。"
+        ),
+        selection=stage_selection_map.get(WorkflowStage.data_analysis.value),
+        artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+        log_excerpt=payload.correction_note,
+    )
+    _record_stage_selection_map(
+        saved_task,
+        team_access,
+        stage_selection_map=stage_selection_map,
+        status_by_stage={
+            WorkflowStage.feature_engineering: WorkflowStageStatus.pending,
+            WorkflowStage.model_selection: WorkflowStageStatus.pending,
+            WorkflowStage.training_validation: WorkflowStageStatus.pending,
+            WorkflowStage.report_generation: WorkflowStageStatus.pending,
+        },
+        summary_by_stage={
+            WorkflowStage.feature_engineering: "任务语义已人工修正，等待下一次 MLZero 运行重新生成特征与训练代码。",
+            WorkflowStage.model_selection: "任务语义已人工修正，等待下一次 MLZero 运行重新选择候选模型。",
+            WorkflowStage.training_validation: "任务语义已人工修正，等待下一次 MLZero 运行重新训练验证。",
+            WorkflowStage.report_generation: "任务语义已人工修正，等待新的真实运行产物后生成报告。",
+        },
+        artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
+    )
+    _write_task_audit(
+        team_access,
+        action="task.semantic_analysis.update",
+        task_id=saved_task.id,
+        detail={
+            "label_column": saved_task.label_column,
+            "problem_type": saved_task.problem_type,
+            "metric_name": payload.metric_name.strip().lower(),
+            "cleared_last_run": True,
+        },
+    )
+    return saved_task
+
+
 @router.get("/{task_id}/human-collaboration", response_model=TaskHumanCollaborationResponse)
 def get_task_human_collaboration(
     task_id: str,
@@ -1082,6 +1478,44 @@ def get_task_human_collaboration(
     _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
     refreshed_task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token) or task
     return get_task_human_collaboration_service().get_snapshot(refreshed_task, access_token=team_access.access_token)
+
+
+@router.get("/{task_id}/agent-collaboration", response_model=TaskAgentCollaborationResponse)
+def get_task_agent_collaboration(
+    task_id: str,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskAgentCollaborationResponse:
+    task_store = get_task_store()
+    task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    runtime_context = _build_runtime_context(team_access)
+    stage_selection_map = _build_stage_selection_map(task, team_access, runtime_context)
+    _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
+    refreshed_task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token) or task
+    stages = task_store.list_stage_records(team_access.team_id, task_id, access_token=team_access.access_token)
+    requests = task_store.list_human_requests(team_access.team_id, task_id, access_token=team_access.access_token)
+    try:
+        agent_runs = task_store.list_agent_runs(team_access.team_id, task_id, access_token=team_access.access_token)
+        agent_runs = _ensure_agent_runtime_records(
+            refreshed_task,
+            team_access,
+            stages=stages,
+            human_requests=requests,
+            agent_runs=agent_runs,
+        )
+        agent_events = task_store.list_agent_events(team_access.team_id, task_id, access_token=team_access.access_token)
+        agent_messages = task_store.list_agent_messages(team_access.team_id, task_id, access_token=team_access.access_token)
+    except ConnectionError as exc:
+        _raise_agent_schema_http_error(exc)
+    return build_task_agent_collaboration_response(
+        refreshed_task,
+        stages=stages,
+        requests=requests,
+        agent_runs=agent_runs,
+        agent_events=agent_events,
+        agent_messages=agent_messages,
+    )
 
 
 @router.post("/{task_id}/human-requests", response_model=TaskHumanCollaborationResponse, status_code=status.HTTP_201_CREATED)
@@ -1265,7 +1699,7 @@ def send_task_chat(
         connector_id=selection.connector.id,
         connector_display_name=selection.connector.display_name,
         model_name=selection.model_name,
-        calculation_method="provider_reported_usage",
+        calculation_method=chat_result.token_usage_calculation_method or "provider_reported_usage",
     )
     return TaskInteractiveChatResponse(
         task=saved_task,
@@ -1385,6 +1819,8 @@ def rerun_task_code_workspace_file(
 @router.post("/{task_id}/dataset", response_model=TaskRecord)
 async def upload_dataset(
     task_id: str,
+    auto_run: bool = Query(default=True),
+    time_limit: int = Query(default=20, ge=5, le=300),
     file: UploadFile = File(...),
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> TaskRecord:
@@ -1440,7 +1876,7 @@ async def upload_dataset(
     task.problem_type = None
     task.analysis_token_usage = None
     task.structured_requirements = {"dataset_profile": dataset_profile_to_plain(dataset_profile)}
-    task.notes = "CSV 已上传并完成基础画像，系统会根据当前阶段路由自动执行 AI 解析。"
+    task.notes = "CSV 已上传并完成基础画像，系统会根据当前阶段路由自动执行 AI 解析并启动 MLZero 工作流。"
     task = task_store.save_task(task, access_token=team_access.access_token)
     _record_workflow_stage(
         task,
@@ -1468,10 +1904,19 @@ async def upload_dataset(
             "row_count": dataset_profile.row_count,
             "column_count": dataset_profile.column_count,
             "status": task.status.value,
+            "auto_run": auto_run,
+            "time_limit": time_limit,
         },
     )
 
-    return _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
+    analyzed_task = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
+    if not auto_run:
+        return analyzed_task
+    return run_task(
+        analyzed_task.id,
+        TaskRunRequest(time_limit=time_limit),
+        team_access,
+    )
 
 
 @router.post("/{task_id}/analyze", response_model=TaskRecord)

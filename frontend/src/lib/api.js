@@ -19,12 +19,17 @@ function buildHeaders(accessToken, teamId, headers) {
 }
 
 function clonePayload(payload) {
-  if (typeof structuredClone === "function") return structuredClone(payload);
-  return JSON.parse(JSON.stringify(payload));
+  return payload;
 }
 
 function getCacheKey(path, accessToken, teamId) {
   return `${teamId ?? ""}|${accessToken ? accessToken.slice(-16) : ""}|${path}`;
+}
+
+function requireTeamScopedPath(path, context = {}) {
+  const teamId = context?.teamId;
+  if (!teamId) return path;
+  return `/teams/${encodeURIComponent(teamId)}${path}`;
 }
 
 function clearApiCache() {
@@ -54,6 +59,11 @@ async function request(path, options = {}) {
   const requestPromise = fetch(`${API_ROOT}${path}`, {
     ...fetchOptions,
     headers: buildHeaders(accessToken, teamId, headers),
+  }).catch((error) => {
+    if (error instanceof TypeError && error.message === "Failed to fetch") {
+      throw new Error(`接口 ${path} 未能连接到后端。请确认 8000 后端服务正在运行，或刷新页面后重试。`);
+    }
+    throw error;
   }).then(async (response) => {
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -79,6 +89,11 @@ async function requestBlob(path, options = {}) {
   const response = await fetch(`${API_ROOT}${path}`, {
     ...fetchOptions,
     headers: buildHeaders(accessToken, teamId, headers),
+  }).catch((error) => {
+    if (error instanceof TypeError && error.message === "Failed to fetch") {
+      throw new Error(`接口 ${path} 未能连接到后端。请确认 8000 后端服务正在运行，或刷新页面后重试。`);
+    }
+    throw error;
   });
 
   if (!response.ok) {
@@ -102,13 +117,13 @@ export const api = {
     return request("/health", context);
   },
   usageSummary(context = {}) {
-    return request("/usage", context);
+    return request(requireTeamScopedPath("/usage", context), context);
   },
   listConnectors(context = {}) {
-    return request("/connectors", context);
+    return request(requireTeamScopedPath("/connectors", context), context);
   },
   createConnector(payload, context = {}) {
-    return request("/connectors", {
+    return request(requireTeamScopedPath("/connectors", context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -116,7 +131,7 @@ export const api = {
     });
   },
   updateConnector(connectorId, payload, context = {}) {
-    return request(`/connectors/${connectorId}`, {
+    return request(requireTeamScopedPath(`/connectors/${connectorId}`, context), {
       ...context,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -124,40 +139,40 @@ export const api = {
     });
   },
   healthCheckConnectors(context = {}) {
-    return request("/connectors/health-check", {
+    return request(requireTeamScopedPath("/connectors/health-check", context), {
       ...context,
       method: "POST",
     });
   },
   testConnector(connectorId, context = {}) {
-    return request(`/connectors/${connectorId}/test`, {
+    return request(requireTeamScopedPath(`/connectors/${connectorId}/test`, context), {
       ...context,
       method: "POST",
     });
   },
   activateConnector(connectorId, context = {}) {
-    return request(`/connectors/${connectorId}/activate`, {
+    return request(requireTeamScopedPath(`/connectors/${connectorId}/activate`, context), {
       ...context,
       method: "POST",
     });
   },
   deactivateConnector(connectorId, context = {}) {
-    return request(`/connectors/${connectorId}/deactivate`, {
+    return request(requireTeamScopedPath(`/connectors/${connectorId}/deactivate`, context), {
       ...context,
       method: "POST",
     });
   },
   deleteConnector(connectorId, context = {}) {
-    return request(`/connectors/${connectorId}`, {
+    return request(requireTeamScopedPath(`/connectors/${connectorId}`, context), {
       ...context,
       method: "DELETE",
     });
   },
   teamSettings(context = {}) {
-    return request("/team/settings", context);
+    return request(requireTeamScopedPath("/settings", context), context);
   },
   updateTeamSettings(payload, context = {}) {
-    return request("/team/settings", {
+    return request(requireTeamScopedPath("/settings", context), {
       ...context,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -165,7 +180,7 @@ export const api = {
     });
   },
   transferTeamOwnership(payload, context = {}) {
-    return request("/team/owner/transfer", {
+    return request(requireTeamScopedPath("/owner/transfer", context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -173,10 +188,10 @@ export const api = {
     });
   },
   teamMembers(context = {}) {
-    return request("/team/members", context);
+    return request(requireTeamScopedPath("/members", context), context);
   },
   prepareTeamInvite(payload = {}, context = {}) {
-    return request("/team/members/invite", {
+    return request(requireTeamScopedPath("/members/invite", context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -184,7 +199,7 @@ export const api = {
     });
   },
   updateTeamMemberRole(memberId, payload, context = {}) {
-    return request(`/team/members/${memberId}/role`, {
+    return request(requireTeamScopedPath(`/members/${memberId}/role`, context), {
       ...context,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -192,7 +207,7 @@ export const api = {
     });
   },
   updateTeamMemberStatus(memberId, payload, context = {}) {
-    return request(`/team/members/${memberId}/status`, {
+    return request(requireTeamScopedPath(`/members/${memberId}/status`, context), {
       ...context,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -200,10 +215,18 @@ export const api = {
     });
   },
   teamQuotas(context = {}) {
-    return request("/team/quotas", context);
+    return request(requireTeamScopedPath("/quotas", context), context);
   },
   adjustTeamQuota(memberId, payload, context = {}) {
-    return request(`/team/quotas/${memberId}/adjust`, {
+    return request(requireTeamScopedPath(`/quotas/${memberId}/adjust`, context), {
+      ...context,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  adjustTeamQuotaScope(payload, context = {}) {
+    return request(requireTeamScopedPath("/quotas/adjust", context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -211,10 +234,10 @@ export const api = {
     });
   },
   teamRouting(context = {}) {
-    return request("/team/routing", context);
+    return request(requireTeamScopedPath("/routing", context), context);
   },
   saveTeamRouting(payload, context = {}) {
-    return request("/team/routing", {
+    return request(requireTeamScopedPath("/routing", context), {
       ...context,
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -234,10 +257,10 @@ export const api = {
       if (value) params.set(key, value);
     });
     const query = params.toString() ? `?${params.toString()}` : "";
-    return request(`/team/assets${query}`, resolvedContext);
+    return request(requireTeamScopedPath(`/assets${query}`, resolvedContext), resolvedContext);
   },
   createTeamAsset(payload, context = {}) {
-    return request("/team/assets", {
+    return request(requireTeamScopedPath("/assets", context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -245,7 +268,7 @@ export const api = {
     });
   },
   reviewTeamAsset(assetId, payload, context = {}) {
-    return request(`/team/assets/${assetId}/review`, {
+    return request(requireTeamScopedPath(`/assets/${assetId}/review`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -253,7 +276,7 @@ export const api = {
     });
   },
   publishTeamAsset(assetId, payload = {}, context = {}) {
-    return request(`/team/assets/${assetId}/publish`, {
+    return request(requireTeamScopedPath(`/assets/${assetId}/publish`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -261,7 +284,7 @@ export const api = {
     });
   },
   forkTeamAsset(assetId, payload = {}, context = {}) {
-    return request(`/team/assets/${assetId}/fork`, {
+    return request(requireTeamScopedPath(`/assets/${assetId}/fork`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -269,7 +292,7 @@ export const api = {
     });
   },
   teamAuditLogs(context = {}) {
-    return request("/team/audit-logs", context);
+    return request(requireTeamScopedPath("/audit-logs", context), context);
   },
   teamTokenLedgers(filters = {}, context = {}) {
     let resolvedFilters = filters;
@@ -283,13 +306,13 @@ export const api = {
       if (value !== undefined && value !== null && value !== "") params.set(key, value);
     });
     const query = params.toString() ? `?${params.toString()}` : "";
-    return request(`/team/token-ledgers${query}`, resolvedContext);
+    return request(requireTeamScopedPath(`/token-ledgers${query}`, resolvedContext), resolvedContext);
   },
   listTasks(context = {}) {
-    return request("/tasks", context);
+    return request(requireTeamScopedPath("/tasks", context), context);
   },
   createTask(payload, context = {}) {
-    return request("/tasks", {
+    return request(requireTeamScopedPath("/tasks", context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -297,36 +320,50 @@ export const api = {
     });
   },
   updateTaskWorkflowConfig(taskId, payload, context = {}) {
-    return request(`/tasks/${taskId}/workflow-config`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/workflow-config`, context), {
       ...context,
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
   },
-  uploadDataset(taskId, file, context = {}) {
+  updateTaskSemantics(taskId, payload, context = {}) {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/semantic-analysis`, context), {
+      ...context,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  uploadDataset(taskId, file, context = {}, options = {}) {
     const formData = new FormData();
     formData.append("file", file);
-    return request(`/tasks/${taskId}/dataset`, {
+    const params = new URLSearchParams();
+    params.set("auto_run", options.autoRun === false ? "false" : "true");
+    params.set("time_limit", String(options.timeLimit ?? 20));
+    return request(requireTeamScopedPath(`/tasks/${taskId}/dataset?${params.toString()}`, context), {
       ...context,
       method: "POST",
       body: formData,
     });
   },
   analyzeTask(taskId, context = {}) {
-    return request(`/tasks/${taskId}/analyze`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/analyze`, context), {
       ...context,
       method: "POST",
     });
   },
   taskAIConversations(taskId, context = {}) {
-    return request(`/tasks/${taskId}/ai-conversations`, context);
+    return request(requireTeamScopedPath(`/tasks/${taskId}/ai-conversations`, context), context);
   },
   taskHumanCollaboration(taskId, context = {}) {
-    return request(`/tasks/${taskId}/human-collaboration`, context);
+    return request(requireTeamScopedPath(`/tasks/${taskId}/human-collaboration`, context), context);
+  },
+  taskAgentCollaboration(taskId, context = {}) {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/agent-collaboration`, context), context);
   },
   createTaskHumanRequest(taskId, payload, context = {}) {
-    return request(`/tasks/${taskId}/human-requests`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/human-requests`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -334,13 +371,19 @@ export const api = {
     });
   },
   getTaskTokenUsage(taskId, context = {}) {
-    return request(`/tasks/${taskId}/token-usage`, context);
+    return request(requireTeamScopedPath(`/tasks/${taskId}/token-usage`, context), context);
+  },
+  taskRunProgress(taskId, context = {}) {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/run-progress`, context), {
+      ...context,
+      noCache: true,
+    });
   },
   taskModelReport(taskId, context = {}) {
-    return request(`/tasks/${taskId}/report`, context);
+    return request(requireTeamScopedPath(`/tasks/${taskId}/report`, context), context);
   },
   taskPredictionDemo(taskId, payload, context = {}) {
-    return request(`/tasks/${taskId}/prediction-demo`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/prediction-demo`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -348,7 +391,7 @@ export const api = {
     });
   },
   decideTaskHumanRequest(taskId, requestId, payload, context = {}) {
-    return request(`/tasks/${taskId}/human-requests/${requestId}/decision`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/human-requests/${requestId}/decision`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -356,13 +399,13 @@ export const api = {
     });
   },
   resumeTask(taskId, context = {}) {
-    return request(`/tasks/${taskId}/resume`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/resume`, context), {
       ...context,
       method: "POST",
     });
   },
   taskInteractiveChat(taskId, payload, context = {}) {
-    return request(`/tasks/${taskId}/chat`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/chat`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -370,18 +413,18 @@ export const api = {
     });
   },
   taskCodeWorkspace(taskId, context = {}) {
-    return request(`/tasks/${taskId}/code-workspace`, context);
+    return request(requireTeamScopedPath(`/tasks/${taskId}/code-workspace`, context), context);
   },
   taskCodeArtifact(taskId, artifactPath, context = {}) {
     const query = new URLSearchParams({ path: artifactPath }).toString();
-    return request(`/tasks/${taskId}/code-workspace/file?${query}`, context);
+    return request(requireTeamScopedPath(`/tasks/${taskId}/code-workspace/file?${query}`, context), context);
   },
   downloadTaskCodeArtifact(taskId, artifactPath, context = {}) {
     const query = new URLSearchParams({ path: artifactPath }).toString();
-    return requestBlob(`/tasks/${taskId}/code-workspace/download?${query}`, context);
+    return requestBlob(requireTeamScopedPath(`/tasks/${taskId}/code-workspace/download?${query}`, context), context);
   },
   updateTaskCodeArtifact(taskId, payload, context = {}) {
-    return request(`/tasks/${taskId}/code-workspace/file`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/code-workspace/file`, context), {
       ...context,
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -389,7 +432,7 @@ export const api = {
     });
   },
   rerunTaskCodeArtifact(taskId, payload, context = {}) {
-    return request(`/tasks/${taskId}/code-workspace/rerun`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/code-workspace/rerun`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -397,7 +440,7 @@ export const api = {
     });
   },
   runTask(taskId, timeLimit = 20, context = {}) {
-    return request(`/tasks/${taskId}/run`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}/run`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -405,7 +448,7 @@ export const api = {
     });
   },
   deleteTask(taskId, context = {}) {
-    return request(`/tasks/${taskId}`, {
+    return request(requireTeamScopedPath(`/tasks/${taskId}`, context), {
       ...context,
       method: "DELETE",
     });

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -218,41 +219,59 @@ class GovernanceStore:
         quota_payload = self._request_json(
             path=(
                 "quota_accounts"
-                f"?select=team_id,user_id,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
+                f"?select=team_id,user_id,connector_id,scope_type,scope_key,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
             ),
             access_token=access_token,
         )
         if not isinstance(quota_payload, list):
             raise ConnectionError("Unexpected quota response from Supabase.")
 
-        quota_map: dict[str, dict[str, Any]] = {}
+        connector_payload = self._request_json(
+            path=(
+                "ai_connectors"
+                f"?select=id,display_name&team_id=eq.{quote(team_id, safe='')}"
+            ),
+            access_token=access_token,
+        )
+        connector_map = {
+            str(item.get("id")): str(item.get("display_name"))
+            for item in connector_payload
+            if isinstance(item, dict) and item.get("id")
+        } if isinstance(connector_payload, list) else {}
+
+        quota_map: dict[tuple[str, str], dict[str, Any]] = {}
         for item in quota_payload:
             if isinstance(item, dict):
-                quota_map[str(item.get("user_id"))] = item
+                scope_type = str(item.get("scope_type") or "member")
+                scope_key = str(item.get("scope_key") or item.get("user_id") or item.get("connector_id") or "")
+                quota_map[(scope_type, scope_key)] = item
 
         items: list[TeamQuotaRecord] = []
+        handled_keys: set[tuple[str, str]] = set()
         for member in members:
-            quota_row = quota_map.get(member.user_id, {})
-            token_quota = _coerce_non_negative_int(quota_row.get("token_quota"))
-            token_used = _coerce_non_negative_int(quota_row.get("token_used"))
-            token_remaining = max(token_quota - token_used, 0)
-            status = "exhausted" if token_quota and token_remaining == 0 else "active"
+            quota_row = quota_map.get(("member", member.user_id), {})
+            items.append(self._quota_record_from_payload(team_id, quota_row, member=member))
+            handled_keys.add(("member", member.user_id))
+
+        for connector_id, connector_name in connector_map.items():
+            quota_row = quota_map.get(("connector", connector_id), {})
             items.append(
-                TeamQuotaRecord(
-                    team_id=team_id,
-                    user_id=member.user_id,
-                    role=member.role,
-                    member_status=member.member_status,
-                    display_name=member.profile.display_name if member.profile else None,
-                    email=member.profile.email if member.profile else None,
-                    token_quota=token_quota,
-                    token_used=token_used,
-                    token_remaining=token_remaining,
-                    status=str(quota_row.get("status") or status),
-                    warning_threshold=_coerce_non_negative_int(quota_row.get("warning_threshold")),
-                    updated_at=quota_row.get("updated_at"),
+                self._quota_record_from_payload(
+                    team_id,
+                    quota_row,
+                    connector=SimpleNamespace(id=connector_id, display_name=connector_name),
                 )
             )
+            handled_keys.add(("connector", connector_id))
+
+        quota_row = quota_map.get(("team", team_id), {})
+        items.append(self._quota_record_from_payload(team_id, quota_row))
+        handled_keys.add(("team", team_id))
+
+        for key, quota_row in quota_map.items():
+            if key in handled_keys:
+                continue
+            items.append(self._quota_record_from_payload(team_id, quota_row))
         return items
 
     def adjust_quota(
@@ -268,7 +287,7 @@ class GovernanceStore:
         existing = self._request_json(
             path=(
                 "quota_accounts"
-                f"?select=team_id,user_id,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
+                f"?select=team_id,user_id,connector_id,scope_type,scope_key,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
                 f"&user_id=eq.{quote(user_id, safe='')}&limit=1"
             ),
             access_token=access_token,
@@ -277,6 +296,8 @@ class GovernanceStore:
         payload = {
             "team_id": team_id,
             "user_id": user_id,
+            "scope_type": "member",
+            "scope_key": user_id,
             "token_quota": token_quota if token_quota is not None else _coerce_non_negative_int(existing_row.get("token_quota")),
             "status": status or str(existing_row.get("status") or "active"),
             "warning_threshold": warning_threshold if warning_threshold is not None else _coerce_non_negative_int(existing_row.get("warning_threshold")),
@@ -303,28 +324,65 @@ class GovernanceStore:
             (item for item in self.list_members(team_id, access_token=access_token) if item.user_id == user_id),
             None,
         )
-        role = member.role if member is not None else "business_user"
-        member_status = member.member_status if member is not None else "active"
-        display_name = member.profile.display_name if member and member.profile else None
-        email = member.profile.email if member and member.profile else None
-        used = _coerce_non_negative_int(row.get("token_used"))
-        resolved_quota = _coerce_non_negative_int(row.get("token_quota"))
-        remaining = max(resolved_quota - used, 0)
-        resolved_status = str(row.get("status") or ("exhausted" if resolved_quota and remaining == 0 else "active"))
-        return TeamQuotaRecord(
-            team_id=team_id,
-            user_id=user_id,
-            role=role,
-            member_status=member_status,
-            display_name=display_name,
-            email=email,
-            token_quota=resolved_quota,
-            token_used=used,
-            token_remaining=remaining,
-            status=resolved_status,
-            warning_threshold=_coerce_non_negative_int(row.get("warning_threshold")),
-            updated_at=row.get("updated_at"),
+        return self._quota_record_from_payload(team_id, row, member=member)
+
+    def adjust_quota_scope(
+        self,
+        team_id: str,
+        *,
+        scope_type: str,
+        scope_key: str,
+        token_quota: int | None,
+        status: str | None = None,
+        warning_threshold: int | None = None,
+        access_token: str,
+    ) -> TeamQuotaRecord:
+        existing = self._request_json(
+            path=(
+                "quota_accounts"
+                f"?select=team_id,user_id,connector_id,scope_type,scope_key,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
+                f"&scope_type=eq.{quote(scope_type, safe='')}&scope_key=eq.{quote(scope_key, safe='')}&limit=1"
+            ),
+            access_token=access_token,
         )
+        existing_row = existing[0] if isinstance(existing, list) and existing else {}
+        payload: dict[str, Any] = {
+            "team_id": team_id,
+            "scope_type": scope_type,
+            "scope_key": scope_key,
+            "token_quota": token_quota if token_quota is not None else _coerce_non_negative_int(existing_row.get("token_quota")),
+            "status": status or str(existing_row.get("status") or "active"),
+            "warning_threshold": warning_threshold if warning_threshold is not None else _coerce_non_negative_int(existing_row.get("warning_threshold")),
+        }
+        if scope_type == "member":
+            payload["user_id"] = scope_key
+            payload["connector_id"] = None
+        elif scope_type == "connector":
+            payload["connector_id"] = scope_key
+            payload["user_id"] = None
+        else:
+            payload["user_id"] = None
+            payload["connector_id"] = None
+
+        if isinstance(existing, list) and existing:
+            updated = self._request_json(
+                path=(
+                    "quota_accounts"
+                    f"?team_id=eq.{quote(team_id, safe='')}&scope_type=eq.{quote(scope_type, safe='')}&scope_key=eq.{quote(scope_key, safe='')}"
+                ),
+                access_token=access_token,
+                method="PATCH",
+                body=payload,
+            )
+        else:
+            updated = self._request_json(
+                path="quota_accounts",
+                access_token=access_token,
+                method="POST",
+                body=payload,
+            )
+        row = self._unwrap_single_record(updated, "quota scope adjust")
+        return self._quota_record_from_payload(team_id, row)
 
     def list_routing_policies(self, team_id: str, *, access_token: str) -> list[AIRoutingPolicyRecord]:
         payload = self._request_json(
@@ -405,8 +463,8 @@ class GovernanceStore:
                     "stage": stage,
                     "connector_id": item.connector_id,
                     "model_name": item.model_name,
-                    "fallback_connector_id": None,
-                    "fallback_model_name": None,
+                    "fallback_connector_id": item.fallback_connector_id,
+                    "fallback_model_name": item.fallback_model_name,
                     "config": item.config,
                     "created_by": created_by,
                 },
@@ -790,6 +848,68 @@ class GovernanceStore:
             description=str(payload.get("description")) if payload.get("description") else None,
             status=str(payload.get("status") or "active"),
             created_at=payload.get("created_at"),
+            updated_at=payload.get("updated_at"),
+        )
+
+    def _quota_record_from_payload(
+        self,
+        team_id: str,
+        payload: dict[str, Any],
+        *,
+        member: TeamMemberRecord | None = None,
+        connector: Any | None = None,
+    ) -> TeamQuotaRecord:
+        scope_type = str(payload.get("scope_type") or ("connector" if connector is not None else "member" if member is not None else "team"))
+        scope_key = str(
+            payload.get("scope_key")
+            or (member.user_id if member is not None else None)
+            or (connector.id if connector is not None else None)
+            or payload.get("user_id")
+            or payload.get("connector_id")
+            or team_id
+        )
+        used = _coerce_non_negative_int(payload.get("token_used"))
+        resolved_quota = _coerce_non_negative_int(payload.get("token_quota"))
+        remaining = max(resolved_quota - used, 0)
+        resolved_status = str(payload.get("status") or ("exhausted" if resolved_quota and remaining == 0 else "active"))
+        display_name = None
+        email = None
+        role = None
+        member_status = None
+        connector_display_name = None
+        user_id = None
+        connector_id = None
+
+        if member is not None:
+            user_id = member.user_id
+            display_name = member.profile.display_name if member.profile else None
+            email = member.profile.email if member.profile else None
+            role = member.role
+            member_status = member.member_status
+        elif connector is not None:
+            connector_id = connector.id
+            connector_display_name = connector.display_name
+        else:
+            user_id = str(payload.get("user_id")) if payload.get("user_id") else None
+            connector_id = str(payload.get("connector_id")) if payload.get("connector_id") else None
+            connector_display_name = str(payload.get("connector_display_name")) if payload.get("connector_display_name") else None
+
+        return TeamQuotaRecord(
+            team_id=team_id,
+            scope_type=scope_type,
+            scope_key=scope_key,
+            user_id=user_id,
+            connector_id=connector_id,
+            role=role,
+            member_status=member_status,
+            display_name=display_name,
+            email=email,
+            connector_display_name=connector_display_name,
+            token_quota=resolved_quota,
+            token_used=used,
+            token_remaining=remaining,
+            status=resolved_status,
+            warning_threshold=_coerce_non_negative_int(payload.get("warning_threshold")),
             updated_at=payload.get("updated_at"),
         )
 

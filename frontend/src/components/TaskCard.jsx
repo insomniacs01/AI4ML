@@ -97,12 +97,25 @@ export default function TaskCard({
   running,
   analyzing,
   deleting,
+  runtimeProgress,
   onSelect,
   onAnalyze,
   onRun,
   onDelete,
+  onOpenWorkflow,
   onOpenHumanCollaboration,
 }) {
+  const runtimeStatus = runtimeProgress?.status === "stale"
+    ? "stale"
+    : runtimeProgress?.status === "running"
+      ? "running"
+      : running || task.status === "running"
+        ? "running"
+        : task.status;
+  const isRunning = running || runtimeStatus === "running";
+  const statusTone = runtimeStatus === "stale" ? "danger" : getStatusTone(runtimeStatus);
+  const statusLabel = runtimeStatus === "stale" ? "疑似卡住" : formatStatus(runtimeStatus);
+  const statusHint = runtimeProgress?.current_activity || task.notes || "";
   return (
     <article className={selected ? "task-card selected-card" : "task-card"}>
       <div className="task-card-top">
@@ -110,8 +123,8 @@ export default function TaskCard({
           <p className="eyebrow">任务 {task.id}</p>
           <h4>{task.name}</h4>
         </div>
-        <span className={`runtime-pill ${getStatusTone(task.status)}`}>
-          {formatStatus(task.status)}
+        <span className={`runtime-pill ${statusTone}`}>
+          {statusLabel}
         </span>
       </div>
 
@@ -121,6 +134,7 @@ export default function TaskCard({
         <span>{getAnalysisStatus(task)}</span>
         <span>{task.dataset_filename ?? "未上传数据"}</span>
       </div>
+      {statusHint ? <p className="task-card-runtime-hint">{statusHint}</p> : null}
 
       <div className="task-card-facts">
         <div><span>目标列</span><strong>{task.label_column ?? "未解析"}</strong></div>
@@ -139,16 +153,19 @@ export default function TaskCard({
         <button type="button" className="chip-button" onClick={() => onSelect(task.id)}>
           {selected ? "已打开" : "打开"}
         </button>
-        <button type="button" className="ghost-button" onClick={() => onAnalyze(task.id)} disabled={!task.dataset_filename || analyzing || running}>
+        <button type="button" className="ghost-button" onClick={() => onAnalyze(task.id)} disabled={!task.dataset_filename || analyzing || isRunning}>
           {analyzing ? "解析中..." : "解析"}
         </button>
-        <button type="button" className="primary-button" onClick={() => onRun(task.id)} disabled={!task.dataset_filename || running || ["waiting_human", "paused_for_review"].includes(task.status)}>
-          {running ? "运行中..." : "运行"}
+        <button type="button" className="primary-button" onClick={() => onRun(task.id)} disabled={!task.dataset_filename || isRunning || ["waiting_human", "paused_for_review"].includes(task.status)}>
+          {isRunning ? "运行中..." : "运行"}
+        </button>
+        <button type="button" className="chip-button" onClick={() => onOpenWorkflow?.(task.id)}>
+          进度
         </button>
         <button type="button" className="chip-button" onClick={() => onOpenHumanCollaboration?.(task.id)}>
           协同
         </button>
-        <button type="button" className="danger-button" onClick={() => onDelete(task.id)} disabled={deleting || task.status === "running"}>
+        <button type="button" className="danger-button" onClick={() => onDelete(task.id)} disabled={deleting || isRunning}>
           {deleting ? "删除中..." : "删除"}
         </button>
       </div>

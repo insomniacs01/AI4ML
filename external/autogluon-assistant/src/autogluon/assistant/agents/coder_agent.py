@@ -193,10 +193,12 @@ class CoderAgent(BaseAgent):
                 generated_code = self.coder_prompt.parse(response)
                 completion_issue = _python_code_completion_issue(generated_code)
             if completion_issue is not None:
-                logger.warning(
-                    "LLM-generated Python code remained invalid after retries. "
+                message = (
+                    "LLM-generated Python code remained invalid after repair retries. "
                     f"Final detected issue: {completion_issue}"
                 )
+                logger.error(message)
+                raise RuntimeError(message)
 
         self.manager.log_agent_end("CoderAgent: code-generation prompt handled and code parsed from response.")
 

@@ -23,6 +23,8 @@ const STATUS_LABELS = {
   rejected: "已驳回",
 };
 
+const ASSET_RENDER_LIMIT = 200;
+
 function formatDateTime(value) {
   if (!value) return "暂无";
   const date = new Date(value);
@@ -75,6 +77,7 @@ export default function AssetCenterPanel({
     }),
     [activeStatus, activeType, assets],
   );
+  const renderedAssets = visibleAssets.slice(0, ASSET_RENDER_LIMIT);
   const marketplaceCount = useMemo(
     () => (Array.isArray(assets) ? assets : []).filter((item) => item.review_status === "published").length,
     [assets],
@@ -255,6 +258,7 @@ export default function AssetCenterPanel({
 
         {!visibleAssets.length ? <div className="empty-state">当前筛选条件下还没有资产记录。</div> : null}
 
+        {visibleAssets.length > ASSET_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染前 {ASSET_RENDER_LIMIT} 条资产记录，避免大表格拖慢页面。</div> : null}
         {visibleAssets.length ? (
           <div className="table-wrap">
             <table>
@@ -262,7 +266,7 @@ export default function AssetCenterPanel({
                 <tr><th>标题</th><th>类型</th><th>分类 / 标签</th><th>来源</th><th>状态</th><th>更新时间</th><th>操作</th></tr>
               </thead>
               <tbody>
-                {visibleAssets.map((asset) => (
+                {renderedAssets.map((asset) => (
                   <tr key={asset.id}>
                     <td>
                       <div className="table-cell-stack">

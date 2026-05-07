@@ -4,12 +4,15 @@ function formatDateTime(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
 
+const AUDIT_LOG_RENDER_LIMIT = 200;
+
 export default function AuditLogPanel({
   logs,
   loading,
   error,
   onRefresh,
 }) {
+  const visibleLogs = Array.isArray(logs) ? logs.slice(0, AUDIT_LOG_RENDER_LIMIT) : [];
   return (
     <div className="detail-stack audit-page-layout">
       <section className="section-card">
@@ -26,14 +29,18 @@ export default function AuditLogPanel({
         {error ? <div className="error-banner">{error}</div> : null}
         {!logs?.length && !loading ? <div className="empty-state">当前团队还没有审计日志。</div> : null}
 
-        {Array.isArray(logs) && logs.length ? (
+        {Array.isArray(logs) && logs.length > AUDIT_LOG_RENDER_LIMIT ? (
+          <div className="notice-banner compact">当前仅渲染最近 {AUDIT_LOG_RENDER_LIMIT} 条审计日志，避免大表格拖慢页面。</div>
+        ) : null}
+
+        {visibleLogs.length ? (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr><th>时间</th><th>操作者</th><th>动作</th><th>资源</th><th>详情</th></tr>
               </thead>
               <tbody>
-                {logs.map((item) => (
+                {visibleLogs.map((item) => (
                   <tr key={item.id}>
                     <td>{formatDateTime(item.created_at)}</td>
                     <td>{item.actor_display_name || item.actor_email || item.actor_id || "-"}</td>

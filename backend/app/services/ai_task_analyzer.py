@@ -31,6 +31,7 @@ class TaskAnalysisResult:
     prompt: str
     raw_response: str
     token_usage: TokenUsageReport | None
+    token_usage_calculation_method: str | None = None
 
 
 def analyze_task_with_ai(task: TaskRecord, dataset_path: Path, settings: Settings) -> TaskAnalysisResult:
@@ -99,6 +100,7 @@ def analyze_task_with_ai(task: TaskRecord, dataset_path: Path, settings: Setting
         prompt=prompt,
         raw_response=provider_result.text,
         token_usage=provider_result.token_usage,
+        token_usage_calculation_method=provider_result.token_usage_calculation_method,
     )
 
 
@@ -127,6 +129,7 @@ def apply_analysis_to_task(task: TaskRecord, analysis: TaskAnalysisResult) -> Ta
         "analysis_prompt": analysis.prompt,
         "raw_response": analysis.raw_response,
         "token_usage": analysis.token_usage.model_dump() if analysis.token_usage is not None else None,
+        "token_usage_calculation_method": analysis.token_usage_calculation_method,
     })
     task.structured_requirements = structured_requirements
     task.notes = (

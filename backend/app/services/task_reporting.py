@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ast
 import csv
+import importlib.util
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +26,7 @@ FEATURE_IMPORTANCE_FILENAMES = {
     "feature_importances.csv",
     "feature_importances.json",
 }
+NODE_SCAN_LIMIT = 16
 
 
 def build_task_model_report(task: TaskRecord) -> TaskModelReportResponse:
@@ -76,11 +80,15 @@ def build_prediction_demo_response(task: TaskRecord, payload: TaskPredictionDemo
             detail="最新运行目录中没有找到可复用的 AutoGluon predictor.pkl 或 generated_code.py，因此暂不支持在线预测。",
         )
 
+    generated_response = _build_generated_code_prediction_response(task, payload, generated_code)
+    if generated_response is not None:
+        return generated_response
+
     return TaskPredictionDemoResponse(
         task_id=task.id,
         supported=False,
         detail=(
-            "已找到真实训练代码，但当前生成代码还没有统一的 predict(payload) 调用契约。"
+            "已找到真实训练代码，但生成代码没有暴露可调用的 predict(payload) 或 predict(features) 函数。"
             "为避免伪造预测结果，当前只返回可复用代码入口。"
         ),
         command_hint=f"Review and adapt {generated_code} with features: {json.dumps(payload.features, ensure_ascii=False)}",
@@ -92,11 +100,7 @@ def _build_autogluon_prediction_response(
     payload: TaskPredictionDemoRequest,
     predictor_dir: Path,
 ) -> TaskPredictionDemoResponse:
-    features = {
-        key: value
-        for key, value in payload.features.items()
-        if key and key != task.label_column
-    }
+    features = _clean_prediction_features(task, payload)
     if not features:
         return TaskPredictionDemoResponse(
             task_id=task.id,
@@ -120,7 +124,9 @@ def _build_autogluon_prediction_response(
         predictor = TabularPredictor.load(str(predictor_dir))
         frame = pd.DataFrame([features])
         prediction_series = predictor.predict(frame)
-        prediction_value = _json_safe_value(prediction_series.iloc[0] if hasattr(prediction_series, "iloc") else prediction_series[0])
+        prediction_value = _json_safe_value(
+            prediction_series.iloc[0] if hasattr(prediction_series, "iloc") else prediction_series[0]
+        )
         probabilities = None
         try:
             probabilities_frame = predictor.predict_proba(frame)
@@ -131,7 +137,7 @@ def _build_autogluon_prediction_response(
                 }
         except Exception:
             probabilities = None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return TaskPredictionDemoResponse(
             task_id=task.id,
             supported=False,
@@ -153,6 +159,140 @@ def _build_autogluon_prediction_response(
         prediction=result,
         command_hint=f"AutoGluon predictor path: {predictor_dir}",
     )
+
+
+def _build_generated_code_prediction_response(
+    task: TaskRecord,
+    payload: TaskPredictionDemoRequest,
+    generated_code: Path,
+) -> TaskPredictionDemoResponse | None:
+    if not _generated_code_has_predict_contract(generated_code):
+        return None
+
+    features = _clean_prediction_features(task, payload)
+    if not features:
+        return TaskPredictionDemoResponse(
+            task_id=task.id,
+            supported=False,
+            detail="预测输入为空，或只包含目标列。请传入至少一个特征字段。",
+            command_hint=f"Generated code path: {generated_code}",
+        )
+
+    module_name = f"_ai4ml_generated_predict_{task.id}_{abs(hash(str(generated_code)))}"
+    spec = importlib.util.spec_from_file_location(module_name, generated_code)
+    if spec is None or spec.loader is None:
+        return None
+
+    previous_path = list(sys.path)
+    sys.path.insert(0, str(generated_code.parent))
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001
+        return TaskPredictionDemoResponse(
+            task_id=task.id,
+            supported=False,
+            detail=f"已找到 generated_code.py，但导入生成代码失败，不能安全调用在线预测：{exc}",
+            command_hint=f"Generated code path: {generated_code}",
+        )
+    finally:
+        sys.path[:] = previous_path
+
+    predict = getattr(module, "predict", None)
+    if not callable(predict):
+        return None
+
+    try:
+        prediction = predict(features)
+    except TypeError:
+        try:
+            prediction = predict(payload.features)
+        except Exception as exc:  # noqa: BLE001
+            return _generated_code_prediction_error(task, generated_code, exc)
+    except Exception as exc:  # noqa: BLE001
+        return _generated_code_prediction_error(task, generated_code, exc)
+
+    probabilities = None
+    predict_proba = getattr(module, "predict_proba", None)
+    if callable(predict_proba):
+        try:
+            probabilities = predict_proba(features)
+        except Exception:
+            probabilities = None
+
+    result: dict[str, Any] = {
+        "label": _json_safe_value(prediction),
+        "features": features,
+        "code_path": str(generated_code),
+    }
+    if probabilities is not None:
+        result["probabilities"] = _json_safe_value(probabilities)
+    return TaskPredictionDemoResponse(
+        task_id=task.id,
+        supported=True,
+        detail="已调用 generated_code.py 中的真实 predict 函数完成单行在线预测。",
+        prediction=result,
+        command_hint=f"Generated code path: {generated_code}",
+    )
+
+
+def _generated_code_has_predict_contract(generated_code: Path) -> bool:
+    try:
+        tree = ast.parse(generated_code.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        return False
+    has_predict = False
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            has_predict = has_predict or node.name == "predict"
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue
+        if _is_guarded_main_block(node):
+            continue
+        return False
+    return has_predict
+
+
+def _is_guarded_main_block(node: ast.AST) -> bool:
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1 or len(test.comparators) != 1:
+        return False
+    if not isinstance(test.ops[0], ast.Eq):
+        return False
+    left = test.left
+    right = test.comparators[0]
+    return (
+        isinstance(left, ast.Name)
+        and left.id == "__name__"
+        and isinstance(right, ast.Constant)
+        and right.value == "__main__"
+    )
+
+
+def _generated_code_prediction_error(
+    task: TaskRecord,
+    generated_code: Path,
+    exc: Exception,
+) -> TaskPredictionDemoResponse:
+    return TaskPredictionDemoResponse(
+        task_id=task.id,
+        supported=False,
+        detail=f"generated_code.py 暴露了 predict 函数，但本次调用失败：{exc}",
+        command_hint=f"Generated code path: {generated_code}",
+    )
+
+
+def _clean_prediction_features(task: TaskRecord, payload: TaskPredictionDemoRequest) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.features.items()
+        if key and key != task.label_column
+    }
 
 
 def _resolve_dataset_profile(task: TaskRecord) -> DatasetProfile | None:
@@ -181,8 +321,8 @@ def _collect_feature_importance(task: TaskRecord) -> tuple[list[FeatureImportanc
 
     entries: list[FeatureImportanceEntry] = []
     paths: list[str] = []
-    for path in sorted(output_dir.rglob("*")):
-        if not path.is_file() or path.name.lower() not in FEATURE_IMPORTANCE_FILENAMES:
+    for path in _candidate_feature_importance_paths(output_dir):
+        if not path.is_file():
             continue
         parsed = _parse_feature_importance_file(path)
         if parsed:
@@ -283,7 +423,7 @@ def _build_limitation_notes(
     if not feature_importance:
         notes.append("当前运行产物中没有可解析的特征重要性文件，因此报告不展示特征排名。")
     if task.last_run and len(task.last_run.leaderboard or []) <= 1:
-        notes.append("候选模型数量较少，模型选择结论的稳健性有限。")
+        notes.append("候选模型数量较少，模型选择结论的稳定性有限。")
     if not notes:
         notes.append("当前报告仅基于最近一次成功运行产物，不代表生产环境长期表现。")
     return notes
@@ -329,7 +469,7 @@ def _build_report_markdown(
         ])
     lines.extend([
         "",
-        "## 风险和局限性",
+        "## 风险和局限",
         *[f"- {item}" for item in limitation_notes],
     ])
     return "\n".join(lines)
@@ -347,15 +487,49 @@ def _resolve_run_output_dir(task: TaskRecord) -> Path | None:
 
 
 def _find_generated_code(output_dir: Path) -> Path | None:
-    candidates = sorted(output_dir.rglob("generated_code.py"))
-    return candidates[0] if candidates else None
+    candidates = [
+        output_dir / "generated_code.py",
+        output_dir / "best_run" / "generated_code.py",
+        *[node_dir / "generated_code.py" for node_dir in _recent_node_dirs(output_dir)],
+        *[node_dir / "states" / "python_code.py" for node_dir in _recent_node_dirs(output_dir)],
+    ]
+    return next((path for path in candidates if path.is_file()), None)
 
 
 def _find_autogluon_predictor_dir(output_dir: Path) -> Path | None:
-    candidates = [path.parent for path in output_dir.rglob("predictor.pkl") if path.is_file()]
+    candidates = [
+        path.parent
+        for path in [
+            output_dir / "predictor.pkl",
+            output_dir / "best_run" / "predictor.pkl",
+            output_dir / "best_run" / "output" / "predictor.pkl",
+            *[node_dir / "predictor.pkl" for node_dir in _recent_node_dirs(output_dir)],
+            *[node_dir / "output" / "predictor.pkl" for node_dir in _recent_node_dirs(output_dir)],
+        ]
+        if path.is_file()
+    ]
     if not candidates:
         return None
     return sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True)[0]
+
+
+def _candidate_feature_importance_paths(output_dir: Path) -> list[Path]:
+    dirs = [output_dir, output_dir / "best_run", output_dir / "best_run" / "output"]
+    for node_dir in _recent_node_dirs(output_dir):
+        dirs.extend([node_dir, node_dir / "output"])
+    return [
+        directory / filename
+        for directory in dirs
+        for filename in FEATURE_IMPORTANCE_FILENAMES
+    ]
+
+
+def _recent_node_dirs(output_dir: Path, *, limit: int = NODE_SCAN_LIMIT) -> list[Path]:
+    try:
+        node_dirs = [path for path in output_dir.iterdir() if path.is_dir() and path.name.startswith("node_")]
+    except OSError:
+        return []
+    return sorted(node_dirs, key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)[:limit]
 
 
 def _json_safe_value(value: Any) -> Any:
@@ -364,6 +538,10 @@ def _json_safe_value(value: Any) -> Any:
             return value.item()
         except Exception:
             pass
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)

@@ -21,6 +21,7 @@ class TaskChatResult:
     task: TaskRecord
     assistant_message: TaskInteractiveChatMessage
     token_usage: TokenUsageReport | None
+    token_usage_calculation_method: str | None = None
 
 
 def send_task_chat_message(task: TaskRecord, *, prompt: str, settings: Settings) -> TaskChatResult:
@@ -80,6 +81,7 @@ def send_task_chat_message(task: TaskRecord, *, prompt: str, settings: Settings)
         task=task,
         assistant_message=assistant_message,
         token_usage=token_usage,
+        token_usage_calculation_method=provider_result.token_usage_calculation_method,
     )
 
 

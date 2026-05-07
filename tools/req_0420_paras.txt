@@ -524,8 +524,8 @@
 524: 本版交付
 525: 是
 526: problem_type
-527: classification 或 regression
-528: 是
+527: AI 解析或人工确认后为 classification / regression
+528: 否，创建时可为空；上传 CSV 后由 AI 解析或人工确认后回写
 529: 主要流程
 530: 用户填写任务表单。
 531: 前端向后端提交创建请求。
@@ -1176,8 +1176,8 @@
 1176: 表格任务必填，1 至 80 字符
 1177: problem_type
 1178: enum
-1179: 分类或回归
-1180: 取值 classification / regression
+1179: 分类或回归，创建时可为空
+1180: AI 解析或人工确认后取值 classification / regression
 1181: status
 1182: enum
 1183: 任务状态

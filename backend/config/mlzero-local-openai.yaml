@@ -12,7 +12,7 @@ max_tutorial_length: 4096
 configure_env: false
 condense_tutorials: true
 use_tutorial_summary: true
-continuous_improvement: true
+continuous_improvement: false
 optimize_system_resources: false
 cleanup_unused_env: true
 enable_meta_prompting: false
@@ -23,6 +23,7 @@ llm: &default_llm
   max_tokens: 768
   proxy_url: http://127.0.0.1:8001/v1
   wire_api: chat_completions
+  request_timeout: 60
   temperature: 0.1
   top_p: 0.9
   verbose: false
@@ -40,7 +41,7 @@ chat_agent:
 python_coder:
   <<: *default_llm
   multi_turn: true
-  max_tokens: 2048
+  max_tokens: 8192
 
 bash_coder:
   <<: *default_llm

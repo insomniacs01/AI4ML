@@ -158,17 +158,19 @@ def get_current_supabase_auth(
 
 
 def require_team_access(
-    team_id: str | None = Header(default=None, alias="X-Team-Id"),
+    team_id: str | None = None,
+    x_team_id: str | None = Header(default=None, alias="X-Team-Id"),
     auth_context: tuple[SupabaseUser, str] = Depends(get_current_supabase_auth),
     client: SupabaseClient = Depends(get_supabase_client),
 ) -> TeamAccessContext:
-    if not team_id or not team_id.strip():
+    resolved_team_id = (team_id or "").strip() or (x_team_id or "").strip()
+    if not resolved_team_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="X-Team-Id header is required for task operations.",
         )
 
-    normalized_team_id = team_id.strip()
+    normalized_team_id = resolved_team_id
     user, access_token = auth_context
 
     try:
