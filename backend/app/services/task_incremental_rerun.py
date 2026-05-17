@@ -42,10 +42,19 @@ class IncrementalRerunPreconditionError(RuntimeError):
 
 
 class IncrementalRerunError(RuntimeError):
-    def __init__(self, message: str, *, output_dir: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        output_dir: Path | str | None = None,
+        recoverable: bool = False,
+        retry_stage: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.output_dir = str(output_dir) if output_dir is not None else None
         self.token_usage = read_mlzero_token_usage(output_dir) if output_dir is not None else None
+        self.recoverable = recoverable
+        self.retry_stage = retry_stage
 
 
 @dataclass(frozen=True)
@@ -121,7 +130,7 @@ def run_task_incrementally(
     *,
     settings: Settings,
     start_stage: WorkflowStage,
-    time_limit: int,
+    time_limit: int | None,
     plan: IncrementalRerunPlan | None = None,
 ) -> IncrementalRerunResult:
     plan = plan or build_incremental_rerun_plan(task, settings=settings, start_stage=start_stage)
@@ -138,11 +147,11 @@ def run_task_incrementally(
             if provider_usage is None:
                 raise RuntimeError("Incremental code generation did not return provider token usage.")
             _write_token_usage(plan.run_output_dir, provider_usage, session_name="incremental_code_generation")
-            _execute_generated_code(plan, settings=settings, time_limit=time_limit)
+            _execute_generated_code(plan, settings=settings)
         elif start_stage in {WorkflowStage.model_selection, WorkflowStage.training_validation}:
             _reuse_generated_code(plan)
             _write_token_usage(plan.run_output_dir, _zero_token_usage(), session_name="incremental_code_reuse")
-            _execute_generated_code(plan, settings=settings, time_limit=time_limit)
+            _execute_generated_code(plan, settings=settings)
         elif start_stage == WorkflowStage.report_generation:
             _rebuild_report_snapshot(task, plan)
             _write_token_usage(plan.run_output_dir, _zero_token_usage(), session_name="incremental_report_rebuild")
@@ -167,6 +176,8 @@ def run_task_incrementally(
         raise IncrementalRerunError(
             f"Strict incremental rerun from {start_stage.value} failed: {exc}",
             output_dir=plan.run_output_dir,
+            recoverable=True,
+            retry_stage=start_stage.value,
         ) from exc
 
 
@@ -192,6 +203,13 @@ def _resolve_source_output_dir(task: TaskRecord) -> Path:
     )
 
 
+def _safe_path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _find_latest_generated_code(output_dir: Path) -> Path | None:
     candidates = sorted(
         (
@@ -206,15 +224,13 @@ def _find_latest_generated_code(output_dir: Path) -> Path | None:
 
 
 def _find_summary_paths(output_dir: Path) -> list[Path]:
-    return [
-        path
-        for path in [
-            output_dir / "best_run" / "output" / "run_summary.json",
-            output_dir / "run_summary.json",
-            *sorted(output_dir.glob("node_*/output/run_summary.json")),
-        ]
-        if path.exists() and path.is_file()
+    candidates = [
+        output_dir / "best_run" / "output" / "run_summary.json",
+        output_dir / "run_summary.json",
+        *output_dir.glob("node_*/output/run_summary.json"),
     ]
+    existing = [path for path in candidates if path.exists() and path.is_file()]
+    return sorted(existing, key=lambda path: (_safe_path_mtime(path), str(path)), reverse=True)
 
 
 def _require_source_summary(output_dir: Path) -> Path:
@@ -263,7 +279,13 @@ def _mode_for_stage(stage: WorkflowStage) -> str:
     return "unsupported"
 
 
-def _prepare_input_bundle(task: TaskRecord, dataset_path: Path, plan: IncrementalRerunPlan, *, settings: Settings) -> None:
+def _prepare_input_bundle(
+    task: TaskRecord,
+    dataset_path: Path,
+    plan: IncrementalRerunPlan,
+    *,
+    settings: Settings,
+) -> None:
     input_dir = plan.run_output_dir / "input"
     MLZeroExecutor(settings)._prepare_input_bundle(task, dataset_path, input_dir)
 
@@ -456,12 +478,11 @@ def _write_generated_code_and_runner(code: str, plan: IncrementalRerunPlan) -> N
     (plan.node_dir / "execution_script.sh").write_text(runner, encoding="utf-8")
 
 
-def _execute_generated_code(plan: IncrementalRerunPlan, *, settings: Settings, time_limit: int) -> None:
+def _execute_generated_code(plan: IncrementalRerunPlan, *, settings: Settings) -> None:
     command = _build_python_execution_command(settings, plan.node_dir / "generated_code.py")
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
-    timeout_seconds = max(300, time_limit * 60)
     try:
         result = subprocess.run(  # noqa: S603
             command,
@@ -471,12 +492,11 @@ def _execute_generated_code(plan: IncrementalRerunPlan, *, settings: Settings, t
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout_seconds,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
         _write_execution_streams(plan, exc.stdout or "", exc.stderr or "")
-        raise RuntimeError(f"Incremental generated_code.py timed out after {timeout_seconds} seconds.") from exc
+        raise RuntimeError("Incremental generated_code.py timed out.") from exc
 
     _write_execution_streams(plan, result.stdout or "", result.stderr or "")
     if result.returncode != 0:
@@ -543,7 +563,7 @@ def _rebuild_report_snapshot(task: TaskRecord, plan: IncrementalRerunPlan) -> No
         f"- Rebuilt at: {datetime.now(timezone.utc).isoformat()}",
         f"- Best model: {source_summary_payload.get('best_model')}",
         f"- Metric: {source_summary_payload.get('metric_name')} = {source_summary_payload.get('metric_value')}",
-        f"- Validation score: {source_summary_payload.get('validation_score')}",
+        f"- Search score: {source_summary_payload.get('validation_score')}",
         "",
         "This report-stage rerun reused the prior model/training artifacts and rebuilt report metadata only.",
     ]

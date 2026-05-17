@@ -29,9 +29,9 @@ export default function TeamOnboarding({
       <section className="auth-card">
         <div className="auth-copy">
           <p className="eyebrow">团队初始化</p>
-          <h1>先进入一个团队，再开始录入连接器和任务</h1>
+          <h1>先进入一个团队，再开始添加 AI 服务和任务</h1>
           <p>
-            当前登录账号是 <strong>{userLabel}</strong>。任务、CSV、连接器和运行结果都会按团队隔离，
+            当前登录账号是 <strong>{userLabel}</strong>。任务、CSV、AI 设置和运行结果都会按团队隔离，
             所以第一次进入时需要先创建团队，或者输入邀请码加入已有团队。
           </p>
         </div>

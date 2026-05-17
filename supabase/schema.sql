@@ -395,8 +395,6 @@ create table if not exists public.ai_routing_policies (
   stage text not null,
   connector_id uuid references public.ai_connectors(id) on delete set null,
   model_name text,
-  fallback_connector_id uuid references public.ai_connectors(id) on delete set null,
-  fallback_model_name text,
   config jsonb,
   created_by uuid references public.profiles(user_id) on delete set null,
   created_at timestamptz not null default timezone('utc', now()),
@@ -405,9 +403,9 @@ create table if not exists public.ai_routing_policies (
 );
 
 alter table public.ai_routing_policies
-  add column if not exists fallback_connector_id uuid references public.ai_connectors(id) on delete set null;
+  drop column if exists fallback_connector_id;
 alter table public.ai_routing_policies
-  add column if not exists fallback_model_name text;
+  drop column if exists fallback_model_name;
 
 drop trigger if exists ai_routing_policies_set_updated_at on public.ai_routing_policies;
 create trigger ai_routing_policies_set_updated_at

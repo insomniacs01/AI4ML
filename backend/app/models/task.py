@@ -31,6 +31,7 @@ class RunSummary(BaseModel):
     best_model: str
     metric_name: str
     metric_value: float
+    validation_score: Optional[float] = None
     leaderboard: list[dict[str, Any]] = Field(default_factory=list)
     output_dir: str
     token_usage: Optional[TokenUsageReport] = None
@@ -39,6 +40,9 @@ class RunSummary(BaseModel):
 class RunAttempt(BaseModel):
     output_dir: str
     token_usage: Optional[TokenUsageReport] = None
+    diagnosis: Optional[str] = None
+    diagnosis_detail: Optional[str] = None
+    error_artifact_path: Optional[str] = None
 
 
 class TaskRunProgressArtifactSummary(BaseModel):
@@ -50,6 +54,8 @@ class TaskRunProgressArtifactSummary(BaseModel):
     leaderboard_path: Optional[str] = None
     token_usage_path: Optional[str] = None
     generated_code_path: Optional[str] = None
+    error_log_path: Optional[str] = None
+    error_log_name: Optional[str] = None
     best_model: Optional[str] = None
     metric_name: Optional[str] = None
     metric_value: Optional[float] = None
@@ -57,13 +63,57 @@ class TaskRunProgressArtifactSummary(BaseModel):
     candidate_model_count: Optional[int] = None
 
 
+class TaskRunProgressEvent(BaseModel):
+    time: Optional[datetime] = None
+    stage: Optional["WorkflowStage"] = None
+    event_type: str
+    message: str
+    source: Optional[str] = None
+
+
+class TaskRunProgressLeaderboardRow(BaseModel):
+    model: str
+    validation_score: Optional[float] = None
+    fit_time: Optional[float] = None
+    pred_time: Optional[float] = None
+    rank: Optional[int] = None
+
+
+class TaskRunProgressTrainingMetric(BaseModel):
+    time: Optional[datetime] = None
+    model: Optional[str] = None
+    epoch: Optional[int] = None
+    total_epochs: Optional[int] = None
+    iteration: Optional[int] = None
+    total_iterations: Optional[int] = None
+    train_loss: Optional[float] = None
+    validation_loss: Optional[float] = None
+    validation_score: Optional[float] = None
+    metric_name: Optional[str] = None
+    source: Optional[str] = None
+
+
+class TaskRunProgressInsight(BaseModel):
+    time: Optional[datetime] = None
+    stage: Optional["WorkflowStage"] = None
+    event_type: str
+    headline: str
+    detail: str = ""
+    evidence: Optional[str] = None
+    source: Optional[str] = None
+    severity: Literal["info", "success", "warning", "danger"] = "info"
+
+
 class TaskRunProgressResponse(BaseModel):
     task: "TaskRecord"
     output_dir: Optional[str] = None
-    status: Literal["not_started", "running", "stale", "completed", "failed", "unknown"] = "unknown"
+    status: Literal["not_started", "running", "repairing", "blocked", "stale", "completed", "failed", "unknown"] = "unknown"
     progress_percent: int = 0
     current_stage: Optional["WorkflowStage"] = None
     current_activity: str = ""
+    observer_status: Optional[str] = None
+    observer_detail: Optional[str] = None
+    observer_stage: Optional["WorkflowStage"] = None
     last_log_at: Optional[datetime] = None
     seconds_since_last_update: Optional[float] = None
     stale: bool = False
@@ -72,6 +122,24 @@ class TaskRunProgressResponse(BaseModel):
     repair_action: Optional[str] = None
     artifacts: TaskRunProgressArtifactSummary = Field(default_factory=TaskRunProgressArtifactSummary)
     latest_log_lines: list[str] = Field(default_factory=list)
+    events: list[TaskRunProgressEvent] = Field(default_factory=list)
+    insights: list[TaskRunProgressInsight] = Field(default_factory=list)
+    leaderboard: list[TaskRunProgressLeaderboardRow] = Field(default_factory=list)
+    training_metrics: list[TaskRunProgressTrainingMetric] = Field(default_factory=list)
+    current_model: Optional[str] = None
+    completed_model_count: Optional[int] = None
+    total_model_count: Optional[int] = None
+    current_iteration: Optional[int] = None
+    total_iterations: Optional[int] = None
+    current_epoch: Optional[int] = None
+    total_epochs: Optional[int] = None
+    current_model_started_at: Optional[datetime] = None
+    current_model_elapsed_seconds: Optional[float] = None
+    current_model_time_budget_seconds: Optional[float] = None
+    latest_train_loss: Optional[float] = None
+    latest_validation_loss: Optional[float] = None
+    latest_validation_score: Optional[float] = None
+    telemetry_note: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -116,6 +184,7 @@ class TaskModelReportResponse(BaseModel):
     feature_importance: list[FeatureImportanceEntry] = Field(default_factory=list)
     result_summary: list[str] = Field(default_factory=list)
     data_quality_notes: list[str] = Field(default_factory=list)
+    relationship_notes: list[str] = Field(default_factory=list)
     limitation_notes: list[str] = Field(default_factory=list)
     artifact_paths: list[str] = Field(default_factory=list)
     report_markdown: str = ""
@@ -226,9 +295,6 @@ class TaskStageRoutingRecord(BaseModel):
     connector_id: Optional[str] = None
     connector_display_name: Optional[str] = None
     model_name: Optional[str] = None
-    fallback_connector_id: Optional[str] = None
-    fallback_connector_display_name: Optional[str] = None
-    fallback_model_name: Optional[str] = None
     selection_source: Optional[str] = None
 
 
@@ -294,7 +360,7 @@ class TaskSemanticUpdateRequest(BaseModel):
 
 
 class TaskRunRequest(BaseModel):
-    time_limit: int = Field(default=20, ge=5, le=300)
+    time_limit: Optional[int] = Field(default=None, ge=5, le=300)
     rerun_from_stage: Optional[WorkflowStage] = None
     force_full_run: bool = False
 
@@ -433,9 +499,11 @@ class TaskHumanCollaborationResponse(BaseModel):
     task: TaskRecord
     stages: list[WorkflowStageRecord] = Field(default_factory=list)
     requests: list[TaskHumanRequestRecord] = Field(default_factory=list)
+    my_requests: list[TaskHumanRequestRecord] = Field(default_factory=list)
     decision_history: list[TaskHumanDecisionHistoryEntry] = Field(default_factory=list)
     next_run_guidance: TaskHumanGuidancePreview = Field(default_factory=TaskHumanGuidancePreview)
     open_request_count: int = 0
+    my_open_request_count: int = 0
     can_resume: bool = False
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 TeamMemberRole = Literal["admin", "member", "team_owner", "business_user", "developer_user"]
@@ -153,9 +153,6 @@ class AIRoutingPolicyRecord(BaseModel):
     connector_id: str | None = None
     connector_display_name: str | None = None
     model_name: str | None = None
-    fallback_connector_id: str | None = None
-    fallback_connector_display_name: str | None = None
-    fallback_model_name: str | None = None
     config: dict[str, Any] | None = None
     created_by: str | None = None
     created_at: datetime | None = None
@@ -168,15 +165,17 @@ class AIRoutingPoliciesResponse(BaseModel):
 
 
 class AIRoutingPolicyUpsertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     stage: str = Field(min_length=1, max_length=120)
     connector_id: str | None = Field(default=None, max_length=64)
     model_name: str | None = Field(default=None, max_length=200)
-    fallback_connector_id: str | None = Field(default=None, max_length=64)
-    fallback_model_name: str | None = Field(default=None, max_length=200)
     config: dict[str, Any] | None = None
 
 
 class AIRoutingPoliciesUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     items: list[AIRoutingPolicyUpsertRequest] = Field(default_factory=list)
 
 

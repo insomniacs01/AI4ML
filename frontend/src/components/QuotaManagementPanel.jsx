@@ -22,7 +22,7 @@ function getQuotaSubtitle(item) {
 
 function getQuotaScopeLabel(scopeType) {
   if (scopeType === "team") return "团队";
-  if (scopeType === "connector") return "连接器";
+  if (scopeType === "connector") return "AI 服务";
   return "成员";
 }
 
@@ -57,32 +57,47 @@ export default function QuotaManagementPanel({
       <section className="section-card">
         <div className="section-head">
           <div>
-            <h3>配额账户</h3>
-            <p>按团队、成员、连接器三个作用域维护真实 token 额度。冻结或耗尽的账户会被后端拦截。</p>
+            <h3>使用上限</h3>
+            <p>按团队、成员、AI 服务设置可用额度。被冻结或额度用完后，系统会暂停继续调用 AI。</p>
           </div>
           <button type="button" className="chip-button" onClick={onRefresh} disabled={loading}>
-            {loading ? "刷新中..." : "刷新配额"}
+            {loading ? "刷新中..." : "刷新上限"}
           </button>
         </div>
 
         {message ? <div className="notice-banner">{message}</div> : null}
         {error ? <div className="error-banner">{error}</div> : null}
 
-        {!quotas?.length && !loading ? <div className="empty-state">当前团队还没有配额账户。</div> : null}
+        {!quotas?.length && !loading ? <div className="empty-state">当前团队还没有使用上限记录。</div> : null}
 
         {Array.isArray(quotas) && quotas.length ? (
+          <div className="summary-grid">
+            <article className="summary-item"><span>账户总数</span><strong>{quotas.length}</strong></article>
+            <article className="summary-item"><span>团队上限</span><strong>{quotas.filter((item) => item.scope_type === "team").length}</strong></article>
+            <article className="summary-item"><span>成员上限</span><strong>{quotas.filter((item) => item.scope_type !== "team" && item.scope_type !== "connector").length}</strong></article>
+            <article className="summary-item"><span>AI 服务上限</span><strong>{quotas.filter((item) => item.scope_type === "connector").length}</strong></article>
+          </div>
+        ) : null}
+
+        {Array.isArray(quotas) && quotas.length ? (
+          <details className="expert-advanced-fold">
+            <summary>
+              <span>展开使用上限明细</span>
+              <small>{quotas.length} 条记录，可调整额度和状态</small>
+            </summary>
+            <div className="expert-advanced-stack">
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>作用域</th>
-                  <th>账户</th>
+                  <th>范围</th>
+                  <th>对象</th>
                   <th>角色/状态</th>
                   <th>已用</th>
                   <th>总额</th>
                   <th>剩余</th>
-                  <th>账户状态</th>
-                  <th>预警阈值</th>
+                  <th>状态</th>
+                  <th>提醒线</th>
                   <th>调整</th>
                 </tr>
               </thead>
@@ -161,6 +176,8 @@ export default function QuotaManagementPanel({
               </tbody>
             </table>
           </div>
+            </div>
+          </details>
         ) : null}
       </section>
     </div>

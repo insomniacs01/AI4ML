@@ -55,7 +55,14 @@ class TaskHumanCollaborationService:
     def __init__(self, task_store: TaskStore) -> None:
         self.task_store = task_store
 
-    def get_snapshot(self, task: TaskRecord, *, access_token: str) -> TaskHumanCollaborationResponse:
+    def get_snapshot(
+        self,
+        task: TaskRecord,
+        *,
+        access_token: str,
+        actor_id: str | None = None,
+        actor_role: str | None = None,
+    ) -> TaskHumanCollaborationResponse:
         requests = self._expire_overdue_requests(task, access_token=access_token)
         existing_records = {
             self._stage_key(record.stage): record
@@ -63,13 +70,17 @@ class TaskHumanCollaborationService:
         }
         stages = self._build_stage_snapshot(task, existing_records=existing_records, requests=requests)
         open_request_count = self._count_open_requests(requests)
+        my_requests = self._filter_actor_requests(requests, actor_id=actor_id, actor_role=actor_role)
+        my_open_request_count = self._count_open_requests(my_requests)
         return TaskHumanCollaborationResponse(
             task=task,
             stages=stages,
             requests=requests,
+            my_requests=my_requests,
             decision_history=get_task_human_decision_history(task),
             next_run_guidance=build_task_human_guidance_preview(task),
             open_request_count=open_request_count,
+            my_open_request_count=my_open_request_count,
             can_resume=task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human} and open_request_count == 0,
         )
 
@@ -238,7 +249,7 @@ class TaskHumanCollaborationService:
             access_token=access_token,
         )
         saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
-        return self.get_snapshot(saved_task, access_token=access_token)
+        return self.get_snapshot(saved_task, access_token=access_token, actor_id=requested_by, actor_role=actor_role)
 
     def submit_decision(
         self,
@@ -316,14 +327,21 @@ class TaskHumanCollaborationService:
         else:
             saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
 
-        return self.get_snapshot(saved_task, access_token=access_token)
+        return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
 
-    def resume_task(self, task: TaskRecord, *, access_token: str) -> TaskHumanCollaborationResponse:
+    def resume_task(
+        self,
+        task: TaskRecord,
+        *,
+        access_token: str,
+        actor_id: str | None = None,
+        actor_role: str | None = None,
+    ) -> TaskHumanCollaborationResponse:
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         if self._count_open_requests(requests):
             raise RuntimeError("There are still open human collaboration requests for this task.")
         saved_task = self._resume_task_record(task, access_token=access_token)
-        return self.get_snapshot(saved_task, access_token=access_token)
+        return self.get_snapshot(saved_task, access_token=access_token, actor_id=actor_id, actor_role=actor_role)
 
     def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
         self._expire_overdue_requests(task, access_token=access_token)
@@ -439,7 +457,7 @@ class TaskHumanCollaborationService:
         )
         task = self._record_latest_decision(task, request=request, payload=payload)
         saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
-        return self.get_snapshot(saved_task, access_token=access_token)
+        return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
 
     def _expire_overdue_requests(self, task: TaskRecord, *, access_token: str) -> list[TaskHumanRequestRecord]:
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
@@ -653,6 +671,43 @@ class TaskHumanCollaborationService:
     @staticmethod
     def _count_open_requests(requests: list[TaskHumanRequestRecord]) -> int:
         return sum(1 for item in requests if TaskHumanCollaborationService._is_active_request(item))
+
+    @staticmethod
+    def _filter_actor_requests(
+        requests: list[TaskHumanRequestRecord],
+        *,
+        actor_id: str | None,
+        actor_role: str | None,
+    ) -> list[TaskHumanRequestRecord]:
+        if not actor_id:
+            return requests
+        return [
+            request
+            for request in requests
+            if TaskHumanCollaborationService._is_request_visible_to_actor(
+                request,
+                actor_id=actor_id,
+                actor_role=actor_role or "",
+            )
+        ]
+
+    @staticmethod
+    def _is_request_visible_to_actor(
+        request: TaskHumanRequestRecord,
+        *,
+        actor_id: str,
+        actor_role: str,
+    ) -> bool:
+        if actor_id == request.requested_by:
+            return True
+        if request.assignee_type == InteractionAssigneeType.member:
+            return actor_id in {request.assigned_to, request.assignee_value}
+        if request.assignee_type == InteractionAssigneeType.role:
+            return actor_role == request.assignee_value
+        if request.assignee_type == InteractionAssigneeType.candidate_pool:
+            candidates = set(TaskHumanCollaborationService._parse_candidate_pool(request.assignee_value))
+            return actor_id in candidates or actor_role in candidates
+        return False
 
     @staticmethod
     def _is_active_request(request: TaskHumanRequestRecord) -> bool:

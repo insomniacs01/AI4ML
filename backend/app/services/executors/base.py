@@ -8,5 +8,5 @@ from backend.app.models.task import RunSummary, TaskRecord
 
 class BaseExecutor(ABC):
     @abstractmethod
-    def run(self, task: TaskRecord, dataset_path: Path, time_limit: int) -> RunSummary:
+    def run(self, task: TaskRecord, dataset_path: Path, time_limit: int | None = None) -> RunSummary:
         raise NotImplementedError

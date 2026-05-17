@@ -10,6 +10,7 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.models.task import TaskRecord, TokenUsageReport
 from backend.app.services.dataset_profile import build_dataset_profile, dataset_profile_to_plain
+from backend.app.services.task_agent_loop import refresh_agent_loop_after_analysis
 from backend.app.services.mlzero_runtime import LocalOpenAIProvider
 from backend.app.services.openai_compatible_provider import (
     ProviderCallResult,
@@ -132,6 +133,7 @@ def apply_analysis_to_task(task: TaskRecord, analysis: TaskAnalysisResult) -> Ta
         "token_usage_calculation_method": analysis.token_usage_calculation_method,
     })
     task.structured_requirements = structured_requirements
+    refresh_agent_loop_after_analysis(task)
     task.notes = (
         f"AI 已解析任务：目标列为 {analysis.label_column}，"
         f"任务类型为 {analysis.problem_type}，建议指标为 {analysis.metric_name}。"

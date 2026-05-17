@@ -77,8 +77,11 @@ class RerankerAgent(BaseAgent):
         max_length: int,
     ) -> str:
         """Format a single tutorial's content with truncation if needed."""
-        with open(tutorial.path, "r", encoding="utf-8") as f:
-            content = f.read()
+        if tutorial.content:
+            content = tutorial.content
+        else:
+            with open(tutorial.path, "r", encoding="utf-8") as f:
+                content = f.read()
 
         if len(content) > max_length:
             content = content[:max_length] + "\n...(truncated)"

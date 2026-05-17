@@ -60,8 +60,8 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     repo_root: Path = REPO_ROOT
     storage_dir: Path = REPO_ROOT / "storage" / "tasks"
-    run_output_dir: Path = REPO_ROOT / "storage" / "mlzero_runs"
-    mlzero_runtime_dir: Path = REPO_ROOT / "storage" / "mlzero_runtime"
+    run_output_dir: Path = DEFAULT_RUNTIME_ROOT / "mlzero_runs"
+    mlzero_runtime_dir: Path = DEFAULT_RUNTIME_ROOT / "mlzero_runtime"
     backend_instance_lock_path: Path = Field(default_factory=_default_backend_instance_lock_path)
     mlzero_config_path: Path = REPO_ROOT / "backend" / "config" / "mlzero-local-openai.yaml"
     mlzero_model_path: Path = REPO_ROOT / "local" / "models" / "Qwen2.5-Coder-0.5B-Instruct-Q4_K_M.gguf"
@@ -85,8 +85,13 @@ class Settings(BaseSettings):
     mlzero_provider_base_url_override: str = ""
     mlzero_provider_wire_api: Literal["chat_completions", "responses"] = "chat_completions"
     mlzero_provider_user_agent: str = "Mozilla/5.0"
-    mlzero_provider_request_timeout_seconds: int = 30
+    mlzero_provider_request_timeout_seconds: int = 180
     mlzero_tokenizer_model_alias: str = ""
+    mlzero_mcp_web_search_enabled: bool = False
+    mlzero_mcp_web_search_server_url: str = ""
+    mlzero_mcp_web_search_tool_name: str = ""
+    mlzero_mcp_web_search_top_k: int = 5
+    mlzero_mcp_web_search_timeout_seconds: int = 20
     connector_secret_key: str = ""
 
     # ---- User / Auth settings ----

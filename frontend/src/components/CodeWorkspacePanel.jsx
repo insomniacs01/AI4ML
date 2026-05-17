@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api.js";
+import { formatDateTime, isRecoverableRunBlockedTask } from "../lib/taskPresentation.js";
 
-const MAX_RENDERED_LINE_NUMBERS = 1200;
-const MAX_VIEWER_PREVIEW_CHARS = 120_000;
+const MAX_RENDERED_LINE_NUMBERS = 600;
+const MAX_VIEWER_PREVIEW_CHARS = 40_000;
 const MAX_PREFETCH_ARTIFACTS = 2;
 
 const CATEGORY_LABELS = {
@@ -32,7 +33,7 @@ const FILTER_DEFINITIONS = [
   {
     id: "generation",
     label: "代码生成过程",
-    description: "查看 AI 写代码时的 Prompt、回复和中间状态。",
+    description: "查看 AI 写代码时的提示、回复和中间状态。",
     match: (item) => item.group === "generation",
   },
   {
@@ -49,8 +50,8 @@ const FILTER_DEFINITIONS = [
   },
   {
     id: "all",
-    label: "全部工件",
-    description: "展示最新运行目录里所有可读文本工件。",
+    label: "全部文件",
+    description: "展示最新运行目录里所有可读文本文件。",
     match: () => true,
   },
 ];
@@ -60,7 +61,7 @@ const GROUP_LABELS = {
   result: "运行结果",
   log: "调试日志",
   context: "运行上下文",
-  other: "其他工件",
+  other: "其他文件",
 };
 
 const STAGE_LABELS = {
@@ -70,7 +71,7 @@ const STAGE_LABELS = {
   summary: "结果摘要",
   result_compare: "结果对比",
   predictions: "预测输出",
-  usage: "Token 记录",
+  usage: "AI 使用记录",
   python_coder: "写代码阶段",
   python_coder_retry: "代码重试",
   bash_coder: "脚本生成阶段",
@@ -102,12 +103,6 @@ const LANGUAGE_LABELS = {
 };
 
 const GROUP_ORDER = ["generation", "result", "log", "context", "other"];
-
-function formatDateTime(value) {
-  if (!value) return "未记录";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-}
 
 function formatBytes(value) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "未知大小";
@@ -205,8 +200,8 @@ function buildHumanRequestPresetFromArtifact(artifact, runOutputDir) {
   return {
     stage: inferHumanStageFromArtifact(artifact),
     request_type: inferHumanRequestTypeFromArtifact(artifact),
-    title: `审查文件：${artifact?.name ?? "当前工件"}`,
-    summary: `请人工审查当前代码工作区里的 ${artifact?.display_name || artifact?.name || "工件"}。\n${runPathLine}`,
+    title: `审查文件：${artifact?.name ?? "当前文件"}`,
+    summary: `请人工审查当前代码工作区里的 ${artifact?.display_name || artifact?.name || "文件"}。\n${runPathLine}`,
     suggested_action: artifact?.purpose
       ? `${artifact.purpose}\n请确认这个文件是否需要修改，确认后再决定是否继续下一轮运行。`
       : "请确认这个文件是否需要修改，确认后再决定是否继续下一轮运行。",
@@ -595,7 +590,7 @@ export default function CodeWorkspacePanel({
   async function handleRerunArtifact() {
     if (!selectedTaskId || !activePath || !canRerunActiveArtifact || rerunState === "loading") return;
     if (dirty) {
-      setSaveMessage("请先保存当前文件，再重跑代码工件。");
+      setSaveMessage("请先保存当前文件，再重跑代码。");
       return;
     }
     setRerunState("loading");
@@ -637,7 +632,7 @@ export default function CodeWorkspacePanel({
       ) : null}
 
       {!taskItems.length && !tasksLoading ? (
-        <div className="empty-state">当前团队还没有任务。先在任务页创建任务并跑出一次 MLZero 结果。</div>
+        <div className="empty-state">当前团队还没有任务。先在任务页创建任务并完成一次自动建模。</div>
       ) : null}
 
       {taskItems.length ? (
@@ -646,7 +641,7 @@ export default function CodeWorkspacePanel({
             <div className="code-workspace-intro">
               <p className="eyebrow">Code Workspace</p>
               <h3>{selectedTask?.name ?? "选择一个任务"}</h3>
-              <p>这里直接读取最新一次 MLZero 运行目录里的真实文件。现在默认只展示核心文件，不会把所有中间工件一股脑摊出来；切到“全部工件”时才会看到完整文本工件列表。</p>
+              <p>这里直接读取最新一次自动建模留下的真实文件。默认只展示核心文件，需要时再切到“全部文件”查看完整列表。</p>
             </div>
 
             <div className="code-workspace-actions">
@@ -666,8 +661,8 @@ export default function CodeWorkspacePanel({
               </label>
 
               {selectedTask ? (
-                <span className={`runtime-pill ${selectedTask.status === "failed" ? "danger" : selectedTask.status === "completed" ? "success" : "info"}`}>
-                  {selectedTask.status}
+                <span className={`runtime-pill ${isRecoverableRunBlockedTask(selectedTask) ? "warning" : selectedTask.status === "failed" ? "danger" : selectedTask.status === "completed" ? "success" : "info"}`}>
+                  {isRecoverableRunBlockedTask(selectedTask) ? "自动处理受阻" : selectedTask.status}
                 </span>
               ) : null}
 
@@ -688,24 +683,6 @@ export default function CodeWorkspacePanel({
 
               <button
                 type="button"
-                className="ghost-button"
-                onClick={handleCreateHumanRequestDraft}
-                disabled={!selectedTaskId || !activeArtifactEntry}
-              >
-                审阅当前文件
-              </button>
-
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => void handleDownload()}
-                disabled={!selectedTaskId || !activePath || downloadState === "loading"}
-              >
-                {downloadState === "loading" ? "下载中..." : "下载当前文件"}
-              </button>
-
-              <button
-                type="button"
                 className="primary-button"
                 onClick={() => void handleSave()}
                 disabled={!canEditActiveArtifact || !dirty || saveState === "saving"}
@@ -713,14 +690,37 @@ export default function CodeWorkspacePanel({
                 {saveState === "saving" ? "保存中..." : "保存修改"}
               </button>
 
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => void handleRerunArtifact()}
-                disabled={!selectedTaskId || !canRerunActiveArtifact || rerunState === "loading"}
-              >
-                {rerunState === "loading" ? "重跑中..." : "重跑当前代码"}
-              </button>
+              <details className="expert-advanced-actions">
+                <summary>更多文件操作</summary>
+                <div>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={handleCreateHumanRequestDraft}
+                    disabled={!selectedTaskId || !activeArtifactEntry}
+                  >
+                    审阅当前文件
+                  </button>
+
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => void handleDownload()}
+                    disabled={!selectedTaskId || !activePath || downloadState === "loading"}
+                  >
+                    {downloadState === "loading" ? "下载中..." : "下载当前文件"}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void handleRerunArtifact()}
+                    disabled={!selectedTaskId || !canRerunActiveArtifact || rerunState === "loading"}
+                  >
+                    {rerunState === "loading" ? "重跑中..." : "重跑当前代码"}
+                  </button>
+                </div>
+              </details>
             </div>
           </div>
 
@@ -764,7 +764,7 @@ export default function CodeWorkspacePanel({
           {!selectedTask ? (
             <div className="empty-state">先在上方选择一个任务，再查看它的 AI 代码工作区。</div>
           ) : !selectedTaskHasRun ? (
-            <div className="empty-state">这个任务还没有跑出 MLZero 运行目录。先完成一次运行，代码工作区才会有真实文件。</div>
+            <div className="empty-state">这个任务还没有完成过自动建模。先完成一次运行，这里才会有真实文件。</div>
           ) : (
             <div className="code-workspace-layout">
               <aside className="code-workspace-sidebar">
@@ -795,7 +795,7 @@ export default function CodeWorkspacePanel({
                 </div>
 
                 {!visibleArtifacts.length && workspaceState !== "loading" ? (
-                  <div className="empty-state compact">当前视图下没有可展示的文件。你可以切到“全部工件”看看完整文本工件列表。</div>
+                  <div className="empty-state compact">当前视图下没有可展示的文件。你可以切到“全部文件”看看完整文本文件列表。</div>
                 ) : (
                   <div className="code-workspace-tree">
                     {sidebarSections.map((section) => (
@@ -825,7 +825,7 @@ export default function CodeWorkspacePanel({
               <div className="code-workspace-editor-panel">
                 {!activeArtifactEntry ? (
                   <div className="empty-state code-workspace-empty">
-                    {artifactState === "loading" ? "正在读取文件内容..." : "从左侧选择一个文件来查看 AI 代码或相关工件。"}
+                    {artifactState === "loading" ? "正在读取文件内容..." : "从左侧选择一个文件来查看 AI 代码或相关文件。"}
                   </div>
                 ) : (
                   <>
@@ -894,7 +894,7 @@ export default function CodeWorkspacePanel({
                         <pre className="code-viewer-pre">{viewerPreview.text}</pre>
                         {viewerPreview.truncated ? (
                           <div className="large-content-notice">
-                            文件较大，已先预览前 {MAX_VIEWER_PREVIEW_CHARS.toLocaleString("zh-CN")} 个字符，省略 {viewerPreview.omitted.toLocaleString("zh-CN")} 个字符。需要完整内容可下载工件。
+                            文件较大，已先预览前 {MAX_VIEWER_PREVIEW_CHARS.toLocaleString("zh-CN")} 个字符，省略 {viewerPreview.omitted.toLocaleString("zh-CN")} 个字符。需要完整内容可下载文件。
                           </div>
                         ) : null}
                       </div>

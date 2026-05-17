@@ -106,7 +106,12 @@ For validation scores:
 
         return prompt
 
-    def parse(self, response: Dict) -> Tuple[str, Optional[str], Optional[float]]:
+    def parse(
+        self,
+        response: Dict,
+        *,
+        require_validation_score: bool = True,
+    ) -> Tuple[str, Optional[str], Optional[float]]:
         """Parse the LLM's response to extract decision, error summary, and validation score."""
 
         # Extract content from LLM response
@@ -170,7 +175,7 @@ For validation scores:
         # The Validation score is only meaningful if this is a success run
         if decision != "SUCCESS":
             validation_score = None
-        elif validation_score is None:
+        elif validation_score is None and require_validation_score:
             self.manager.save_and_log_states(
                 content=response, save_name="executer_response.txt", per_iteration=True, add_uuid=True
             )

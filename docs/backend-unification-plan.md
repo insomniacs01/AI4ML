@@ -1,5 +1,15 @@
 # AI4ML Backend Unification Plan
 
+## 当前状态更新
+
+截至 2026-05-09，本文档中的统一方向已经基本落地：
+
+- Supabase 是正式身份与团队真相源。
+- FastAPI 业务接口统一走 `/api/teams/{team_id}/...` 团队作用域。
+- 旧 FastAPI 本地 `/auth`、`/users` 路由、本地 `UserStore`、本地用户模型和本地 JWT 工具已从仓库清理。
+
+下面内容保留为历史统一方案和架构背景说明。
+
 ## 目标
 
 把当前“Supabase 管一部分、FastAPI 管一部分、FastAPI 里还残留一套本地用户系统”的状态，收敛成一套职责清晰、权限统一、数据归属明确的架构。

@@ -23,7 +23,41 @@ def _build_local_windows_python_runner(manager) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _python_code_completion_issue(code: str) -> str | None:
+def _expected_label_column_from_manager(manager) -> str | None:
+    texts: list[str] = []
+    for attr_name in ("initial_user_input", "task_description"):
+        value = getattr(manager, attr_name, None)
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+
+    input_data_folder = getattr(manager, "input_data_folder", None)
+    if input_data_folder:
+        descriptions_path = Path(input_data_folder) / "descriptions.txt"
+        try:
+            text = descriptions_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if text.strip():
+            texts.append(text)
+
+    patterns = (
+        r"(?im)^\s*Label column\s*:\s*([^\r\n]+)",
+        r"(?im)^\s*Target column\s*:\s*([^\r\n]+)",
+        r"(?i)\bUse label column\s+['\"]([^'\"]+)['\"]",
+        r"(?i)\bUse target column\s+['\"]([^'\"]+)['\"]",
+    )
+    for text in texts:
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            label_column = match.group(1).strip().strip("`'\" .,:;")
+            if label_column and label_column.upper() not in {"N/A", "NONE", "NULL", "UNKNOWN"}:
+                return label_column
+    return None
+
+
+def _python_code_completion_issue(code: str, *, expected_label_column: str | None = None) -> str | None:
     stripped = (code or "").strip()
     if not stripped:
         return "generated code is empty"
@@ -51,6 +85,25 @@ def _python_code_completion_issue(code: str) -> str | None:
     if "validation_score" not in lowered and "validation score" not in lowered and "metric_value" not in lowered:
         return "missing any visible validation score output or summary artifact"
 
+    if expected_label_column:
+        label_literal = re.escape(expected_label_column)
+        last_column_target = re.search(
+            r"(?im)^\s*(target(?:_column|_col)?|label(?:_column|_col)?|y_col|target)\s*="
+            r"\s*[^\n#]*\bcolumns\b[^\n#]*\[\s*-1\s*\]",
+            stripped,
+        )
+        if last_column_target:
+            return (
+                f"target column is assigned from the last dataframe column despite known label "
+                f"{expected_label_column!r}"
+            )
+        uses_expected_label = re.search(rf"['\"]{label_literal}['\"]", stripped) is not None
+        if not uses_expected_label:
+            return (
+                f"known label column {expected_label_column!r} is not explicitly used; "
+                "do not infer or guess the target column"
+            )
+
     return None
 
 
@@ -61,7 +114,14 @@ def _truncate_for_prompt(text: str, max_chars: int = 12000) -> str:
     return stripped[:max_chars] + "\n...[truncated]..."
 
 
-def _build_python_repair_prompt(issue: str, generated_code: str, response: str, retry_count: int) -> str:
+def _build_python_repair_prompt(
+    issue: str,
+    generated_code: str,
+    response: str,
+    retry_count: int,
+    *,
+    expected_label_column: str | None = None,
+) -> str:
     if retry_count < 3:
         strategy = (
             "Repair the current script instead of rewriting a verbose new draft. "
@@ -71,6 +131,13 @@ def _build_python_repair_prompt(issue: str, generated_code: str, response: str, 
         strategy = (
             "Rewrite the script from scratch as a SHORTER minimal solution so it cannot be truncated again. "
             "Keep the implementation concise and stay within the libraries already required by the task."
+        )
+
+    target_requirement = ""
+    if expected_label_column:
+        target_requirement = (
+            f"- Use target column exactly {expected_label_column!r}. Assign it as a literal string and "
+            "pass it to AutoGluon. Do not use train_df.columns[-1] or any last-column fallback.\n"
         )
 
     return (
@@ -83,6 +150,7 @@ def _build_python_repair_prompt(issue: str, generated_code: str, response: str, 
         "- Start from the first line and include the final line. Do not truncate the ending.\n"
         "- Keep the code compact.\n"
         "- Use only files that actually exist in the input folder.\n"
+        f"{target_requirement}"
         '- Include a runnable `if __name__ == "__main__":` entrypoint.\n'
         "- Persist or print the final validation score.\n\n"
         "Current extracted Python candidate:\n"
@@ -154,6 +222,24 @@ class CoderAgent(BaseAgent):
 
         # Build prompt for evaluating execution results
         prompt = self.coder_prompt.build()
+        expected_label_column = None
+        if self.language == "python":
+            expected_label_column = _expected_label_column_from_manager(self.manager)
+            if expected_label_column:
+                prompt = (
+                    f"{prompt}\n\n"
+                    "### Target Column Contract\n"
+                    f"The label/target column is exactly {expected_label_column!r}. "
+                    "Generated code must assign that literal column name and pass it to the model. "
+                    "Do not infer the target from CSV position, do not use train_df.columns[-1], and "
+                    "do not overwrite this target after reading train.csv.\n"
+                )
+                self.manager.save_and_log_states(
+                    content=prompt,
+                    save_name="python_coder_prompt.txt",
+                    per_iteration=True,
+                    add_uuid=False,
+                )
 
         if not self.coder_llm_config.multi_turn:
             self.coder_llm = init_llm(
@@ -167,7 +253,10 @@ class CoderAgent(BaseAgent):
         generated_code = self.coder_prompt.parse(response)
 
         if self.language == "python":
-            completion_issue = _python_code_completion_issue(generated_code)
+            completion_issue = _python_code_completion_issue(
+                generated_code,
+                expected_label_column=expected_label_column,
+            )
             retry_count = 0
             while completion_issue is not None and retry_count < 4:
                 retry_count += 1
@@ -176,6 +265,7 @@ class CoderAgent(BaseAgent):
                     generated_code=generated_code,
                     response=str(response),
                     retry_count=retry_count,
+                    expected_label_column=expected_label_column,
                 )
                 self.manager.save_and_log_states(
                     content=retry_prompt,
@@ -191,7 +281,10 @@ class CoderAgent(BaseAgent):
                     add_uuid=False,
                 )
                 generated_code = self.coder_prompt.parse(response)
-                completion_issue = _python_code_completion_issue(generated_code)
+                completion_issue = _python_code_completion_issue(
+                    generated_code,
+                    expected_label_column=expected_label_column,
+                )
             if completion_issue is not None:
                 message = (
                     "LLM-generated Python code remained invalid after repair retries. "

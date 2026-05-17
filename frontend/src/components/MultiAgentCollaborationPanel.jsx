@@ -2,12 +2,21 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/api.js";
 import { getCachedCollaborationSnapshot, setCachedCollaborationSnapshot } from "../lib/collaborationCache.js";
+import { formatMetricName, getMetricDirectionLabel, getValidationScoreExplanation } from "../lib/metrics.js";
+import {
+  RUN_STATUS_LABELS,
+  WORKFLOW_STAGE_LABELS,
+  formatDateTime,
+  getReadableRuntimeActivity,
+  isRawRuntimeDebugText,
+  sanitizeRuntimeText,
+} from "../lib/taskPresentation.js";
 
 const AGENT_DEFINITIONS = [
   {
     id: "requirement_analysis",
-    name: "Agent-Alpha",
-    role: "需求解析",
+    name: "需求理解",
+    role: "理解任务",
     shortRole: "需求",
     description: "理解业务目标，整理任务约束与输出要求。",
     x: 10,
@@ -15,8 +24,8 @@ const AGENT_DEFINITIONS = [
   },
   {
     id: "data_analysis",
-    name: "Agent-Beta",
-    role: "数据分析",
+    name: "数据检查",
+    role: "检查数据",
     shortRole: "数据",
     description: "检查 CSV 字段、目标列、缺失值与任务类型。",
     x: 27,
@@ -24,8 +33,8 @@ const AGENT_DEFINITIONS = [
   },
   {
     id: "feature_engineering",
-    name: "Agent-Gamma",
-    role: "特征工程",
+    name: "数据处理",
+    role: "准备训练数据",
     shortRole: "特征",
     description: "生成数据处理与训练前特征逻辑。",
     x: 45,
@@ -33,28 +42,28 @@ const AGENT_DEFINITIONS = [
   },
   {
     id: "model_selection",
-    name: "Agent-Delta",
-    role: "模型选择",
+    name: "模型准备",
+    role: "选择候选模型",
     shortRole: "模型",
-    description: "选择 AutoGluon 候选模型并组织比较策略。",
+    description: "选择候选模型并组织比较方案。",
     x: 62,
     y: 30,
   },
   {
     id: "training_validation",
-    name: "Agent-Epsilon",
-    role: "训练验证",
+    name: "训练验证",
+    role: "训练并检查结果",
     shortRole: "训练",
-    description: "执行训练、验证、错误修复和 leaderboard 落盘。",
+    description: "执行训练、验证、错误修复和结果记录。",
     x: 76,
     y: 62,
   },
   {
     id: "report_generation",
-    name: "Agent-Zeta",
-    role: "报告生成",
+    name: "报告整理",
+    role: "生成报告",
     shortRole: "报告",
-    description: "汇总指标、产物、报告快照和在线预测入口。",
+    description: "汇总指标、生成文件、报告快照和试算入口。",
     x: 90,
     y: 44,
   },
@@ -65,7 +74,7 @@ const AGENT_LINKS = [
   ["data_analysis", "feature_engineering", "数据画像"],
   ["feature_engineering", "model_selection", "特征逻辑"],
   ["model_selection", "training_validation", "候选方案"],
-  ["training_validation", "report_generation", "结果产物"],
+  ["training_validation", "report_generation", "结果文件"],
   ["data_analysis", "model_selection", "目标与指标"],
   ["requirement_analysis", "feature_engineering", "业务约束"],
 ];
@@ -78,43 +87,25 @@ const STATUS_LABELS = {
   failed: "失败",
 };
 
-const TASK_STATUS_LABELS = {
-  draft: "草稿",
-  uploaded: "已上传",
-  planning: "规划中",
-  paused_for_review: "等待复核",
-  waiting_human: "等待人工",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
-  published: "已发布",
-};
-
 const RUNTIME_MODE_LABELS = {
-  persistent_agent_runtime: "持久化 Agent Runtime",
-  stage_agent_orchestrator: "阶段快照兼容模式",
+  persistent_agent_runtime: "已保存的运行记录",
+  stage_agent_orchestrator: "按步骤记录",
 };
 
 const EVENT_KIND_LABELS = {
-  agent: "Agent Runtime",
+  agent: "运行记录",
   stage: "阶段事件",
-  human_request: "人工节点",
+  human_request: "人工确认",
 };
 
 const MESSAGE_TYPE_LABELS = {
-  coordination: "协作安排",
+  coordination: "步骤安排",
   handoff: "阶段交接",
   acknowledgement: "接收确认",
   blocker: "阻塞通知",
-  human_review: "人工节点",
+  human_review: "人工确认",
   result: "结果广播",
 };
-
-function formatDateTime(value) {
-  if (!value) return "暂无";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-}
 
 function formatDuration(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "暂无";
@@ -123,6 +114,103 @@ function formatDuration(value) {
   const minutes = Math.floor(value / 60);
   const seconds = Math.round(value % 60);
   return `${minutes}m ${seconds}s`;
+}
+
+function formatNumber(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "暂无";
+  const absolute = Math.abs(value);
+  if (absolute !== 0 && absolute < 0.0001) return value.toExponential(3);
+  if (absolute >= 1000) return value.toLocaleString();
+  return Number(value.toPrecision(6)).toString();
+}
+
+function formatElapsedSeconds(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "暂无";
+  if (value < 60) return `${Math.round(value)} 秒`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟`;
+  return `${Math.round(value / 360) / 10} 小时`;
+}
+
+function compactText(value, maxLength = 58) {
+  if (!value) return "";
+  const text = String(value).replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function friendlyRuntimeText(value, fallback) {
+  const text = sanitizeRuntimeText(value, fallback);
+  if (!text) return text;
+  return text
+    .replace(/Agent-Alpha/g, "需求理解")
+    .replace(/Agent-Beta/g, "数据检查")
+    .replace(/Agent-Gamma/g, "数据处理")
+    .replace(/Agent-Delta/g, "模型准备")
+    .replace(/Agent-Epsilon/g, "训练验证")
+    .replace(/Agent-Zeta/g, "报告整理")
+    .replace(/Observer Agent/gi, "系统观察")
+    .replace(/观察 Agent/g, "系统观察")
+    .replace(/Agent 诊断/g, "系统诊断")
+    .replace(/Agent 自动修复受阻/g, "自动修复受阻")
+    .replace(/leaderboard/gi, "候选模型对比")
+    .replace(/telemetry/gi, "训练记录")
+    .replace(/token_usage/gi, "AI 使用记录")
+    .replace(/run_summary/gi, "结果摘要")
+    .replace(/产物/g, "生成文件")
+    .replace(/人工节点/g, "人工确认");
+}
+
+function getRunDiagnosis(selectedTask, runProgress) {
+  const attempt = selectedTask?.last_run_attempt;
+  const parts = [attempt?.diagnosis, attempt?.diagnosis_detail].filter(Boolean);
+  if (parts.length) return friendlyRuntimeText(parts.join(" "));
+  const activity = getReadableRuntimeActivity(runProgress);
+  if (activity) return activity;
+  if (selectedTask?.notes && !isRawRuntimeDebugText(selectedTask.notes)) return friendlyRuntimeText(selectedTask.notes);
+  return "";
+}
+
+function getRunErrorArtifactPath(selectedTask, runProgress) {
+  return runProgress?.artifacts?.error_log_path || selectedTask?.last_run_attempt?.error_artifact_path || "";
+}
+
+function getRunPillLabel(runProgress) {
+  const activity = getReadableRuntimeActivity(runProgress);
+  if (activity) return compactText(activity, 24);
+  if (runProgress?.current_model) return compactText(`训练 ${runProgress.current_model}`, 24);
+  if (runProgress?.status === "completed" && runProgress?.artifacts?.best_model) return compactText(`最佳 ${runProgress.artifacts.best_model}`, 24);
+  return RUN_STATUS_LABELS[runProgress?.status] ?? runProgress?.status ?? "未读取";
+}
+
+function getStageDisplayLabel(runProgress) {
+  const stage = runProgress?.observer_stage ?? runProgress?.current_stage;
+  if (stage) return WORKFLOW_STAGE_LABELS[stage] ?? stage;
+  if (["running", "repairing", "blocked"].includes(runProgress?.status)) return "等待阶段信号";
+  return "暂无阶段";
+}
+
+function getModelDisplayLabel(runProgress) {
+  if (runProgress?.current_model) return runProgress.current_model;
+  if (runProgress?.artifacts?.best_model) return runProgress.artifacts.best_model;
+  if (runProgress?.status === "blocked") return "等待重试";
+  if (runProgress?.status === "running") return "尚未开始模型 fit";
+  return "暂无模型";
+}
+
+function getInsightTone(severity) {
+  if (severity === "danger") return "failed";
+  if (severity === "warning") return "waiting";
+  if (severity === "success") return "success";
+  return "running";
+}
+
+function getRunTone(progress) {
+  if (progress?.status === "blocked") return "warning";
+  if (progress?.status === "repairing") return "info";
+  if (progress?.stale || progress?.status === "stale") return "danger";
+  if (progress?.status === "completed") return "success";
+  if (progress?.status === "failed") return "danger";
+  if (progress?.status === "running") return "info";
+  return "warning";
 }
 
 function compactIdentifier(value) {
@@ -137,6 +225,14 @@ function getAgentTone(status) {
   if (status === "waiting_human") return "waiting";
   if (status === "failed") return "failed";
   return "pending";
+}
+
+function getStepDisplayName(stepId, fallback) {
+  const definition = AGENT_DEFINITIONS.find((item) => item.id === stepId);
+  if (definition?.name) return definition.name;
+  const text = fallback ? String(fallback) : "";
+  if (/agent/i.test(text)) return definition?.role ?? stepId ?? "步骤";
+  return text || stepId || "步骤";
 }
 
 function getProgress(status) {
@@ -177,7 +273,7 @@ function buildAgents(stages, requests) {
       status,
       tone: getAgentTone(status),
       progress: getProgress(status),
-      currentTask: stage?.summary || agent.description,
+      currentTask: friendlyRuntimeText(stage?.summary, "系统已接管当前阶段状态。") || agent.description,
       modelName: stage?.model_name || "未指定",
       connector: stage?.selected_connector_id || "未指定",
       selectionSource: stage?.selection_source || "未记录",
@@ -193,13 +289,13 @@ function buildEvents(agents, requests) {
     .map((agent) => ({
       id: `stage-${agent.id}-${agent.stage.updated_at || agent.stage.created_at}`,
       time: agent.stage.updated_at || agent.stage.created_at,
-      text: `${agent.name}（${agent.role}）${STATUS_LABELS[agent.status] ?? agent.status}：${agent.currentTask}`,
+      text: friendlyRuntimeText(`${agent.name}（${agent.role}）${STATUS_LABELS[agent.status] ?? agent.status}：${agent.currentTask}`),
       tone: agent.tone,
     }));
   const requestEvents = (requests ?? []).map((request) => ({
     id: `request-${request.id}`,
     time: request.updated_at || request.created_at,
-    text: `人工节点 ${request.payload?.title || request.stage} 当前状态：${request.status}`,
+    text: `人工确认 ${request.payload?.title || request.stage} 当前状态：${request.status}`,
     tone: "waiting",
   }));
   return [...stageEvents, ...requestEvents]
@@ -214,9 +310,9 @@ function buildAgentsFromSnapshot(snapshot, stages, requests) {
     const status = agent.status ?? "pending";
     return {
       id: agent.id,
-      name: agent.name ?? definition.name ?? agent.id,
+      name: getStepDisplayName(agent.id, agent.name ?? definition.name),
       role: agent.role ?? definition.role ?? agent.stage,
-      shortRole: agent.short_role ?? definition.shortRole ?? agent.role ?? "Agent",
+      shortRole: definition.shortRole ?? agent.short_role ?? agent.role ?? "步骤",
       description: definition.description ?? "",
       x: typeof agent.x === "number" ? agent.x : definition.x ?? 0,
       y: typeof agent.y === "number" ? agent.y : definition.y ?? 0,
@@ -224,7 +320,7 @@ function buildAgentsFromSnapshot(snapshot, stages, requests) {
       status,
       tone: getAgentTone(status),
       progress: typeof agent.progress === "number" ? agent.progress : getProgress(status),
-      currentTask: agent.current_task ?? definition.description ?? "",
+      currentTask: friendlyRuntimeText(agent.current_task, "系统已接管当前阶段状态。") || definition.description || "",
       modelName: agent.model_name || "未指定",
       connector: agent.connector_id || "未指定",
       selectionSource: agent.selection_source || "未记录",
@@ -237,7 +333,7 @@ function buildAgentsFromSnapshot(snapshot, stages, requests) {
       startedAt: agent.started_at ?? null,
       finishedAt: agent.finished_at ?? null,
       durationSeconds: agent.duration_seconds ?? null,
-      logExcerpt: agent.log_excerpt ?? "",
+      logExcerpt: friendlyRuntimeText(agent.log_excerpt, ""),
     };
   });
 }
@@ -247,7 +343,7 @@ function buildEventsFromSnapshot(snapshot, agents, requests) {
   return snapshot.events.map((event) => ({
     id: event.id,
     time: event.time,
-    text: event.text,
+    text: friendlyRuntimeText(event.text),
     kind: event.kind ?? "stage",
     status: event.status ?? "",
     artifactRefs: Array.isArray(event.artifact_refs) ? event.artifact_refs : [],
@@ -264,18 +360,76 @@ function buildMessagesFromSnapshot(snapshot) {
     toAgentId: message.to_agent_id,
     type: message.message_type ?? "coordination",
     status: message.status ?? "sent",
-    content: message.content ?? "",
+    content: friendlyRuntimeText(message.content),
     artifactRefs: Array.isArray(message.artifact_refs) ? message.artifact_refs : [],
-    fromAgentName: message.payload?.from_agent_name,
+    fromAgentName: getStepDisplayName(message.from_agent_id, message.payload?.from_agent_name),
     fromAgentRole: message.payload?.from_agent_role,
-    toAgentName: message.payload?.to_agent_name,
+    toAgentName: getStepDisplayName(message.to_agent_id, message.payload?.to_agent_name),
     toAgentRole: message.payload?.to_agent_role,
   }));
 }
 
 function getAgentDisplayName(agentId, agents) {
   const agent = agents.find((item) => item.id === agentId);
-  return agent?.name ?? agentId ?? "全体";
+  return agent?.name ?? getStepDisplayName(agentId, agentId) ?? "全体";
+}
+
+function buildAgentRuntimeSignal(agent, runProgress, modelCountLabel) {
+  const observedStage = runProgress?.observer_stage ?? runProgress?.current_stage;
+  const observedActivity = getReadableRuntimeActivity(runProgress);
+  const isCurrentStage = Boolean(observedStage && observedStage === agent.id);
+  if (isCurrentStage && observedActivity) {
+    const details = [];
+    if (agent.id === "training_validation" && runProgress.current_model) details.push(`模型 ${runProgress.current_model}`);
+    if (agent.id === "training_validation" && modelCountLabel !== "暂无") details.push(`候选 ${modelCountLabel}`);
+    if (typeof runProgress.latest_validation_score === "number") details.push(`排序分 ${formatNumber(runProgress.latest_validation_score)}`);
+    if (runProgress.last_log_at) details.push(`Heartbeat ${formatDateTime(runProgress.last_log_at)}`);
+    return {
+      isCurrentStage,
+      headline: compactText(observedActivity, 96),
+      detail: details.join(" · ") || "系统根据日志、指标和生成文件综合判断",
+      source: "系统观察",
+      progress: Math.max(0, Math.min(100, runProgress.progress_percent ?? agent.progress ?? 0)),
+    };
+  }
+
+  if (runProgress?.status === "blocked" && agent.id === observedStage) {
+    return {
+      isCurrentStage: true,
+      headline: compactText(observedActivity || "自动修复受阻", 96),
+      detail: "生成文件已保留，等待重新运行继续修复",
+      source: "系统观察",
+      progress: Math.max(0, Math.min(100, runProgress.progress_percent ?? agent.progress ?? 0)),
+    };
+  }
+
+  if (agent.logExcerpt) {
+    return {
+      isCurrentStage,
+      headline: compactText(friendlyRuntimeText(agent.logExcerpt), 96),
+      detail: agent.currentTask ? compactText(friendlyRuntimeText(agent.currentTask), 72) : "阶段诊断",
+      source: "系统诊断",
+      progress: agent.progress,
+    };
+  }
+
+  if (agent.currentTask && agent.currentTask !== agent.description) {
+    return {
+      isCurrentStage,
+      headline: compactText(friendlyRuntimeText(agent.currentTask), 96),
+      detail: agent.artifactCount ? `生成文件 ${agent.artifactCount} 个` : "阶段记录",
+      source: "阶段摘要",
+      progress: agent.progress,
+    };
+  }
+
+  return {
+    isCurrentStage,
+    headline: agent.status === "pending" ? "等待上游阶段交付" : compactText(agent.description, 96),
+    detail: STATUS_LABELS[agent.status] ?? agent.status,
+    source: "阶段状态",
+    progress: agent.progress,
+  };
 }
 
 function isAgentSnapshot(payload) {
@@ -287,8 +441,12 @@ export default function MultiAgentCollaborationPanel({
   tasksLoading,
   selectedTask,
   requestContext,
+  runProgress,
+  runProgressState,
+  runProgressError,
+  onRefreshRunProgress,
   onSelectTask,
-  onOpenWorkflow,
+  onOpenCodeWorkspace,
   onOpenHumanCollaboration,
 }) {
   const [snapshot, setSnapshot] = useState(null);
@@ -308,6 +466,40 @@ export default function MultiAgentCollaborationPanel({
   const isPersistentRuntime = snapshot?.runtime_mode === "persistent_agent_runtime";
   const runtimeModeLabel = RUNTIME_MODE_LABELS[snapshot?.runtime_mode] ?? "未读取";
   const persistentAgentCount = agents.filter((agent) => agent.runtimeSource === "persistent_agent_runtime").length;
+  const runEvents = Array.isArray(runProgress?.events) ? runProgress.events : [];
+  const observerInsights = Array.isArray(runProgress?.insights) ? runProgress.insights : [];
+  const latestObserverInsight = observerInsights.length ? observerInsights[observerInsights.length - 1] : null;
+  const observerActivity = getReadableRuntimeActivity(runProgress);
+  const runDiagnosis = getRunDiagnosis(selectedTask, runProgress);
+  const runErrorArtifactPath = getRunErrorArtifactPath(selectedTask, runProgress);
+  const runLeaderboard = Array.isArray(runProgress?.leaderboard) ? runProgress.leaderboard : [];
+  const trainingMetrics = Array.isArray(runProgress?.training_metrics) ? runProgress.training_metrics : [];
+  const latestMetric = trainingMetrics.length ? trainingMetrics[trainingMetrics.length - 1] : null;
+  const runMetricName = selectedTask?.last_run?.metric_name ?? runProgress?.artifacts?.metric_name ?? latestMetric?.metric_name ?? "validation_score";
+  const hasEpochTelemetry = trainingMetrics.some((metric) => typeof metric.epoch === "number" || typeof metric.train_loss === "number" || typeof metric.validation_loss === "number");
+  const runProgressPercent = Math.max(0, Math.min(100, runProgress?.progress_percent ?? 0));
+  const hasModelBudget = typeof runProgress?.current_model_elapsed_seconds === "number"
+    && Number.isFinite(runProgress.current_model_elapsed_seconds)
+    && typeof runProgress?.current_model_time_budget_seconds === "number"
+    && Number.isFinite(runProgress.current_model_time_budget_seconds)
+    && runProgress.current_model_time_budget_seconds > 0;
+  const modelBudgetPercent = hasModelBudget
+    ? Math.max(0, Math.min(100, (runProgress.current_model_elapsed_seconds / runProgress.current_model_time_budget_seconds) * 100))
+    : null;
+  const modelCountLabel = runProgress?.completed_model_count != null || runProgress?.total_model_count
+    ? `${runProgress?.completed_model_count ?? 0}${runProgress?.total_model_count ? `/${runProgress.total_model_count}` : ""}`
+    : "暂无";
+  const agentsWithSignals = useMemo(
+    () => agents.map((agent) => ({
+      ...agent,
+      runtimeSignal: buildAgentRuntimeSignal(agent, runProgress, modelCountLabel),
+    })),
+    [agents, runProgress, modelCountLabel],
+  );
+  const currentStageLabel = getStageDisplayLabel(runProgress);
+  const iterationLabel = runProgress?.current_iteration && runProgress?.total_iterations
+    ? `${runProgress.current_iteration}/${runProgress.total_iterations}`
+    : "暂无";
 
   useEffect(() => {
     if (!selectedTask?.id || !requestContext?.accessToken || !requestContext?.teamId) {
@@ -325,7 +517,7 @@ export default function MultiAgentCollaborationPanel({
     api.taskAgentCollaboration(selectedTask.id, requestContext)
       .then((payload) => {
         if (!active) return;
-        if (!isAgentSnapshot(payload)) throw new Error("后端 Agent 快照缺少 agents/events 字段。");
+        if (!isAgentSnapshot(payload)) throw new Error("后端运行快照缺少必要字段。");
         setCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId, payload);
         setSnapshot(payload);
         setState("ready");
@@ -347,7 +539,7 @@ export default function MultiAgentCollaborationPanel({
     setError("");
     try {
       const payload = await api.taskAgentCollaboration(selectedTask.id, { ...requestContext, noCache: true });
-      if (!isAgentSnapshot(payload)) throw new Error("后端 Agent 快照缺少 agents/events 字段。");
+      if (!isAgentSnapshot(payload)) throw new Error("后端运行快照缺少必要字段。");
       setCachedCollaborationSnapshot(selectedTask.id, requestContext.teamId, payload);
       setSnapshot(payload);
     } catch (refreshError) {
@@ -363,7 +555,7 @@ export default function MultiAgentCollaborationPanel({
         <div className="section-head">
           <div>
             <h3>任务上下文</h3>
-            <p>选择一个任务后，下面的 Agent 状态会读取后端持久化 Agent Runtime 与事件流。</p>
+            <p>这里展示任务运行时的进度、日志摘要、事件、候选模型对比和训练记录。</p>
           </div>
           <div className="agent-toolbar-actions">
             {tasks?.length ? (
@@ -372,7 +564,7 @@ export default function MultiAgentCollaborationPanel({
                 <select value={selectedTask?.id ?? ""} onChange={(event) => onSelectTask?.(event.target.value)}>
                   {tasks.map((task) => (
                     <option key={task.id} value={task.id}>
-                      {task.name} / {TASK_STATUS_LABELS[task.status] ?? task.status}
+                      {task.name}
                     </option>
                   ))}
                 </select>
@@ -381,43 +573,132 @@ export default function MultiAgentCollaborationPanel({
             <button type="button" className="chip-button" onClick={handleRefresh} disabled={!selectedTask?.id || state === "loading"}>
               {state === "loading" ? "同步中..." : "同步状态"}
             </button>
+            <button type="button" className="chip-button" onClick={onRefreshRunProgress} disabled={!selectedTask?.id || runProgressState === "loading" || runProgressState === "refreshing"}>
+              {runProgressState === "loading" || runProgressState === "refreshing" ? "刷新运行中..." : "刷新运行"}
+            </button>
           </div>
         </div>
         {!tasks?.length && !tasksLoading ? <div className="empty-state compact">当前还没有任务。</div> : null}
       </section>
 
+      <section className={`section-card live-run-card ${runProgress?.stale ? "danger" : ""}`}>
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">系统观察</p>
+            <h3>实时运行判断</h3>
+            <p>{observerActivity || "系统正在等待可解释的日志、指标或生成文件信号。"}</p>
+          </div>
+          {runProgress ? <span className={`runtime-pill ${getRunTone(runProgress)}`}>{getRunPillLabel(runProgress)}</span> : null}
+        </div>
+        {runProgressError ? <div className="error-banner">{runProgressError}</div> : null}
+        {!selectedTask ? <div className="empty-state compact">先选择一个任务。</div> : null}
+        {selectedTask && !runProgress && !runProgressError ? <div className="empty-state compact">暂无实时运行数据。点击运行任务后，后端会持续写入 stdout/stderr 和运行事件。</div> : null}
+        {runDiagnosis && ["blocked", "failed", "stale"].includes(runProgress?.status) ? (
+          <div className="callout conversation-warning">
+            <strong>诊断结论</strong>
+            <p>{runDiagnosis}</p>
+            {runErrorArtifactPath ? <p>报错文件：<span className="mono-text">{runErrorArtifactPath}</span></p> : null}
+            {runErrorArtifactPath ? (
+              <button type="button" className="ghost-button" onClick={() => onOpenCodeWorkspace?.()}>
+                查看报错文件
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {runProgress ? (
+          <>
+            <div className="task-run-progress-meter live-run-meter" aria-label="运行进度">
+              <span style={{ width: `${runProgressPercent}%` }} />
+            </div>
+            <div className="live-run-meter-caption">
+              <span>模型级进度：{modelCountLabel}</span>
+              <strong>{runProgressPercent}%</strong>
+            </div>
+            <div className="summary-grid live-run-grid">
+              <article className="summary-item"><span>观察阶段</span><strong>{currentStageLabel}</strong></article>
+              <article className="summary-item"><span>当前模型</span><strong>{getModelDisplayLabel(runProgress)}</strong></article>
+              <article className="summary-item"><span>当前/最近模型耗时</span><strong>{formatElapsedSeconds(runProgress.current_model_elapsed_seconds)}</strong></article>
+              <article className="summary-item"><span>模型时间预算</span><strong>{formatElapsedSeconds(runProgress.current_model_time_budget_seconds)}</strong></article>
+              <article className="summary-item"><span>搜索轮次</span><strong>{runProgress.current_iteration && runProgress.total_iterations ? `${runProgress.current_iteration}/${runProgress.total_iterations}` : "暂无"}</strong></article>
+              <article className="summary-item"><span>训练 Epoch</span><strong>{runProgress.current_epoch && runProgress.total_epochs ? `${runProgress.current_epoch}/${runProgress.total_epochs}` : "未上报"}</strong></article>
+              <article className="summary-item"><span>候选模型</span><strong>{modelCountLabel}</strong></article>
+              <article className="summary-item"><span>最后 Heartbeat</span><strong>{formatDateTime(runProgress.last_log_at)}</strong></article>
+              <article className="summary-item"><span>无更新时间</span><strong>{formatElapsedSeconds(runProgress.seconds_since_last_update)}</strong></article>
+              <article className="summary-item"><span>主要指标</span><strong>{formatMetricName(runMetricName)}</strong></article>
+              <article className="summary-item"><span>判断方向</span><strong>{getMetricDirectionLabel(runMetricName)}</strong></article>
+              <article className="summary-item"><span>最新候选排序分</span><strong>{formatNumber(runProgress.latest_validation_score)}</strong></article>
+            </div>
+            <div className="notice-banner compact">{getValidationScoreExplanation(runMetricName)}</div>
+            {modelBudgetPercent !== null ? (
+              <div className="runtime-detail-bars">
+                <div className="runtime-detail-bar-row">
+                  <span>当前模型时间预算消耗</span>
+                  <div className="runtime-detail-bar"><span style={{ width: `${modelBudgetPercent}%` }} /></div>
+                  <strong>{Math.round(modelBudgetPercent)}%</strong>
+                </div>
+                <small>这是时间预算消耗，不是 RF/KNN/ExtraTrees 内部训练百分比。</small>
+              </div>
+            ) : null}
+            {runProgress.stale_reason ? <p className="danger-text">{runProgress.stale_reason}</p> : null}
+            {runProgress.telemetry_note ? <div className="notice-banner compact">{runProgress.telemetry_note}</div> : null}
+            {observerInsights.length ? (
+              <div className="observer-insight-panel">
+                <div className="observer-insight-head">
+                  <strong>运行观察时间线</strong>
+                  {latestObserverInsight?.source ? <span>最新来源：{latestObserverInsight.source}</span> : null}
+                </div>
+                <div className="observer-insight-list">
+                  {observerInsights.slice(-8).reverse().map((insight, index) => (
+                    <article key={`${insight.event_type}-${insight.headline}-${index}`} className={`observer-insight ${getInsightTone(insight.severity)}`}>
+                      <div>
+                        <strong>{insight.headline}</strong>
+                        <span>{formatDateTime(insight.time)}</span>
+                      </div>
+                      {insight.detail ? <p>{insight.detail}</p> : null}
+                      <small>
+                        {WORKFLOW_STAGE_LABELS[insight.stage] ?? insight.stage ?? "全局"}
+                        {insight.source ? ` · ${insight.source}` : ""}
+                        {insight.evidence && !isRawRuntimeDebugText(insight.evidence) ? ` · 证据：${compactText(friendlyRuntimeText(insight.evidence), 110)}` : ""}
+                      </small>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {runProgress.output_dir ? <p className="mono-text task-run-progress-path">{runProgress.output_dir}</p> : null}
+          </>
+        ) : null}
+      </section>
+
       <section className="section-card agent-graph-card">
         <div className="section-head">
           <div>
-            <p className="eyebrow">Agent Collaboration</p>
-            <h3>多 Agent 协同拓扑</h3>
-            <p>节点代表 AI4ML 工作流中的 6 个后端 Agent Runtime，连线代表阶段产物和决策流向。</p>
+            <p className="eyebrow">运行详情</p>
+            <h3>自动建模执行图</h3>
+            <p>这里展示系统按步骤推进任务的过程，以及每一步生成了哪些结果。</p>
           </div>
           <div className="agent-console-actions">
             {selectedTask ? <span className="runtime-pill info">{selectedTask.name}</span> : null}
             {selectedTask ? (
               <span className={`runtime-pill ${isPersistentRuntime ? "success" : "warning"}`}>
-                运行模式：{runtimeModeLabel}
+                记录方式：{runtimeModeLabel}
               </span>
             ) : null}
-            <button type="button" className="ghost-button" onClick={() => onOpenWorkflow?.()}>
-              阶段详情
-            </button>
           </div>
         </div>
 
         {error ? <div className="error-banner">{error}</div> : null}
-        {!selectedTask ? <div className="empty-state">先选择一个任务，再查看 Agent 协同状态。</div> : null}
+        {!selectedTask ? <div className="empty-state">先选择一个任务，再查看运行详情。</div> : null}
 
         {selectedTask ? (
           <>
             <div className="agent-graph-summary">
-              <article><span>Agent 数</span><strong>{agents.length}</strong></article>
-              <article><span>已完成</span><strong>{completedCount}</strong></article>
-              <article><span>活跃/等待</span><strong>{activeCount}</strong></article>
-              <article><span>持久化 Runtime</span><strong>{persistentAgentCount}</strong></article>
-              <article><span>关键产物</span><strong>{artifactCount}</strong></article>
-              <article><span>Agent 通信</span><strong>{messageCount}</strong></article>
+              <article><span>执行步骤</span><strong>{agents.length}</strong></article>
+              <article><span>当前阶段</span><strong>{currentStageLabel}</strong></article>
+              <article><span>候选模型</span><strong>{modelCountLabel}</strong></article>
+              <article><span>搜索轮次</span><strong>{iterationLabel}</strong></article>
+              <article><span>生成文件</span><strong>{artifactCount}</strong></article>
+              <article><span>步骤记录</span><strong>{messageCount}</strong></article>
             </div>
 
             <div className="agent-network">
@@ -444,16 +725,17 @@ export default function MultiAgentCollaborationPanel({
                   );
                 })}
               </svg>
-              {agents.map((agent) => (
+              {agentsWithSignals.map((agent) => (
                 <article
                   key={agent.id}
-                  className={`agent-node ${agent.tone}`}
+                  className={`agent-node ${agent.tone} ${agent.runtimeSignal.isCurrentStage ? "active-stage" : ""}`}
                   style={{ left: `${agent.x}%`, top: `${agent.y}%` }}
                 >
                   <span className="agent-node-icon">{agent.shortRole}</span>
                   <strong>{agent.name}</strong>
                   <em>{agent.role}</em>
-                  <small>{STATUS_LABELS[agent.status] ?? agent.status}</small>
+                  <p>{agent.runtimeSignal.headline}</p>
+                  <small>{agent.runtimeSignal.detail || (STATUS_LABELS[agent.status] ?? agent.status)}</small>
                 </article>
               ))}
             </div>
@@ -461,12 +743,90 @@ export default function MultiAgentCollaborationPanel({
         ) : null}
       </section>
 
+      <details className="expert-advanced-fold">
+        <summary>
+          <span>展开专业运行细节</span>
+          <small>训练监控、候选模型对比、步骤状态、事件和日志文件</small>
+        </summary>
+        <div className="expert-advanced-stack">
+      <div className="live-training-grid">
+        <section className="section-card">
+          <div className="section-head">
+            <div>
+              <h3>训练监控</h3>
+              <p>展示真实训练记录或候选模型对比。没有训练曲线的模型不会显示伪造曲线。</p>
+            </div>
+            {latestMetric ? <span className="runtime-pill info">{latestMetric.model || "训练指标"}</span> : null}
+          </div>
+          {hasEpochTelemetry ? (
+            <div className="training-metric-list">
+              {trainingMetrics.slice(-16).map((metric, index) => {
+                const primaryValue = typeof metric.validation_loss === "number"
+                  ? metric.validation_loss
+                  : typeof metric.train_loss === "number"
+                    ? metric.train_loss
+                    : metric.validation_score;
+                const barWidth = typeof primaryValue === "number" && Number.isFinite(primaryValue)
+                  ? `${Math.max(4, Math.min(100, Math.abs(primaryValue) * 100))}%`
+                  : "4%";
+                return (
+                  <article key={`${metric.source || "metric"}-${index}`} className="training-metric-row">
+                    <div>
+                      <strong>{metric.model || "未命名模型"}</strong>
+                      <span>{metric.epoch ? `epoch ${metric.epoch}${metric.total_epochs ? `/${metric.total_epochs}` : ""}` : metric.iteration ? `iteration ${metric.iteration}${metric.total_iterations ? `/${metric.total_iterations}` : ""}` : "指标点"}</span>
+                    </div>
+                    <div className="training-metric-bar"><span style={{ width: barWidth }} /></div>
+                    <small>train loss {formatNumber(metric.train_loss)} / val loss {formatNumber(metric.validation_loss)} / ranking score {formatNumber(metric.validation_score)}</small>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-state compact">当前没有训练曲线。对 RF、KNN、ExtraTrees 等模型，这是正常情况；请看候选模型完成数和模型对比表。</div>
+          )}
+        </section>
+
+        <section className="section-card">
+          <div className="section-head">
+            <div>
+              <h3>候选模型对比</h3>
+              <p>这里展示系统实际比较过的候选模型结果。</p>
+            </div>
+          </div>
+          {!runLeaderboard.length ? <div className="empty-state compact">还没有读取到候选模型对比结果。</div> : null}
+          {runLeaderboard.length ? (
+            <div className="table-wrap compact-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>模型</th>
+                    <th>候选排序分</th>
+                    <th>训练耗时</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runLeaderboard.slice(0, 8).map((row, index) => (
+                    <tr key={`${row.model}-${row.rank ?? index}`}>
+                      <td>{row.rank ?? index + 1}</td>
+                      <td>{row.model}</td>
+                      <td>{formatNumber(row.validation_score)}</td>
+                      <td>{formatDuration(row.fit_time)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+      </div>
+
       <div className="agent-bottom-grid">
         <section className="section-card agent-status-card">
           <div className="section-head">
             <div>
-              <h3>Agent 运行状态</h3>
-              <p>进度、模型、连接器、Runtime 标识、耗时和产物都来自后端持久化记录。</p>
+              <h3>执行步骤状态</h3>
+              <p>进度、模型、AI 服务、耗时和生成文件都来自系统真实记录。</p>
             </div>
             {selectedTask ? (
               <button type="button" className="primary-button" onClick={() => onOpenHumanCollaboration?.(selectedTask.id)}>
@@ -479,37 +839,37 @@ export default function MultiAgentCollaborationPanel({
             <table>
               <thead>
                 <tr>
-                  <th>Agent</th>
+                  <th>步骤</th>
                   <th>角色</th>
-                  <th>当前工作</th>
-                  <th>进度</th>
+                  <th>当前信号</th>
+                  <th>来源</th>
                   <th>模型</th>
-                  <th>Runtime</th>
+                  <th>运行记录</th>
                   <th>耗时</th>
                   <th>最后更新</th>
                 </tr>
               </thead>
               <tbody>
-                {agents.map((agent) => (
+                {agentsWithSignals.map((agent) => (
                   <tr key={agent.id}>
                     <td><span className={`agent-dot ${agent.tone}`} />{agent.name}</td>
                     <td>{agent.role}</td>
                     <td>
                       <div className="agent-task-cell">
-                        <span>{agent.currentTask}</span>
-                        {agent.logExcerpt ? <small>日志：{agent.logExcerpt}</small> : null}
+                        <span>{agent.runtimeSignal.headline}</span>
+                        {agent.runtimeSignal.detail ? <small>{agent.runtimeSignal.detail}</small> : null}
                       </div>
                     </td>
                     <td>
-                      <div className="agent-progress-cell">
-                        <span className={`agent-progress-bar ${agent.tone}`} style={{ width: `${agent.progress}%` }} />
+                      <div className="agent-runtime-cell">
+                        <strong>{agent.runtimeSignal.source}</strong>
+                        <small>{STATUS_LABELS[agent.status] ?? agent.status}</small>
                       </div>
-                      <small>{agent.progress}%</small>
                     </td>
                     <td>{agent.modelName}</td>
                     <td>
                       <div className="agent-runtime-cell">
-                        <strong>{agent.runtimeSource === "persistent_agent_runtime" ? "持久化" : "阶段投影"}</strong>
+                <strong>{agent.runtimeSource === "persistent_agent_runtime" ? "已保存" : "按阶段"}</strong>
                         <small title={agent.workerId || agent.runtimeId || ""}>{compactIdentifier(agent.workerId || agent.runtimeId)}</small>
                       </div>
                     </td>
@@ -530,21 +890,28 @@ export default function MultiAgentCollaborationPanel({
         <section className="section-card agent-event-card">
           <div className="section-head">
             <div>
-              <h3>实时日志</h3>
-              <p>按更新时间展示后端 Agent Runtime 事件、阶段事件和人工协同事件。</p>
+              <h3>实时事件</h3>
+              <p>这里保留运行事件；原始日志只在需要排查时通过报错文件查看。</p>
             </div>
           </div>
-          {!events.length ? <div className="empty-state compact">当前任务还没有可展示的 Agent 事件。</div> : null}
-          {events.length ? (
+          {![...events, ...runEvents].length ? <div className="empty-state compact">当前任务还没有可展示的运行事件。</div> : null}
+          {[...events, ...runEvents].length ? (
             <div className="agent-event-list">
-              {events.map((event) => (
+              {[...events, ...runEvents.map((event, index) => ({
+                id: `run-${index}-${event.time || event.message}`,
+                time: event.time,
+                text: event.message,
+                kind: event.event_type,
+                artifactRefs: [],
+                tone: event.event_type === "error" ? "failed" : event.stage === "training_validation" ? "running" : "success",
+              }))].sort((left, right) => new Date(right.time || 0).getTime() - new Date(left.time || 0).getTime()).slice(0, 24).map((event) => (
                 <article key={event.id} className={`agent-event ${event.tone}`}>
                   <span>
                     {formatDateTime(event.time)}
                     <em>{EVENT_KIND_LABELS[event.kind] ?? event.kind}</em>
-                    {event.artifactRefs.length ? <em>{event.artifactRefs.length} 个产物</em> : null}
+                    {event.artifactRefs.length ? <em>{event.artifactRefs.length} 个生成文件</em> : null}
                   </span>
-                  <p>{event.text}</p>
+                  <p>{friendlyRuntimeText(event.text)}</p>
                 </article>
               ))}
             </div>
@@ -552,14 +919,34 @@ export default function MultiAgentCollaborationPanel({
         </section>
       </div>
 
+      <section className="section-card task-detail-fold live-log-details">
+        <summary>
+          <div>
+            <h3>报错日志文件</h3>
+            <p>运行详情只展示诊断结论；需要人工排查时再打开保留的日志文件。</p>
+          </div>
+          {runErrorArtifactPath ? <span className="disclosure-action">已保留</span> : null}
+        </summary>
+        {runErrorArtifactPath ? (
+          <div className="callout compact">
+            <p><span className="mono-text">{runErrorArtifactPath}</span></p>
+            <button type="button" className="ghost-button" onClick={() => onOpenCodeWorkspace?.()}>
+              查看报错文件
+            </button>
+          </div>
+        ) : (
+          <div className="empty-state compact">当前还没有可定位的报错日志文件。</div>
+        )}
+      </section>
+
       <section className="section-card agent-message-card">
         <div className="section-head">
           <div>
-            <h3>Agent 讨论流</h3>
-            <p>展示后端在阶段推进中持久化的 Agent 间协作、交接、确认和阻塞消息。</p>
+            <h3>步骤记录</h3>
+            <p>展示系统在每一步推进时保存的交接、确认和阻塞消息。</p>
           </div>
         </div>
-        {!messages.length ? <div className="empty-state compact">当前任务还没有 Agent 间通信记录。</div> : null}
+        {!messages.length ? <div className="empty-state compact">当前任务还没有步骤记录。</div> : null}
         {messages.length ? (
           <div className="agent-message-list">
             {messages.map((message) => {
@@ -572,9 +959,9 @@ export default function MultiAgentCollaborationPanel({
                     <span>→</span>
                     <strong>{toName}</strong>
                     <em>{MESSAGE_TYPE_LABELS[message.type] ?? message.type}</em>
-                    {message.artifactRefs.length ? <em>{message.artifactRefs.length} 个产物</em> : null}
+                    {message.artifactRefs.length ? <em>{message.artifactRefs.length} 个生成文件</em> : null}
                   </div>
-                  <p>{message.content}</p>
+                  <p>{friendlyRuntimeText(message.content)}</p>
                   <small>{formatDateTime(message.time)}</small>
                 </article>
               );
@@ -582,6 +969,8 @@ export default function MultiAgentCollaborationPanel({
           </div>
         ) : null}
       </section>
+        </div>
+      </details>
     </div>
   );
 }

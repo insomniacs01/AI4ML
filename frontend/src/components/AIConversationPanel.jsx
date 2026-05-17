@@ -1,85 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 
-const PHASE_LABELS = {
-  analysis: "任务解析",
-  mlzero: "MLZero 执行",
-};
+import { formatMetricName, getMetricDirectionLabel } from "../lib/metrics.js";
+import {
+  formatDateTime,
+  formatProblemType,
+  formatTaskStatus,
+  getTaskStatusTone,
+  isRecoverableRunBlockedTask,
+} from "../lib/taskPresentation.js";
 
 const LARGE_TEXT_PREVIEW_CHARS = 12_000;
 const MESSAGE_RENDER_LIMIT = 80;
-const SYSTEM_TURN_RENDER_LIMIT = 60;
-const INTERNAL_STATE_RENDER_LIMIT = 60;
-
-const STAGE_LABELS = {
-  task_analysis: "任务解析",
-  python_coder: "Python 代码生成",
-  bash_coder: "Shell / PowerShell 包装",
-  executer: "执行评估",
-  error_analyzer: "错误分析",
-  chat: "补充对话",
-};
-
-const ORIGIN_LABELS = {
-  ai_model: "AI 模型",
-  local_runtime: "本地运行时",
-  unknown: "未知来源",
-};
-
-const ORIGIN_TONES = {
-  ai_model: "success",
-  local_runtime: "warning",
-  unknown: "warning",
-};
-
-const INTERNAL_STATE_CATEGORY_LABELS = {
-  decision: "决策",
-  error: "错误",
-  log: "日志",
-  retrieval: "检索",
-  code: "代码状态",
-  summary: "摘要",
-  metric: "指标",
-  artifact: "工件",
-  other: "其他",
-};
-
-const PROMPT_EXPLANATIONS = {
-  task_analysis: "识别目标列、任务类型和建议指标。",
-  python_coder: "生成或修复训练脚本。",
-  bash_coder: "生成本机执行包装脚本。",
-  executer: "判断本轮运行是否成功。",
-  error_analyzer: "总结失败原因并指导下一轮修复。",
-  chat: "补充说明或辅助对话。",
-};
-
-const TASK_STATUS_LABELS = {
-  draft: "草稿",
-  uploaded: "已上传数据集",
-  planning: "规划中",
-  running: "运行中",
-  paused_for_review: "等待复核",
-  waiting_human: "等待人工协同",
-  completed: "已完成",
-  failed: "失败",
-  published: "已发布",
-};
-
-const TASK_STATUS_TONES = {
-  draft: "warning",
-  uploaded: "info",
-  planning: "info",
-  running: "info",
-  paused_for_review: "warning",
-  waiting_human: "warning",
-  completed: "success",
-  failed: "danger",
-  published: "success",
-};
-
-const PROBLEM_TYPE_LABELS = {
-  classification: "分类",
-  regression: "回归",
-};
 
 const INTERACTIVE_ORIGIN_LABELS = {
   user: "你",
@@ -91,66 +22,8 @@ function cx(...parts) {
   return parts.filter(Boolean).join(" ");
 }
 
-function formatDateTime(value) {
-  if (!value) return "时间未记录";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-}
-
-function formatPhase(value) {
-  return PHASE_LABELS[value] ?? value ?? "未指定";
-}
-
-function formatOrigin(value) {
-  return ORIGIN_LABELS[value] ?? value ?? "未知来源";
-}
-
-function formatTaskStatus(value) {
-  return TASK_STATUS_LABELS[value] ?? value ?? "未知状态";
-}
-
-function formatTaskStatusTone(value) {
-  return TASK_STATUS_TONES[value] ?? "warning";
-}
-
-function formatInternalStateCategory(value) {
-  return INTERNAL_STATE_CATEGORY_LABELS[value] ?? value ?? "其他";
-}
-
-function formatProblemType(value) {
-  return PROBLEM_TYPE_LABELS[value] ?? value ?? "未解析";
-}
-
 function formatInteractiveOrigin(value) {
   return INTERACTIVE_ORIGIN_LABELS[value] ?? value ?? "未知";
-}
-
-function getOriginTone(value) {
-  return ORIGIN_TONES[value] ?? "warning";
-}
-
-function getOriginAvatar(value) {
-  if (value === "ai_model") return "AI";
-  if (value === "local_runtime") return "RT";
-  return "?";
-}
-
-function getResponseNote(value) {
-  if (value === "local_runtime") return "本地运行逻辑";
-  if (value === "ai_model") return "真实模型调用";
-  return "来源未确认";
-}
-
-function getTurnMeta(item, index) {
-  const stageLabel = STAGE_LABELS[item.stage] ?? item.stage ?? "未命名阶段";
-  const segments = [`Round ${index + 1}`, formatPhase(item.phase), stageLabel];
-  if (item.node) segments.splice(2, 0, item.node);
-  return segments.filter(Boolean).join(" / ");
-}
-
-function formatEntryTitle(item) {
-  const stageLabel = STAGE_LABELS[item.stage] ?? item.title ?? item.stage ?? "未命名阶段";
-  return item.node ? `${item.node} / ${stageLabel}` : stageLabel;
 }
 
 function getMessageText(value) {
@@ -166,18 +39,11 @@ function formatMetricValue(value) {
 
 function buildResultSummary(task) {
   if (task?.last_run?.metric_name && typeof task?.last_run?.metric_value === "number") {
-    return `${task.last_run.metric_name}: ${formatMetricValue(task.last_run.metric_value)}`;
+    return `${formatMetricName(task.last_run.metric_name)}（${getMetricDirectionLabel(task.last_run.metric_name)}）: ${formatMetricValue(task.last_run.metric_value)}`;
   }
+  if (isRecoverableRunBlockedTask(task)) return "自动处理受阻，等待重试";
   if (task?.status === "failed" && task?.notes) return "最近一次运行失败";
   return "还没有运行结果";
-}
-
-function getConversationCountLabel(count) {
-  return count ? `${count} 组` : "0 组";
-}
-
-function getInternalStateCountLabel(count) {
-  return count ? `${count} 条` : "0 条";
 }
 
 function getInteractiveCountLabel(count) {
@@ -186,7 +52,7 @@ function getInteractiveCountLabel(count) {
 
 function formatTokenUsage(usage) {
   if (!usage || typeof usage.total_tokens !== "number") return "未记录";
-  return `${usage.total_tokens} tokens`;
+  return `${usage.total_tokens} 用量`;
 }
 
 function clipText(value, limit = 1200) {
@@ -213,20 +79,20 @@ function buildHumanRequestPresetFromConversation(task, prompt, assistantMessage)
   return {
     stage: inferHumanStageFromTask(task),
     request_type: inferHumanRequestTypeFromTask(task),
-    title: "确认 AI 对话中的关键问题",
+    title: "确认 AI 记录中的关键问题",
     summary: prompt,
     suggested_action: assistantMessage?.content
       ? `请结合最近一次 AI 回复判断是否需要转成显式修改要求：\n${clipText(assistantMessage.content)}`
       : "请人工判断这个问题是否需要转成显式修改要求，然后再决定是否继续。",
     artifact_paths: [],
-    notice: "已把当前对话里的问题带入协同请求表单。",
+    notice: "已把当前 AI 记录里的问题带入复核请求表单。",
   };
 }
 
 function getInteractiveMessageMeta(message) {
   if (message.role === "user") return "你的 prompt";
-  if (message.status === "error") return "连接器错误";
-  return "当前连接器回复";
+  if (message.status === "error") return "AI 服务错误";
+  return "当前 AI 回复";
 }
 
 function getInteractiveBubbleTone(message) {
@@ -276,7 +142,6 @@ export default function AIConversationPanel({
   onOpenTaskDetails,
 }) {
   const [draftPrompt, setDraftPrompt] = useState("");
-  const [activeView, setActiveView] = useState("chat");
   const [expandedTextIds, setExpandedTextIds] = useState(() => new Set());
 
   useEffect(() => {
@@ -284,12 +149,8 @@ export default function AIConversationPanel({
     setExpandedTextIds(new Set());
   }, [selectedTask?.id]);
 
-  const items = Array.isArray(conversationData?.items) ? conversationData.items : [];
   const interactiveMessages = Array.isArray(conversationData?.interactive_messages) ? conversationData.interactive_messages : [];
-  const internalStates = Array.isArray(conversationData?.internal_states) ? conversationData.internal_states : [];
   const visibleInteractiveMessages = interactiveMessages.slice(-MESSAGE_RENDER_LIMIT);
-  const visibleItems = items.slice(0, SYSTEM_TURN_RENDER_LIMIT);
-  const visibleInternalStates = internalStates.slice(0, INTERNAL_STATE_RENDER_LIMIT);
   const warnings = Array.isArray(conversationData?.warnings) ? conversationData.warnings : [];
   const taskItems = Array.isArray(tasks) ? tasks : [];
   const latestAssistantMessage = useMemo(
@@ -352,11 +213,11 @@ export default function AIConversationPanel({
       <div className="ai-chat-layout">
         <aside className="ai-chat-sidebar">
           <div className="ai-chat-sidebar-head">
-            <p className="eyebrow">Conversation</p>
+            <p className="eyebrow">AI 对话</p>
             <h3>{selectedTask?.name ?? "选择任务"}</h3>
             {selectedTask ? (
-              <span className={`runtime-pill ${formatTaskStatusTone(selectedTask.status)}`}>
-                {formatTaskStatus(selectedTask.status)}
+              <span className={`runtime-pill ${getTaskStatusTone(isRecoverableRunBlockedTask(selectedTask) ? "blocked" : selectedTask.status)}`}>
+                {formatTaskStatus(isRecoverableRunBlockedTask(selectedTask) ? "blocked" : selectedTask.status)}
               </span>
             ) : null}
           </div>
@@ -381,9 +242,7 @@ export default function AIConversationPanel({
               <ConversationMetric label="数据集" value={selectedTask.dataset_filename ?? "未上传"} />
               <ConversationMetric label="任务类型" value={formatProblemType(selectedTask.problem_type)} />
               <ConversationMetric label="最近结果" value={buildResultSummary(selectedTask)} />
-              <ConversationMetric label="系统日志" value={getConversationCountLabel(items.length)} />
               <ConversationMetric label="手动聊天" value={getInteractiveCountLabel(interactiveMessages.length)} />
-              <ConversationMetric label="内部状态" value={getInternalStateCountLabel(internalStates.length)} />
             </div>
           ) : null}
 
@@ -410,29 +269,7 @@ export default function AIConversationPanel({
 
         <div className="ai-chat-main">
           <div className="ai-chat-mainbar">
-            <div className="ai-chat-tabs" role="tablist" aria-label="AI 对话视图">
-              <button
-                type="button"
-                className={cx("ai-chat-tab", activeView === "chat" && "active")}
-                onClick={() => setActiveView("chat")}
-              >
-                手动对话 <span>{getInteractiveCountLabel(interactiveMessages.length)}</span>
-              </button>
-              <button
-                type="button"
-                className={cx("ai-chat-tab", activeView === "system" && "active")}
-                onClick={() => setActiveView("system")}
-              >
-                系统日志 <span>{getConversationCountLabel(items.length)}</span>
-              </button>
-              <button
-                type="button"
-                className={cx("ai-chat-tab", activeView === "states" && "active")}
-                onClick={() => setActiveView("states")}
-              >
-                内部状态 <span>{getInternalStateCountLabel(internalStates.length)}</span>
-              </button>
-            </div>
+            <p className="ai-chat-scope-note">AI 记录只展示用户手动对话；系统日志、内部状态和训练事件统一在运行控制台查看。</p>
           </div>
 
           {error ? <div className="error-banner ai-chat-inline-error">{error}</div> : null}
@@ -441,7 +278,7 @@ export default function AIConversationPanel({
             <div className="empty-state ai-chat-empty">先选择一个任务。</div>
           ) : null}
 
-          {selectedTask && activeView === "chat" ? (
+          {selectedTask ? (
             <div className="ai-chat-panel ai-chat-thread-panel">
               <div className="ai-chat-thread" aria-live="polite">
                 {!interactiveMessages.length ? (
@@ -478,8 +315,8 @@ export default function AIConversationPanel({
                           </div>
                           {!isUser ? (
                             <div className="ai-chat-tokenline">
-                              {message.model_name ? <span>Model: {message.model_name}</span> : null}
-                              <span>Token: {formatTokenUsage(message.token_usage)}</span>
+                              {message.model_name ? <span>模型：{message.model_name}</span> : null}
+                              <span>用量：{formatTokenUsage(message.token_usage)}</span>
                             </div>
                           ) : null}
                         </div>
@@ -507,7 +344,7 @@ export default function AIConversationPanel({
                     onClick={handleOpenHumanRequestDraft}
                     disabled={!selectedTask || chatSending || !draftPrompt.trim()}
                   >
-                    转成人机协同
+                    转成复核待办
                   </button>
                   <button
                     type="submit"
@@ -518,80 +355,6 @@ export default function AIConversationPanel({
                   </button>
                 </div>
               </form>
-            </div>
-          ) : null}
-
-          {selectedTask && activeView === "system" ? (
-            <div className="ai-chat-panel ai-log-panel">
-              {!items.length ? (
-                <div className="empty-state ai-chat-empty">
-                  {loading ? "正在读取系统日志..." : "这个任务暂时还没有系统 prompt / response 记录。"}
-                </div>
-              ) : (
-                <div className="ai-system-turn-list">
-                  {items.length > SYSTEM_TURN_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染前 {SYSTEM_TURN_RENDER_LIMIT} 组系统记录，避免大日志拖慢页面。</div> : null}
-                  {visibleItems.map((item, index) => (
-                    <details key={item.id} className="ai-system-turn" open={index === 0}>
-                      <summary>
-                        <div>
-                          <strong>{formatEntryTitle(item)}</strong>
-                          <span>{getTurnMeta(item, index)}</span>
-                        </div>
-                        <time>{formatDateTime(item.created_at)}</time>
-                      </summary>
-                      <div className="ai-system-turn-grid">
-                        <article className="ai-system-block prompt">
-                          <div className="ai-system-block-head">
-                            <strong>Prompt</strong>
-                            <span>{PROMPT_EXPLANATIONS[item.stage] ?? "当前阶段原始提示词。"}</span>
-                          </div>
-                          {renderLargeText(`system-${item.id}-prompt`, item.prompt)}
-                          {item.prompt_path ? <p className="ai-filepath">{item.prompt_path}</p> : null}
-                        </article>
-                        <article className="ai-system-block response">
-                          <div className="ai-system-block-head">
-                            <strong>{formatOrigin(item.origin)}</strong>
-                            <span>{getResponseNote(item.origin)}</span>
-                          </div>
-                          {renderLargeText(`system-${item.id}-response`, item.response)}
-                          {item.response_path ? <p className="ai-filepath">{item.response_path}</p> : null}
-                          <span className={`runtime-pill ${getOriginTone(item.origin)}`}>{formatOrigin(item.origin)}</span>
-                        </article>
-                      </div>
-                    </details>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {selectedTask && activeView === "states" ? (
-            <div className="ai-chat-panel ai-state-panel">
-              {!internalStates.length ? (
-                <div className="empty-state ai-chat-empty">当前运行目录里还没有可展示的内部状态文件。</div>
-              ) : (
-                <div className="ai-state-list">
-                  {internalStates.length > INTERNAL_STATE_RENDER_LIMIT ? <div className="notice-banner compact">当前仅渲染前 {INTERNAL_STATE_RENDER_LIMIT} 个内部状态文件，避免大日志拖慢页面。</div> : null}
-                  {visibleInternalStates.map((item) => (
-                    <details key={item.id} className="ai-state-card">
-                      <summary>
-                        <div>
-                          <strong>{item.title}</strong>
-                          <span>
-                            {[item.node ?? "runtime", formatInternalStateCategory(item.category), formatDateTime(item.created_at)].join(" / ")}
-                          </span>
-                        </div>
-                        <span className="runtime-pill warning">{formatInternalStateCategory(item.category)}</span>
-                      </summary>
-                      <div className="ai-state-content">
-                        {item.description ? <p>{item.description}</p> : null}
-                        <p className="ai-filepath">{item.path}</p>
-                        {renderLargeText(`state-${item.id}-content`, item.content)}
-                      </div>
-                    </details>
-                  ))}
-                </div>
-              )}
             </div>
           ) : null}
         </div>

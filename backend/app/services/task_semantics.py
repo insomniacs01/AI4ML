@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.app.models.task import TaskRecord, TaskSemanticUpdateRequest, TaskStatus
 from backend.app.services.dataset_profile import build_dataset_profile, dataset_profile_to_plain
+from backend.app.services.task_agent_loop import refresh_agent_loop_after_analysis
 from backend.app.services.task_human_context import ensure_task_human_loop
 
 
@@ -98,6 +99,7 @@ def apply_human_semantic_update(
         }
     )
     task.structured_requirements = existing_requirements
+    refresh_agent_loop_after_analysis(task)
     return task
 
 

@@ -1,4 +1,5 @@
 import logging
+import sys
 
 from rich.progress import (
     Progress,
@@ -30,13 +31,22 @@ def execute_code(code, language, timeout):
     import os
 
     try:
+        timeout_seconds = None
+        try:
+            parsed_timeout = float(timeout) if timeout is not None else 0
+        except (TypeError, ValueError):
+            parsed_timeout = 0
+        if parsed_timeout > 0:
+            timeout_seconds = parsed_timeout
+
         # Set up the command based on language
         env = os.environ.copy()
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUTF8", "1")
 
         if language.lower() == "python":
-            cmd = ["python", "-c", code]
+            python_executable = env.get("AI4ML_PYTHON_EXECUTABLE") or sys.executable
+            cmd = [python_executable, "-c", code]
         elif language.lower() == "bash":
             if os.name == "nt":
                 cmd = ["powershell", "-NoProfile", "-Command", code]
@@ -56,14 +66,48 @@ def execute_code(code, language, timeout):
             env=env,
         )
 
-        if os.name == "nt":
+        if process.stdout is None or process.stderr is None:
+            process.kill()
+            raise RuntimeError("Subprocess did not expose stdout/stderr pipes.")
+
+        if os.name == "nt" or timeout_seconds is None:
+            import threading
+
+            stdout_chunks, stderr_chunks = [], []
+            recent_stdout_lines = deque(maxlen=100)
+            recent_stderr_lines = deque(maxlen=100)
+
+            def stream_reader(stream, chunks, recent_lines):
+                for line in iter(stream.readline, ""):
+                    if line in recent_lines:
+                        continue
+                    recent_lines.append(line)
+                    chunks.append(line)
+                    logger.detail(line.rstrip())
+
+            stdout_thread = threading.Thread(
+                target=stream_reader,
+                args=(process.stdout, stdout_chunks, recent_stdout_lines),
+                daemon=True,
+            )
+            stderr_thread = threading.Thread(
+                target=stream_reader,
+                args=(process.stderr, stderr_chunks, recent_stderr_lines),
+                daemon=True,
+            )
+            stdout_thread.start()
+            stderr_thread.start()
+
             try:
-                stdout, stderr = process.communicate(timeout=timeout)
+                process.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
                 process.kill()
-                stdout, stderr = process.communicate()
-                stdout = (stdout or "") + f"\nProcess reached time limit after {timeout} seconds.\n"
-            return process.returncode == 0, stdout or "", stderr or ""
+                stdout_chunks.append(f"\nProcess reached time limit after {timeout_seconds} seconds.\n")
+                logger.info(f"\nProcess reached time limit after {timeout_seconds} seconds.\n")
+            finally:
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
+            return process.returncode == 0, "".join(stdout_chunks), "".join(stderr_chunks)
 
         stdout_chunks, stderr_chunks = [], []
 
@@ -85,13 +129,13 @@ def execute_code(code, language, timeout):
             disable=not show_progress_bar(),
         ) as progress_context:
 
-            task = progress_context.add_task("", total=timeout)
+            task = progress_context.add_task("", total=timeout_seconds)
 
             while streams:
                 # Calculate remaining time
                 elapsed_time = time.time() - start_time
                 progress_context.update(task, completed=elapsed_time)
-                remaining_time = max(0, timeout - elapsed_time)
+                remaining_time = max(0, timeout_seconds - elapsed_time)
 
                 # Check if we've exceeded timeout
                 if remaining_time <= 0:
@@ -99,8 +143,8 @@ def execute_code(code, language, timeout):
                     time.sleep(3)  # Give it a moment to terminate gracefully
                     if process.poll() is None:  # If still running
                         process.kill()  # Force kill
-                    stdout_chunks.append(f"\nProcess reached time limit after {timeout} seconds.\n")
-                    logger.info(f"\nProcess reached time limit after {timeout} seconds.\n")
+                    stdout_chunks.append(f"\nProcess reached time limit after {timeout_seconds} seconds.\n")
+                    logger.info(f"\nProcess reached time limit after {timeout_seconds} seconds.\n")
                     break
 
                 # Wait for output on either stream with timeout
@@ -165,13 +209,23 @@ class ExecuterAgent(BaseAgent):
     Agent Output:
     """
 
-    def __init__(self, config, manager, language, timeout, executer_llm_config, executer_prompt_template):
+    def __init__(
+        self,
+        config,
+        manager,
+        language,
+        timeout,
+        executer_llm_config,
+        executer_prompt_template,
+        require_validation_score=True,
+    ):
         super().__init__(config=config, manager=manager)
         assert language in ["bash", "python"]
 
         self.timeout = timeout
         self.language = language
         self.executer_llm_config = executer_llm_config
+        self.require_validation_score = require_validation_score
 
         if executer_prompt_template is not None:
             self.executer_prompt_template = executer_prompt_template
@@ -225,7 +279,10 @@ class ExecuterAgent(BaseAgent):
         response = self.executer_llm.assistant_chat(prompt)
 
         # Parse the LLM response to extract decision, error summary, and validation score
-        decision, error_summary, validation_score = self.executer_prompt.parse(response)
+        decision, error_summary, validation_score = self.executer_prompt.parse(
+            response,
+            require_validation_score=self.require_validation_score,
+        )
 
         # Log the decision, error summary, and validation score
         logger.brief(f"Planner decision: {decision}")

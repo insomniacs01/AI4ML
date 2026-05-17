@@ -18,6 +18,7 @@ from backend.app.models.task import (
     TaskCodeWorkspaceResponse,
     TaskRecord,
 )
+from backend.app.services.task_artifacts import build_run_artifact_index, recent_node_dirs
 
 
 TEXT_ARTIFACT_SUFFIXES = {
@@ -42,7 +43,6 @@ EDITABLE_LANGUAGES = {"python", "shell", "powershell", "batch", "sql"}
 MAX_ARTIFACT_SIZE_BYTES = 2 * 1024 * 1024
 MAX_SAVE_SIZE_BYTES = 2 * 1024 * 1024
 VERSION_MANIFEST_NAME = ".ai4ml_code_workspace_versions.json"
-NODE_SCAN_LIMIT = 16
 GROUP_ORDER = {
     "generation": 0,
     "result": 1,
@@ -70,7 +70,7 @@ def build_task_code_workspace(task: TaskRecord) -> TaskCodeWorkspaceResponse:
     requested_run_dir, existing_run_dir = _resolve_run_output_dir(task)
 
     if requested_run_dir is None:
-        warnings.append("这个任务还没有 MLZero 运行产物，暂时没有可查看的 AI 代码。")
+        warnings.append("这个任务还没有自动建模结果，暂时没有可查看的 AI 代码。")
         return TaskCodeWorkspaceResponse(
             task_id=task.id,
             task_name=task.name,
@@ -245,19 +245,14 @@ def rerun_task_code_artifact(
 
 
 def _resolve_run_output_dir(task: TaskRecord) -> tuple[Path | None, Path | None]:
-    if task.last_run_attempt and task.last_run_attempt.output_dir:
-        requested_path = Path(task.last_run_attempt.output_dir)
-    elif task.last_run and task.last_run.output_dir:
-        requested_path = Path(task.last_run.output_dir)
-    else:
-        return None, None
-    return requested_path, requested_path if requested_path.exists() else None
+    artifact_index = build_run_artifact_index(task)
+    return artifact_index.requested_output_dir, artifact_index.output_dir
 
 
 def _require_existing_run_output_dir(task: TaskRecord) -> Path:
     requested_run_dir, existing_run_dir = _resolve_run_output_dir(task)
     if requested_run_dir is None:
-        raise RuntimeError("这个任务还没有 MLZero 运行产物。")
+        raise RuntimeError("这个任务还没有自动建模结果。")
     if existing_run_dir is None:
         raise FileNotFoundError(f"Latest MLZero output directory is missing: {requested_run_dir}")
     return existing_run_dir
@@ -641,7 +636,7 @@ def _describe_artifact(relative_path: str, filename: str) -> ArtifactDescriptor:
             group="result",
             artifact_kind="node_score",
             display_name="节点分数记录",
-            purpose="这里记录了某个节点的验证分数或最佳运行摘要，适合快速判断这个节点表现如何。",
+            purpose="这里记录了某个节点的候选排序分或最佳运行摘要，适合快速判断这个节点在同次运行中的排序表现。",
             editing_guidance="这是结果记录文件，主要用于查看和比对。",
             stage="score",
             sort_priority=62,
@@ -814,7 +809,7 @@ def _find_default_rerun_path(run_output_dir: Path) -> str | None:
         path
         for path in [
             run_output_dir / "generated_code.py",
-            *[node_dir / "generated_code.py" for node_dir in _recent_node_dirs(run_output_dir)],
+            *[node_dir / "generated_code.py" for node_dir in recent_node_dirs(run_output_dir)],
         ]
         if path.is_file() and "best_run" not in path.parts
     ]
@@ -826,8 +821,9 @@ def _find_default_rerun_path(run_output_dir: Path) -> str | None:
 
 def _iter_workspace_candidate_files(run_output_dir: Path) -> list[Path]:
     roots = [run_output_dir]
-    roots.extend(_recent_node_dirs(run_output_dir))
-    for node_dir in _recent_node_dirs(run_output_dir):
+    node_dirs = recent_node_dirs(run_output_dir)
+    roots.extend(node_dirs)
+    for node_dir in node_dirs:
         roots.extend([node_dir / "states", node_dir / "output", node_dir / "logs"])
 
     candidates: list[Path] = []
@@ -845,14 +841,6 @@ def _iter_workspace_candidate_files(run_output_dir: Path) -> list[Path]:
             seen.add(path)
             candidates.append(path)
     return sorted(candidates)
-
-
-def _recent_node_dirs(run_output_dir: Path, *, limit: int = NODE_SCAN_LIMIT) -> list[Path]:
-    try:
-        node_dirs = [path for path in run_output_dir.iterdir() if path.is_dir() and path.name.startswith("node_")]
-    except OSError:
-        return []
-    return sorted(node_dirs, key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)[:limit]
 
 
 def _sha256_file(path: Path) -> str:

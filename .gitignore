@@ -48,6 +48,7 @@ frontend/.env.*
 
 # Logs and runtime process files
 logs/
+output/
 *.log
 *.pid
 npm-debug.log*
@@ -77,6 +78,10 @@ tmp_*/
 tmp-*/
 tmp_executor_verify/
 .cache/
+document-analysis/
+openai-signals-data/
+openai-signals-data-download-csv.zip
+ai4ml-deploy-*.tar.gz
 *.tmp
 *.bak
 *.orig

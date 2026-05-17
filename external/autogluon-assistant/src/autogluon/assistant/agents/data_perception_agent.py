@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import csv
 from collections import defaultdict
 
 from ..prompts import PythonReaderPrompt
@@ -11,6 +12,88 @@ from .utils import init_llm
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+TEXT_FILE_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".log",
+}
+CSV_FILE_EXTENSIONS = {".csv", ".tsv"}
+TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "latin-1")
+
+
+def _truncate_text(value, max_chars):
+    if max_chars is not None and max_chars > 0 and len(value) > max_chars:
+        return value[: max_chars - 3] + "..."
+    return value
+
+
+def _read_text_direct(file_path, max_chars):
+    last_error = None
+    for encoding in TEXT_ENCODINGS:
+        try:
+            with open(file_path, "r", encoding=encoding, errors="strict") as handle:
+                return _truncate_text(handle.read(), max_chars)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+        except OSError as exc:
+            return f"Error reading file: {exc}"
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+            return _truncate_text(handle.read(), max_chars)
+    except OSError as exc:
+        return f"Error reading file: {exc}"
+    except Exception:
+        return f"Error reading file: {last_error}"
+
+
+def _read_csv_direct(file_path, max_chars):
+    suffix = os.path.splitext(file_path)[1].lower()
+    delimiter = "\t" if suffix == ".tsv" else ","
+    last_error = None
+    for encoding in TEXT_ENCODINGS:
+        try:
+            with open(file_path, "r", encoding=encoding, newline="") as handle:
+                reader = csv.reader(handle, delimiter=delimiter)
+                header = next(reader, [])
+                sample_rows = []
+                total_rows = 0
+                for row in reader:
+                    total_rows += 1
+                    if len(sample_rows) < 8:
+                        sample_rows.append(row)
+                lines = [
+                    f"CSV file read directly without generated reader code.",
+                    f"Detected delimiter: {repr(delimiter)}",
+                    f"Columns ({len(header)}): {header}",
+                    f"Data rows: {total_rows}",
+                ]
+                if sample_rows:
+                    lines.append("Sample rows:")
+                    for row in sample_rows:
+                        lines.append(str(row))
+                return _truncate_text("\n".join(lines), max_chars)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+        except (OSError, csv.Error, StopIteration) as exc:
+            return f"Error reading CSV file: {exc}"
+    return f"Error reading CSV file: {last_error}"
+
+
+def read_file_direct(file_path, max_chars):
+    suffix = os.path.splitext(file_path)[1].lower()
+    if suffix in CSV_FILE_EXTENSIONS:
+        return _read_csv_direct(file_path, max_chars)
+    if suffix in TEXT_FILE_EXTENSIONS:
+        return _read_text_direct(file_path, max_chars)
+    return None
 
 
 def get_all_files(folder_path):
@@ -160,9 +243,14 @@ class DataPerceptionAgent(BaseAgent):
             timeout=60,  # TODO: make it configurable
             executer_llm_config=config.executer,
             executer_prompt_template=None,
+            require_validation_score=False,
         )
 
     def read_file(self, file_path, max_chars):
+        direct_content = read_file_direct(file_path=file_path, max_chars=max_chars)
+        if direct_content is not None:
+            return direct_content
+
         # 0. init llm
         if not self.reader_llm_config.multi_turn:
             self.reader_llm = init_llm(

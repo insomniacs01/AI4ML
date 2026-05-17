@@ -1,11 +1,11 @@
 # AI4ML
 
-AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已经不再是早期的 Week 2 脚手架状态，而是一个包含真实前后端、Supabase 团队体系、AI 连接器、任务执行、人机协同、代码工作区、资产登记和审计能力的可运行版本。
+AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已经不再是早期的 Week 2 脚手架状态，而是一个包含真实前后端、Supabase 团队体系、AI 连接器、任务执行、人工复核、代码工作区、资产登记和审计能力的可运行版本。
 
 ## 当前项目状态
 
-- 前端：React + Vite 工作台，已接入真实登录、团队、任务、连接器、默认 AI 路由、配额、资产、审计、AI 对话、代码工作区。
-- 后端：FastAPI 服务，负责团队鉴权后的任务编排、AI 解析、MLZero 执行、人机协同、代码工件读取与 Token 记账。
+- 前端：React + Vite 工作台，已接入真实登录、团队、任务、连接器、默认 AI 路由、配额、资产、审计、AI 记录、代码工作区。
+- 后端：FastAPI 服务，负责团队鉴权后的任务编排、AI 解析、MLZero 执行、人工复核、代码工件读取与 Token 记账。
 - 身份与团队：Supabase Auth + Postgres，作为用户、团队、成员、路由、配额、资产和审计的真实数据源。
 - 执行引擎：以 `MLZero / AutoGluon Assistant` 为基础，已做本地二次改造，支持 OpenAI-compatible 云模型提供方。
 - 当前优先完成的是 P0 能力闭环；资产发布/Fork 已有基础能力，更高层的工作流广场、模型广场运营仍处于后续阶段。
@@ -32,9 +32,9 @@ AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已�
   - AI 自动解析目标列、任务类型、指标等结构化信息
   - 触发 MLZero 运行
   - 查看真实模型报告、在线预测 Demo、代码工件下载与 Python 工件重跑
-- 人机协同
-  - 手动发起协同请求
-  - 运行前 `before_run` 自动协同策略
+- 人工复核
+  - 手动发起复核请求
+  - 运行前 `before_run` 自动复核策略
   - 任务 `paused_for_review` / 恢复继续执行
 - 代码工作区
   - 查看最新运行目录中的真实代码与日志工件
@@ -90,30 +90,34 @@ AI4ML/
 ## 主要后端接口
 
 - `GET /api/health`
-- `GET/POST /api/tasks`
-- `POST /api/tasks/{task_id}/dataset`
-- `POST /api/tasks/{task_id}/analyze`
-- `POST /api/tasks/{task_id}/run`
-- `GET /api/tasks/{task_id}/report`
-- `POST /api/tasks/{task_id}/prediction-demo`
-- `PUT /api/tasks/{task_id}/workflow-config`
-- `POST /api/tasks/{task_id}/human-requests`
-- `POST /api/tasks/{task_id}/human-requests/{request_id}/decision`
-- `GET /api/tasks/{task_id}/human-collaboration`
-- `POST /api/tasks/{task_id}/resume`
-- `GET /api/tasks/{task_id}/code-workspace`
-- `GET/PUT /api/tasks/{task_id}/code-workspace/file`
-- `GET /api/tasks/{task_id}/code-workspace/download`
-- `POST /api/tasks/{task_id}/code-workspace/rerun`
-- `GET/POST /api/connectors`
-- `GET/PATCH /api/team/members`
-- `GET/POST /api/team/quotas`
-- `GET/PUT /api/team/routing`
-- `GET/POST /api/team/assets`
-- `POST /api/team/assets/{asset_id}/publish`
-- `POST /api/team/assets/{asset_id}/fork`
-- `GET /api/team/token-ledgers`
-- `GET /api/team/audit-logs`
+- 除健康检查外，正式业务接口统一使用团队作用域：`/api/teams/{team_id}/...`
+- `GET/POST /api/teams/{team_id}/tasks`
+- `POST /api/teams/{team_id}/tasks/{task_id}/dataset`
+- `POST /api/teams/{team_id}/tasks/{task_id}/analyze`
+- `POST /api/teams/{team_id}/tasks/{task_id}/run`
+- `GET /api/teams/{team_id}/tasks/{task_id}/run-progress`
+- `GET /api/teams/{team_id}/tasks/{task_id}/agent-collaboration`
+- `GET /api/teams/{team_id}/tasks/{task_id}/human-collaboration`
+- `POST /api/teams/{team_id}/tasks/{task_id}/human-requests`
+- `POST /api/teams/{team_id}/tasks/{task_id}/human-requests/{request_id}/decision`
+- `POST /api/teams/{team_id}/tasks/{task_id}/resume`
+- `GET /api/teams/{team_id}/tasks/{task_id}/ai-conversations`
+- `POST /api/teams/{team_id}/tasks/{task_id}/chat`
+- `GET /api/teams/{team_id}/tasks/{task_id}/report`
+- `POST /api/teams/{team_id}/tasks/{task_id}/prediction-demo`
+- `GET /api/teams/{team_id}/tasks/{task_id}/code-workspace`
+- `GET/PUT /api/teams/{team_id}/tasks/{task_id}/code-workspace/file`
+- `GET /api/teams/{team_id}/tasks/{task_id}/code-workspace/download`
+- `POST /api/teams/{team_id}/tasks/{task_id}/code-workspace/rerun`
+- `GET/POST /api/teams/{team_id}/connectors`
+- `GET/PATCH /api/teams/{team_id}/members`
+- `GET/POST /api/teams/{team_id}/quotas`
+- `GET/PUT /api/teams/{team_id}/routing`
+- `GET/POST /api/teams/{team_id}/assets`
+- `POST /api/teams/{team_id}/assets/{asset_id}/publish`
+- `POST /api/teams/{team_id}/assets/{asset_id}/fork`
+- `GET /api/teams/{team_id}/token-ledgers`
+- `GET /api/teams/{team_id}/audit-logs`
 
 ## 环境准备
 
@@ -205,9 +209,10 @@ npm run dev
 ## 前端主要页面
 
 - 任务
-- AI 对话
+- 运行控制台：运行态、Agent Runtime、事件流、leaderboard、训练遥测和最后日志
+- AI 记录：只展示用户手动对话和当前连接器回复
 - 代码工作区
-- 人机协同
+- 复核待办：只处理人工请求、决策、转交、驳回和恢复任务
 - Token 用量
 - 连接器
 - 默认 AI
@@ -264,8 +269,8 @@ npm run build
 - 角色提升到 `developer_user`
 - 连接器创建 / 激活
 - 团队默认 AI 路由保存 / 读取
-- 手工人机协同请求
-- `before_run` 自动协同策略
+- 手工人工复核请求
+- `before_run` 自动复核策略
 - 代码工作区权限隔离
 - 配额与预警阈值拦截
 - 审计日志读取

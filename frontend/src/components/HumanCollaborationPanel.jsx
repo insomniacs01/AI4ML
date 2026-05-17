@@ -2,35 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/api.js";
 import { getCachedCollaborationSnapshot, setCachedCollaborationSnapshot } from "../lib/collaborationCache.js";
-
-const STAGE_LABELS = {
-  requirement_analysis: "需求解析",
-  data_analysis: "数据分析",
-  feature_engineering: "特征工程",
-  model_selection: "模型选择",
-  training_validation: "训练验证",
-  report_generation: "报告生成",
-};
-
-const STAGE_STATUS_LABELS = {
-  pending: "未开始",
-  running: "进行中",
-  waiting_human: "等待人工",
-  completed: "已完成",
-  failed: "失败",
-};
-
-const TASK_STATUS_LABELS = {
-  draft: "草稿",
-  uploaded: "已上传",
-  planning: "规划中",
-  paused_for_review: "等待复核",
-  waiting_human: "等待人工",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
-  published: "已发布",
-};
+import { formatDateTime, formatTaskStatus, formatWorkflowStage } from "../lib/taskPresentation.js";
 
 const REQUEST_STATUS_LABELS = {
   pending: "待处理",
@@ -38,7 +10,6 @@ const REQUEST_STATUS_LABELS = {
   confirmed: "已确认",
   modified: "要求修改",
   rejected: "已驳回",
-  reassigned: "已转交",
   expired: "已超时",
   skipped: "已跳过",
   resolved: "已处理",
@@ -49,21 +20,21 @@ const DECISION_LABELS = {
   revise: "要求修改并重跑",
   block: "阻塞",
   reject: "驳回并重跑",
-  reassign: "转交",
   skip: "跳过",
 };
+
+const PERSONAL_DECISION_OPTIONS = [
+  { value: "approve", label: "确认无误，继续" },
+  { value: "revise", label: "我已修改，继续" },
+  { value: "block", label: "先暂停" },
+  { value: "reject", label: "不采用，重新跑" },
+];
 
 const REQUEST_TYPE_OPTIONS = [
   { value: "requirement_review", label: "需求确认" },
   { value: "data_review", label: "数据确认" },
   { value: "code_review", label: "代码确认" },
   { value: "result_review", label: "结果确认" },
-];
-
-const ASSIGNEE_TYPE_OPTIONS = [
-  { value: "member", label: "指定成员" },
-  { value: "role", label: "按角色" },
-  { value: "candidate_pool", label: "候选组" },
 ];
 
 const STAGE_ORDER = [
@@ -82,29 +53,8 @@ const EMPTY_REQUEST_FORM = {
   summary: "",
   suggested_action: "",
   artifact_paths: "",
-  assigned_to: "",
-  assignee_type: "member",
-  assignee_value: "",
   timeout_minutes: "",
 };
-
-function formatDateTime(value) {
-  if (!value) return "未记录";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-}
-
-function formatTaskStatus(status) {
-  return TASK_STATUS_LABELS[status] ?? status ?? "未知状态";
-}
-
-function formatStage(stage) {
-  return STAGE_LABELS[stage] ?? stage ?? "未命名阶段";
-}
-
-function formatStageStatus(status) {
-  return STAGE_STATUS_LABELS[status] ?? status ?? "未知";
-}
 
 function getStatusTone(status) {
   if (["completed", "approve", "confirmed", "skipped"].includes(status)) return "success";
@@ -133,9 +83,6 @@ function buildRequestFormFromPreset(preset) {
     summary: preset?.summary ?? "",
     suggested_action: preset?.suggested_action ?? "",
     artifact_paths: joinArtifactPaths(preset?.artifact_paths),
-    assigned_to: preset?.assigned_to ?? "",
-    assignee_type: preset?.assignee_type ?? EMPTY_REQUEST_FORM.assignee_type,
-    assignee_value: preset?.assignee_value ?? "",
     timeout_minutes: preset?.timeout_minutes ? String(preset.timeout_minutes) : "",
   };
 }
@@ -149,16 +96,12 @@ function buildDecisionDraft(request) {
     decision_summary: summary,
     artifact_paths: Array.isArray(request?.payload?.artifact_paths) ? request.payload.artifact_paths.join("\n") : "",
     resume_task: true,
-    reassign_assignee_type: request?.assignee_type ?? "member",
-    reassign_assignee_value: "",
-    reassign_assigned_to: "",
-    reassign_timeout_minutes: "",
   };
 }
 
 function getRequestTitle(request) {
   if (typeof request?.payload?.title === "string" && request.payload.title.trim()) return request.payload.title.trim();
-  return "未命名协同请求";
+  return "未命名复核请求";
 }
 
 function getRequestSummary(request) {
@@ -181,6 +124,7 @@ export default function HumanCollaborationPanel({
   selectedTask,
   requestContext,
   requestPreset,
+  activeUserId = "",
   onSelectTask,
   onTaskUpdated,
   onOpenTaskDetails,
@@ -196,12 +140,10 @@ export default function HumanCollaborationPanel({
   const [decisionDrafts, setDecisionDrafts] = useState({});
 
   const taskItems = Array.isArray(tasks) ? tasks : [];
-  const stageItems = useMemo(() => {
-    const items = Array.isArray(snapshot?.stages) ? snapshot.stages : [];
-    return [...items].sort((left, right) => STAGE_ORDER.indexOf(left.stage) - STAGE_ORDER.indexOf(right.stage));
-  }, [snapshot?.stages]);
   const requestItems = Array.isArray(snapshot?.requests) ? snapshot.requests : [];
-  const openRequests = requestItems.filter((item) => isActiveRequest(item));
+  const personalRequestItems = Array.isArray(snapshot?.my_requests) ? snapshot.my_requests : requestItems;
+  const openRequests = personalRequestItems.filter((item) => isActiveRequest(item));
+  const myTodoCount = typeof snapshot?.my_open_request_count === "number" ? snapshot.my_open_request_count : openRequests.length;
   const decisionHistory = useMemo(() => {
     const items = Array.isArray(snapshot?.decision_history) ? snapshot.decision_history : [];
     return [...items].sort((left, right) => {
@@ -210,12 +152,11 @@ export default function HumanCollaborationPanel({
       return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
     });
   }, [snapshot?.decision_history]);
-  const nextRunGuidance = snapshot?.next_run_guidance ?? null;
 
   useEffect(() => {
     if (!requestPreset?.preset_id || requestPreset?.task_id !== selectedTask?.id) return;
     setRequestForm(buildRequestFormFromPreset(requestPreset));
-    setMessage(requestPreset.notice ?? "已带入协同请求草稿，你可以直接补充后提交。");
+    setMessage(requestPreset.notice ?? "已带入复核请求草稿，你可以直接补充后提交。");
     setError("");
   }, [requestPreset?.preset_id, requestPreset?.task_id, requestPreset?.notice, selectedTask?.id]);
 
@@ -307,14 +248,14 @@ export default function HumanCollaborationPanel({
           summary: requestForm.summary.trim(),
           suggested_action: requestForm.suggested_action.trim() || null,
           artifact_paths: normalizeArtifactPaths(requestForm.artifact_paths),
-          assigned_to: requestForm.assigned_to.trim() || null,
-          assignee_type: requestForm.assignee_type,
-          assignee_value: requestForm.assignee_value.trim() || null,
+          assigned_to: activeUserId || null,
+          assignee_type: "member",
+          assignee_value: activeUserId || null,
           timeout_minutes: requestForm.timeout_minutes ? Number.parseInt(requestForm.timeout_minutes, 10) || null : null,
         },
         requestContext,
       );
-      syncSnapshot(payload, "协同请求已创建，任务已进入等待人工复核状态。");
+      syncSnapshot(payload, "复核请求已创建，任务已进入等待人工复核状态。");
       setRequestForm(EMPTY_REQUEST_FORM);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : String(submitError));
@@ -330,11 +271,6 @@ export default function HumanCollaborationPanel({
       setError("请先填写决策说明。");
       return;
     }
-    if (draft.action === "reassign" && !draft.reassign_assignee_value?.trim() && !draft.reassign_assigned_to?.trim()) {
-      setError("转交请求需要填写新的指派值或指定成员 ID。");
-      return;
-    }
-
     setDecisionBusyId(requestId);
     setError("");
     setMessage("");
@@ -347,14 +283,10 @@ export default function HumanCollaborationPanel({
           decision_summary: draft.decision_summary.trim(),
           artifact_paths: normalizeArtifactPaths(draft.artifact_paths),
           resume_task: Boolean(draft.resume_task),
-          reassign_assignee_type: draft.action === "reassign" ? draft.reassign_assignee_type : null,
-          reassign_assignee_value: draft.action === "reassign" ? draft.reassign_assignee_value?.trim() || null : null,
-          reassign_assigned_to: draft.action === "reassign" ? draft.reassign_assigned_to?.trim() || null : null,
-          reassign_timeout_minutes: draft.action === "reassign" && draft.reassign_timeout_minutes ? Number.parseInt(draft.reassign_timeout_minutes, 10) || null : null,
         },
         requestContext,
       );
-      syncSnapshot(payload, draft.resume_task ? "协同决策已提交，任务状态已同步。" : "协同决策已提交，任务仍保持等待复核。");
+      syncSnapshot(payload, draft.resume_task ? "复核决策已提交，任务状态已同步。" : "复核决策已提交，任务仍保持等待复核。");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : String(submitError));
     } finally {
@@ -380,16 +312,16 @@ export default function HumanCollaborationPanel({
   return (
     <section className="section-card human-collaboration-card">
       {!taskItems.length && !tasksLoading ? (
-        <div className="empty-state">当前团队还没有任务。先创建一个任务，再进入人机协同页。</div>
+        <div className="empty-state">当前团队还没有任务。先创建一个任务，再进入复核待办页。</div>
       ) : null}
 
       {taskItems.length ? (
         <div className="human-collaboration-shell">
           <div className="human-collaboration-toolbar">
             <div className="human-collaboration-intro">
-              <p className="eyebrow">Human Collaboration</p>
+              <p className="eyebrow">Review Todo</p>
               <h3>{selectedTask?.name ?? "选择一个任务"}</h3>
-              <p>这里展示任务级的人机协同闭环：阶段状态、自动或手工创建的复核请求、人工决策，以及任务恢复。</p>
+              <p>这里是你自己的复核待办。只看需要你确认的问题，处理完就让任务继续。</p>
             </div>
 
             <div className="human-collaboration-actions">
@@ -411,12 +343,12 @@ export default function HumanCollaborationPanel({
               ) : null}
 
               <button type="button" className="ghost-button" onClick={() => void handleRefresh()} disabled={state === "loading"}>
-                {state === "loading" ? "刷新中..." : "刷新协同状态"}
+                {state === "loading" ? "刷新中..." : "刷新复核状态"}
               </button>
 
               <button
                 type="button"
-                className="primary-button"
+                className="ghost-button"
                 onClick={() => void handleResumeTask()}
                 disabled={!snapshot?.can_resume || resumingTask}
               >
@@ -428,20 +360,16 @@ export default function HumanCollaborationPanel({
           {selectedTask ? (
             <div className="conversation-context-strip human-collaboration-context">
               <span className="conversation-context-pill">
-                <strong>任务状态</strong>
-                <em>{formatTaskStatus(snapshot?.task?.status ?? selectedTask.status)}</em>
+                <strong>我的待办</strong>
+                <em>{myTodoCount}</em>
               </span>
               <span className="conversation-context-pill">
-                <strong>开放请求</strong>
-                <em>{snapshot?.open_request_count ?? 0}</em>
+                <strong>当前任务</strong>
+                <em>{formatTaskStatus(snapshot?.task?.status ?? selectedTask.status)}</em>
               </span>
               <span className="conversation-context-pill">
                 <strong>可恢复</strong>
                 <em>{snapshot?.can_resume ? "是" : "否"}</em>
-              </span>
-              <span className="conversation-context-pill">
-                <strong>数据集</strong>
-                <em>{selectedTask.dataset_filename ?? "未上传"}</em>
               </span>
             </div>
           ) : null}
@@ -450,48 +378,20 @@ export default function HumanCollaborationPanel({
           {error ? <div className="error-banner">{error}</div> : null}
 
           {!selectedTask ? (
-            <div className="empty-state">先选择一个任务，再查看它的人机协同状态。</div>
+            <div className="empty-state">先选择一个任务，再查看它的复核状态。</div>
           ) : (
-            <div className="human-collaboration-grid">
-              <section className="section-card human-stage-board">
-                <div className="section-head">
-                  <div>
-                    <h3>阶段状态</h3>
-                    <p>阶段状态由后端根据任务进度和开放中的人工请求自动同步。</p>
-                  </div>
-                </div>
-
-                {!stageItems.length ? (
-                  <div className="empty-state compact">{state === "loading" ? "正在读取阶段状态..." : "当前还没有阶段记录。"}</div>
-                ) : (
-                  <div className="human-stage-grid">
-                    {stageItems.map((item) => (
-                      <article key={item.stage} className="stage-card">
-                        <div className="task-card-top">
-                          <div>
-                            <p className="eyebrow">{formatStage(item.stage)}</p>
-                            <h4>{formatStageStatus(item.status)}</h4>
-                          </div>
-                          <span className={`runtime-pill ${getStatusTone(item.status)}`}>{formatStageStatus(item.status)}</span>
-                        </div>
-                        <p className="task-description">{item.summary ?? "暂无阶段说明。"}</p>
-                        <dl className="stage-meta">
-                          <div><dt>模型</dt><dd>{item.model_name ?? "未记录"}</dd></div>
-                          <div><dt>来源</dt><dd>{item.selection_source ?? "未记录"}</dd></div>
-                          <div><dt>更新时间</dt><dd>{formatDateTime(item.updated_at)}</dd></div>
-                          <div><dt>工件数</dt><dd>{Array.isArray(item.artifact_refs) ? item.artifact_refs.length : 0}</dd></div>
-                        </dl>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </section>
-
+            <div className="human-collaboration-grid single">
+              <details className="expert-advanced-fold human-personal-create">
+                <summary>
+                  <span>手动补一条复核记录</span>
+                  <small>只有你主动发现问题、需要暂停任务时再用</small>
+                </summary>
+                <div className="expert-advanced-stack">
               <section className="section-card human-request-board">
                 <div className="section-head">
                   <div>
-                    <h3>创建协同请求</h3>
-                    <p>你可以手动在任意阶段插入一个人工复核节点，和自动策略生成的节点一起工作。</p>
+                    <h3>补充复核记录</h3>
+                    <p>一般不用填。只有你主动发现问题，需要把任务停下来时，再在这里留一条待办。</p>
                   </div>
                 </div>
 
@@ -501,7 +401,7 @@ export default function HumanCollaborationPanel({
                       <span>阶段</span>
                       <select value={requestForm.stage} onChange={(event) => setRequestForm((current) => ({ ...current, stage: event.target.value }))}>
                         {STAGE_ORDER.map((stage) => (
-                          <option key={stage} value={stage}>{formatStage(stage)}</option>
+                          <option key={stage} value={stage}>{formatWorkflowStage(stage)}</option>
                         ))}
                       </select>
                     </label>
@@ -517,24 +417,6 @@ export default function HumanCollaborationPanel({
                   </div>
 
                   <div className="form-row">
-                    <label className="field">
-                      <span>指派方式</span>
-                      <select value={requestForm.assignee_type} onChange={(event) => setRequestForm((current) => ({ ...current, assignee_type: event.target.value }))}>
-                        {ASSIGNEE_TYPE_OPTIONS.map((item) => (
-                          <option key={item.value} value={item.value}>{item.label}</option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="field">
-                      <span>指派值</span>
-                      <input
-                        value={requestForm.assignee_value}
-                        onChange={(event) => setRequestForm((current) => ({ ...current, assignee_value: event.target.value }))}
-                        placeholder="例如：某个用户 ID、developer_user、ml-reviewers"
-                      />
-                    </label>
-
                     <label className="field">
                       <span>超时（分钟）</span>
                       <input
@@ -581,7 +463,7 @@ export default function HumanCollaborationPanel({
                   </label>
 
                   <label className="field">
-                    <span>关联工件路径</span>
+                    <span>关联文件路径</span>
                     <textarea
                       rows={3}
                       value={requestForm.artifact_paths}
@@ -592,86 +474,15 @@ export default function HumanCollaborationPanel({
 
                   <div className="button-row connector-actions">
                     <button type="submit" className="primary-button" disabled={submittingRequest || !selectedTask}>
-                      {submittingRequest ? "创建中..." : "创建协同请求"}
+                      {submittingRequest ? "保存中..." : "保存这条复核记录"}
                     </button>
                   </div>
                 </form>
               </section>
+                </div>
+              </details>
             </div>
           )}
-
-          {selectedTask ? (
-            <section className="section-card human-guidance-board">
-              <div className="section-head">
-                <div>
-                  <h3>下一轮注入预览</h3>
-                  <p>这里直接显示下一次 MLZero 运行和任务 AI 对话会读取到的人机协同内容。</p>
-                </div>
-              </div>
-
-              <div className="summary-grid human-guidance-grid">
-                <article className="summary-item">
-                  <span>已记录决策</span>
-                  <strong>{nextRunGuidance?.decision_count ?? 0}</strong>
-                </article>
-                <article className="summary-item">
-                  <span>注入目标</span>
-                  <strong>{Array.isArray(nextRunGuidance?.targets) ? nextRunGuidance.targets.length : 0}</strong>
-                </article>
-                <article className="summary-item">
-                  <span>当前状态</span>
-                  <strong>{nextRunGuidance?.has_guidance ? "会注入人工指引" : "暂不注入"}</strong>
-                </article>
-                <article className="summary-item">
-                  <span>Prompt 行数</span>
-                  <strong>{Array.isArray(nextRunGuidance?.prompt_guidance_lines) ? nextRunGuidance.prompt_guidance_lines.length : 0}</strong>
-                </article>
-              </div>
-
-              {!nextRunGuidance?.has_guidance ? (
-                <div className="empty-state">当前还没有已解决的人机协同决策，因此下一轮不会额外注入人工指引。</div>
-              ) : (
-                <div className="human-guidance-panels">
-                  <details className="conversation-state-card human-guidance-panel" open>
-                    <summary className="conversation-state-summary">
-                      <div className="conversation-state-summary-copy">
-                        <strong>`descriptions.txt` 追加片段</strong>
-                        <span>这一段会合并到 MLZero 输入目录中的任务说明文件。</span>
-                      </div>
-                    </summary>
-                    <div className="conversation-state-content">
-                      <pre className="conversation-state-body">{nextRunGuidance.description_appendix}</pre>
-                    </div>
-                  </details>
-
-                  <details className="conversation-state-card human-guidance-panel">
-                    <summary className="conversation-state-summary">
-                      <div className="conversation-state-summary-copy">
-                        <strong>`human_collaboration_instructions.txt`</strong>
-                        <span>这是专门写给下一轮 MLZero 的人机协同说明文件。</span>
-                      </div>
-                    </summary>
-                    <div className="conversation-state-content">
-                      <pre className="conversation-state-body">{nextRunGuidance.human_instruction_file}</pre>
-                    </div>
-                  </details>
-
-                  <details className="conversation-state-card human-guidance-panel">
-                    <summary className="conversation-state-summary">
-                      <div className="conversation-state-summary-copy">
-                        <strong>任务 AI 对话上下文</strong>
-                        <span>你在“AI 对话”页继续聊天时，也会附带这一段历史决策。</span>
-                      </div>
-                    </summary>
-                    <div className="conversation-state-content">
-                      <p className="mono-text">{nextRunGuidance.initial_instruction_note || "当前没有额外的初始指令补充。"}</p>
-                      <pre className="conversation-state-body">{nextRunGuidance.chat_context_block}</pre>
-                    </div>
-                  </details>
-                </div>
-              )}
-            </section>
-          ) : null}
 
           {selectedTask ? (
             <section className="section-card human-request-list-board">
@@ -695,7 +506,7 @@ export default function HumanCollaborationPanel({
                       <article key={request.id} className="status-card human-request-card">
                         <div className="status-card-top">
                           <div>
-                            <p className="eyebrow">{formatStage(request.stage)}</p>
+                            <p className="eyebrow">{formatWorkflowStage(request.stage)}</p>
                             <h4>{getRequestTitle(request)}</h4>
                           </div>
                           <span className={`runtime-pill ${getStatusTone(request.status === "open" ? "waiting_human" : request.status)}`}>
@@ -724,8 +535,8 @@ export default function HumanCollaborationPanel({
                               value={draft.action}
                               onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, action: event.target.value } }))}
                             >
-                              {Object.entries(DECISION_LABELS).map(([value, label]) => (
-                                <option key={value} value={value}>{label}</option>
+                              {PERSONAL_DECISION_OPTIONS.map((item) => (
+                                <option key={item.value} value={item.value}>{item.label}</option>
                               ))}
                             </select>
                           </label>
@@ -740,52 +551,23 @@ export default function HumanCollaborationPanel({
                             />
                           </label>
 
-                          {draft.action === "reassign" ? (
-                            <div className="form-row">
+                          <details className="expert-advanced-fold human-decision-more">
+                            <summary>
+                              <span>补充修改后的文件路径</span>
+                              <small>需要让下一轮读取改动时再填</small>
+                            </summary>
+                            <div className="expert-advanced-stack">
                               <label className="field">
-                                <span>新指派方式</span>
-                                <select
-                                  value={draft.reassign_assignee_type}
-                                  onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, reassign_assignee_type: event.target.value } }))}
-                                >
-                                  {ASSIGNEE_TYPE_OPTIONS.map((item) => (
-                                    <option key={item.value} value={item.value}>{item.label}</option>
-                                  ))}
-                                </select>
-                              </label>
-
-                              <label className="field">
-                                <span>新指派值</span>
-                                <input
-                                  value={draft.reassign_assignee_value}
-                                  onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, reassign_assignee_value: event.target.value } }))}
-                                  placeholder="成员 ID、角色或候选池"
-                                />
-                              </label>
-
-                              <label className="field">
-                                <span>新超时（分钟）</span>
-                                <input
-                                  type="number"
-                                  min="5"
-                                  step="5"
-                                  value={draft.reassign_timeout_minutes}
-                                  onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, reassign_timeout_minutes: event.target.value } }))}
-                                  placeholder="留空则沿用原超时"
+                                <span>关联文件</span>
+                                <textarea
+                                  rows={3}
+                                  value={draft.artifact_paths}
+                                  onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, artifact_paths: event.target.value } }))}
+                                  placeholder="可补充修订后的代码路径或报告路径。"
                                 />
                               </label>
                             </div>
-                          ) : null}
-
-                          <label className="field">
-                            <span>决策后关联工件</span>
-                            <textarea
-                              rows={3}
-                              value={draft.artifact_paths}
-                              onChange={(event) => setDecisionDrafts((current) => ({ ...current, [request.id]: { ...draft, artifact_paths: event.target.value } }))}
-                              placeholder="可补充修订后的代码路径或报告路径。"
-                            />
-                          </label>
+                          </details>
 
                           <label className="human-resume-toggle">
                             <input
@@ -817,11 +599,17 @@ export default function HumanCollaborationPanel({
           ) : null}
 
           {selectedTask ? (
+            <details className="expert-advanced-fold human-history-fold">
+              <summary>
+                <span>历史处理记录</span>
+                <small>{decisionHistory.length ? `${decisionHistory.length} 条` : "暂无记录"}</small>
+              </summary>
+              <div className="expert-advanced-stack">
             <section className="section-card human-request-list-board">
               <div className="section-head">
                 <div>
                   <h3>历史决策</h3>
-                  <p>这里保留已经关闭的人机协同请求，便于回看谁在什么阶段给过什么判断。</p>
+                  <p>这里保留已经关闭的复核请求，便于回看谁在什么阶段给过什么判断。</p>
                 </div>
               </div>
 
@@ -833,8 +621,8 @@ export default function HumanCollaborationPanel({
                     <article key={`${item.request_id ?? "history"}-${item.updated_at ?? item.decided_at ?? index}`} className="status-card human-request-card history">
                       <div className="status-card-top">
                         <div>
-                          <p className="eyebrow">{formatStage(item.stage)}</p>
-                          <h4>{item.title ?? "未命名协同决策"}</h4>
+                          <p className="eyebrow">{formatWorkflowStage(item.stage)}</p>
+                          <h4>{item.title ?? "未命名复核决策"}</h4>
                         </div>
                         <span className={`runtime-pill ${getStatusTone(item.action)}`}>
                           {DECISION_LABELS[item.action] ?? item.action ?? "未记录"}
@@ -863,6 +651,8 @@ export default function HumanCollaborationPanel({
                 </div>
               )}
             </section>
+              </div>
+            </details>
           ) : null}
         </div>
       ) : null}

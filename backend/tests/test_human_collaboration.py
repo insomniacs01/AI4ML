@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from unittest import TestCase
 
+from backend.app.models.governance import TeamMemberRecord
 from backend.app.models.task import (
     HumanInteractionDecisionAction,
     HumanInteractionRequestStatus,
@@ -190,6 +191,56 @@ class TaskHumanCollaborationServiceTests(TestCase):
         self.assertEqual(len(snapshot.requests), 1)
         self.assertEqual(snapshot.requests[0].status, HumanInteractionRequestStatus.open)
         self.assertFalse(snapshot.next_run_guidance.has_guidance)
+
+    def test_snapshot_exposes_actor_specific_requests(self) -> None:
+        task = _build_task()
+        team_members = [
+            TeamMemberRecord(team_id="team-1", user_id="user-1", role="developer_user", member_status="active"),
+            TeamMemberRecord(team_id="team-1", user_id="reviewer-1", role="developer_user", member_status="active"),
+            TeamMemberRecord(team_id="team-1", user_id="reviewer-2", role="developer_user", member_status="active"),
+        ]
+        first = self.service.create_request(
+            task,
+            TaskHumanRequestCreateRequest(
+                stage=WorkflowStage.data_analysis,
+                request_type="data_review",
+                title="My review",
+                summary="Review assigned to the current user.",
+                assigned_to="reviewer-1",
+                assignee_value="reviewer-1",
+            ),
+            requested_by="user-1",
+            actor_role="developer_user",
+            team_members=team_members,
+            access_token=self.access_token,
+        )
+        self.service.create_request(
+            first.task,
+            TaskHumanRequestCreateRequest(
+                stage=WorkflowStage.training_validation,
+                request_type="result_review",
+                title="Someone else review",
+                summary="Review assigned to another user.",
+                assigned_to="reviewer-2",
+                assignee_value="reviewer-2",
+            ),
+            requested_by="user-1",
+            actor_role="developer_user",
+            team_members=team_members,
+            access_token=self.access_token,
+        )
+
+        snapshot = self.service.get_snapshot(
+            first.task,
+            access_token=self.access_token,
+            actor_id="reviewer-1",
+            actor_role="developer_user",
+        )
+
+        self.assertEqual(snapshot.open_request_count, 2)
+        self.assertEqual(snapshot.my_open_request_count, 1)
+        self.assertEqual(len(snapshot.my_requests), 1)
+        self.assertEqual(snapshot.my_requests[0].assigned_to, "reviewer-1")
 
     def test_decision_history_is_exposed_and_resume_restores_previous_status(self) -> None:
         task = _build_task()

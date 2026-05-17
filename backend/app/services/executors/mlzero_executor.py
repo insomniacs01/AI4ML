@@ -6,6 +6,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import threading
 from datetime import datetime, timezone
 from importlib.util import find_spec
 from pathlib import Path
@@ -42,11 +44,27 @@ AUTOGLUON_OPTIONAL_MODULES: tuple[tuple[str, str], ...] = (
 AUTOGLUON_BUILTIN_MODEL_FAMILIES: tuple[str, ...] = ("RF", "XT", "KNN")
 
 
+def _safe_path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 class MLZeroRunError(RuntimeError):
-    def __init__(self, message: str, *, output_dir: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        output_dir: Path | str | None = None,
+        recoverable: bool = False,
+        retry_stage: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.output_dir = str(output_dir) if output_dir is not None else None
         self.token_usage = read_mlzero_token_usage(output_dir) if output_dir is not None else None
+        self.recoverable = recoverable
+        self.retry_stage = retry_stage
 
 
 class MLZeroExecutor(BaseExecutor):
@@ -56,7 +74,7 @@ class MLZeroExecutor(BaseExecutor):
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.provider = LocalOpenAIProvider(settings)
 
-    def run(self, task: TaskRecord, dataset_path: Path, time_limit: int) -> RunSummary:
+    def run(self, task: TaskRecord, dataset_path: Path, time_limit: int | None = None) -> RunSummary:
         if not self.settings.mlzero_config_path.exists():
             raise FileNotFoundError(
                 f"MLZero config file not found: {self.settings.mlzero_config_path}"
@@ -74,17 +92,7 @@ class MLZeroExecutor(BaseExecutor):
             continuous_improvement=continuous_improvement,
         )
 
-        env = os.environ.copy()
-        env["OPENAI_API_KEY"] = self.settings.mlzero_openai_api_key
-        env["OPENAI_BASE_URL"] = self.settings.mlzero_provider_base_url
-        env["OPENAI_WIRE_API"] = self.settings.mlzero_provider_wire_api
-        env["OPENAI_USER_AGENT"] = self.settings.mlzero_provider_user_agent
-        env["OPENAI_REQUEST_TIMEOUT"] = str(self.settings.mlzero_provider_request_timeout_seconds)
-        env["HF_ENDPOINT"] = self.settings.mlzero_hf_endpoint
-        env["HF_HUB_OFFLINE"] = "1"
-        env["TRANSFORMERS_OFFLINE"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
+        env = self._build_runtime_env()
 
         command = self._build_command(
             input_dir,
@@ -95,41 +103,173 @@ class MLZeroExecutor(BaseExecutor):
             continuous_improvement=continuous_improvement,
         )
 
-        timeout_seconds = max(300, time_limit * 60)
+        stdout_path = output_dir / "mlzero_stdout.log"
+        stderr_path = output_dir / "mlzero_stderr.log"
+        result = self._run_once(
+            command=command,
+            output_dir=output_dir,
+            env=env,
+            timeout_seconds=None,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+
+        if result.returncode != 0 and self._is_transient_provider_timeout(result, output_dir):
+            retry_env = {**env, "OPENAI_REQUEST_TIMEOUT": str(max(300, self.settings.mlzero_provider_request_timeout_seconds))}
+            self._append_repair_note(
+                output_dir,
+                "检测到 LLM 请求超时，自动提高单次请求 timeout 并重试一次。",
+            )
+            retry_result = self._run_once(
+                command=command,
+                output_dir=output_dir,
+                env=retry_env,
+                timeout_seconds=None,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                append_logs=True,
+            )
+            if retry_result.returncode == 0:
+                result = retry_result
+            else:
+                result = retry_result
+
+        if result.returncode != 0:
+            raise MLZeroRunError(
+                self._build_failure_message(result, output_dir),
+                output_dir=output_dir,
+                recoverable=self._is_recoverable_failure(result, output_dir),
+                retry_stage=self._infer_retry_stage(result, output_dir),
+            )
 
         try:
-            result = subprocess.run(  # noqa: S603
+            return self._build_summary(output_dir, task=task)
+        except Exception as exc:  # noqa: BLE001
+            raise MLZeroRunError(
+                str(exc),
+                output_dir=output_dir,
+                recoverable=True,
+                retry_stage="report_generation",
+            ) from exc
+
+    def _build_runtime_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env["OPENAI_API_KEY"] = self.settings.mlzero_openai_api_key
+        env["OPENAI_BASE_URL"] = self.settings.mlzero_provider_base_url
+        env["OPENAI_WIRE_API"] = self.settings.mlzero_provider_wire_api
+        env["OPENAI_USER_AGENT"] = self.settings.mlzero_provider_user_agent
+        request_timeout = max(180, self.settings.mlzero_provider_request_timeout_seconds)
+        env["OPENAI_REQUEST_TIMEOUT"] = str(request_timeout)
+        env["HF_ENDPOINT"] = self.settings.mlzero_hf_endpoint
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        python_executable = resolve_python_executable(self.settings.mlzero_python_executable) or sys.executable
+        env["AI4ML_PYTHON_EXECUTABLE"] = python_executable
+        python_dir = str(Path(python_executable).parent)
+        env["PATH"] = f"{python_dir}{os.pathsep}{env.get('PATH', '')}"
+        return env
+
+    def _run_once(
+        self,
+        *,
+        command: list[str],
+        output_dir: Path,
+        env: dict[str, str],
+        timeout_seconds: int | None,
+        stdout_path: Path,
+        stderr_path: Path,
+        append_logs: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        try:
+            return self._run_command_with_live_logs(
                 command,
-                cwd=str(self.settings.repo_root),
+                cwd=self.settings.repo_root,
                 env=env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_seconds,
-                check=False,
+                timeout_seconds=timeout_seconds,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                append=append_logs,
             )
         except subprocess.TimeoutExpired as exc:
             raise MLZeroRunError(
                 f"MLZero timed out after {timeout_seconds} seconds. "
                 f"Output directory: {output_dir}",
+                recoverable=True,
+                retry_stage="training_validation",
                 output_dir=output_dir,
             ) from exc
 
-        stdout_path = output_dir / "mlzero_stdout.log"
-        stderr_path = output_dir / "mlzero_stderr.log"
-        if result.stdout is None or result.stderr is None:
-            raise RuntimeError("MLZero process did not return captured stdout/stderr; subprocess capture configuration is broken.")
-        stdout_path.write_text(result.stdout, encoding="utf-8")
-        stderr_path.write_text(result.stderr, encoding="utf-8")
+    def _run_command_with_live_logs(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        timeout_seconds: int | None,
+        stdout_path: Path,
+        stderr_path: Path,
+        append: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if result.returncode != 0:
-            raise MLZeroRunError(self._build_failure_message(result, output_dir), output_dir=output_dir)
+        process = subprocess.Popen(  # noqa: S603
+            command,
+            cwd=str(cwd),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        if process.stdout is None or process.stderr is None:
+            process.kill()
+            raise RuntimeError("MLZero process did not expose stdout/stderr pipes; live log capture cannot start.")
+
+        def pump_stream(stream: Any, target_path: Path, chunks: list[str]) -> None:
+            mode = "a" if append else "w"
+            with target_path.open(mode, encoding="utf-8", errors="replace") as handle:
+                for line in iter(stream.readline, ""):
+                    chunks.append(line)
+                    handle.write(line)
+                    handle.flush()
+
+        stdout_thread = threading.Thread(target=pump_stream, args=(process.stdout, stdout_path, stdout_chunks), daemon=True)
+        stderr_thread = threading.Thread(target=pump_stream, args=(process.stderr, stderr_path, stderr_chunks), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
 
         try:
-            return self._build_summary(output_dir, task=task)
-        except Exception as exc:  # noqa: BLE001
-            raise MLZeroRunError(str(exc), output_dir=output_dir) from exc
+            returncode = process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            returncode = process.wait()
+            timeout_line = f"\nMLZero timed out after {timeout_seconds} seconds and was terminated by AI4ML.\n"
+            stderr_chunks.append(timeout_line)
+            with stderr_path.open("a", encoding="utf-8", errors="replace") as handle:
+                handle.write(timeout_line)
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+            raise subprocess.TimeoutExpired(
+                cmd=exc.cmd,
+                timeout=exc.timeout,
+                output="".join(stdout_chunks),
+                stderr="".join(stderr_chunks),
+            ) from exc
+
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=returncode,
+            stdout="".join(stdout_chunks),
+            stderr="".join(stderr_chunks),
+        )
 
     def _prepare_input_bundle(self, task: TaskRecord, dataset_path: Path, input_dir: Path) -> None:
         input_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +294,7 @@ class MLZeroExecutor(BaseExecutor):
             "Persist machine-readable artifacts in the output folder: run_summary.json plus leaderboard.json or leaderboard.csv.",
             "run_summary.json must include exact keys best_model, metric_name, metric_value, validation_score, tool, candidate_model_count, target_column, and problem_type.",
             "Each leaderboard row must include exact fields model and validation_score, and should include fit_time and pred_time when available.",
+            "During model training, also create telemetry/training_metrics.ndjson under the output folder when the underlying library exposes progress. Write one JSON object per line with keys such as model, epoch, total_epochs, iteration, total_iterations, train_loss, validation_loss, validation_score, and metric_name. If the selected model family has no epoch/loss concept, do not invent those values; rely on leaderboard and fit_time instead.",
             "Do not stop after a single simple baseline if multiple candidate models are feasible within the time budget.",
         ]
         description_lines.extend(autogluon_runtime_guidance)
@@ -215,8 +356,9 @@ class MLZeroExecutor(BaseExecutor):
             "Save a machine-readable run_summary.json and leaderboard.json or leaderboard.csv into the provided output folder. "
             "run_summary.json must include exact keys best_model, metric_name, metric_value, validation_score, tool, candidate_model_count, target_column, and problem_type. "
             "Each leaderboard row must include exact fields model and validation_score, and should include fit_time and pred_time when available. "
+            "If the training library exposes live progress, write telemetry/training_metrics.ndjson with one JSON object per line; do not invent epoch or loss values for models that do not report them. "
             "If the user-facing metric is lower-is-better, still persist a higher-is-better validation_score for search while also saving the raw metric in run_summary.json. "
-            "Report the selected target column, inferred problem type, best model, metric name, final metric value, and final validation score. "
+            "Report the selected target column, inferred problem type, best model, metric name, final metric value, and final validation_score candidate ranking score. "
             f"{autogluon_runtime_guidance} "
             "Save useful outputs into the provided output folder."
             f"{' Human-reviewed decisions: ' + ' '.join(human_guidance_lines) if human_guidance_lines else ''}"
@@ -247,16 +389,20 @@ class MLZeroExecutor(BaseExecutor):
         available_text = ", ".join(available_modules) if available_modules else "none"
         missing_text = ", ".join(missing_modules) if missing_modules else "none"
         allowed_families = ", ".join(self._autogluon_allowed_model_families())
-        return [
+        lines = [
             f"Runtime-verified autogluon optional modules available: {available_text}. Missing: {missing_text}.",
             f"When using autogluon.tabular here, restrict fit() hyperparameters to these verified model families: {allowed_families}.",
+            "Do not manually log-transform, scale, or otherwise transform the target column for AutoGluon unless you also inverse-transform predictions and compute the saved metric_value on the original target scale. Prefer leaving the target on its original scale.",
             "Do not use presets such as extreme, extreme_quality, best, best_quality, high, high_quality, good, good_quality, or any zeroshot/tabarena/foundation-model portfolio in this runtime.",
             "Do not write a secondary sklearn implementation path. If an autogluon.tabular run fails, fix the AutoGluon configuration, API usage, or data handling and rerun with autogluon.tabular.",
             "In AutoGluon 1.4, use predictor.model_best or the top leaderboard row to identify the best model. Do not call predictor.get_model_best().",
             "Before saving leaderboard.json or leaderboard.csv, normalize AutoGluon leaderboard() output to the project's canonical schema. Each row must use exact fields model and validation_score, and should rename fit_time/pred_time from raw AutoGluon columns such as fit_time and pred_time_val when available.",
             "Do not persist a raw AutoGluon leaderboard with score_val or pred_time_val as the final artifact names; rename those columns before writing the saved leaderboard file.",
             "AutoGluon does not accept the generic problem_type value 'classification'. Infer the label cardinality first and pass 'binary' for 2 classes or 'multiclass' for more than 2 classes.",
+            "For large tabular datasets, keep tree models bounded, for example RF/XT n_estimators around 30-80, and drop obvious file/path/provenance identifier columns such as Source_File when they are not the prediction target.",
+            "Do not pass a fit(time_limit=...) value to AutoGluon unless the user explicitly asks for one; let training finish instead of cutting it short.",
         ]
+        return lines
 
     @staticmethod
     def _coerce_float(value: object) -> float | None:
@@ -318,12 +464,14 @@ class MLZeroExecutor(BaseExecutor):
         return unique_paths
 
     def _find_run_summary_paths(self, output_dir: Path) -> list[Path]:
+        candidates = [
+            output_dir / "best_run" / "output" / "run_summary.json",
+            output_dir / "run_summary.json",
+            *output_dir.glob("node_*/output/run_summary.json"),
+        ]
+        existing = [path for path in candidates if path.exists() and path.is_file()]
         return self._unique_existing_paths(
-            [
-                output_dir / "best_run" / "output" / "run_summary.json",
-                output_dir / "run_summary.json",
-                *sorted(output_dir.glob("node_*/output/run_summary.json")),
-            ]
+            sorted(existing, key=lambda path: (_safe_path_mtime(path), str(path)), reverse=True)
         )
 
     def _read_run_summary_payload(self, output_dir: Path) -> tuple[dict[str, Any] | None, Path | None]:
@@ -331,10 +479,11 @@ class MLZeroExecutor(BaseExecutor):
             try:
                 payload = json.loads(summary_path.read_text(encoding="utf-8", errors="replace"))
             except (OSError, json.JSONDecodeError) as exc:
-                raise RuntimeError(f"Unreadable run_summary.json at {summary_path}: {exc}") from exc
+                logger.warning("Skipping unreadable run_summary.json at %s: %s", summary_path, exc)
+                continue
             if isinstance(payload, dict):
                 return payload, summary_path
-            raise RuntimeError(f"run_summary.json at {summary_path} must contain a JSON object.")
+            logger.warning("Skipping non-object run_summary.json at %s.", summary_path)
         return None, None
 
     def _require_run_summary_payload(self, output_dir: Path) -> tuple[dict[str, Any], Path]:
@@ -558,7 +707,47 @@ class MLZeroExecutor(BaseExecutor):
                 )
 
     def _build_summary(self, output_dir: Path, *, task: TaskRecord | None = None) -> RunSummary:
-        run_summary_payload, run_summary_path = self._require_run_summary_payload(output_dir)
+        candidate_errors: list[str] = []
+        for run_summary_payload, run_summary_path in self._iter_run_summary_candidates(output_dir):
+            try:
+                return self._build_summary_from_payload(
+                    output_dir,
+                    run_summary_payload=run_summary_payload,
+                    run_summary_path=run_summary_path,
+                    task=task,
+                )
+            except Exception as exc:  # noqa: BLE001
+                candidate_errors.append(f"{run_summary_path}: {exc}")
+
+        if candidate_errors:
+            raise RuntimeError(
+                "MLZero completed but none of the run_summary.json candidates were valid. "
+                + " | ".join(candidate_errors)
+            )
+        raise RuntimeError(f"MLZero completed but did not produce a readable run_summary.json in {output_dir}")
+
+    def _iter_run_summary_candidates(self, output_dir: Path) -> list[tuple[dict[str, Any], Path]]:
+        candidates: list[tuple[dict[str, Any], Path]] = []
+        for summary_path in self._find_run_summary_paths(output_dir):
+            try:
+                payload = json.loads(summary_path.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("Skipping unreadable run_summary.json at %s: %s", summary_path, exc)
+                continue
+            if not isinstance(payload, dict):
+                logger.warning("Skipping non-object run_summary.json at %s.", summary_path)
+                continue
+            candidates.append((payload, summary_path))
+        return candidates
+
+    def _build_summary_from_payload(
+        self,
+        output_dir: Path,
+        *,
+        run_summary_payload: dict[str, Any],
+        run_summary_path: Path,
+        task: TaskRecord | None = None,
+    ) -> RunSummary:
         self._validate_summary_matches_task(run_summary_payload, task)
         best_model = self._require_summary_string(run_summary_payload, "best_model")
         metric_name = self._require_summary_string(run_summary_payload, "metric_name")
@@ -619,6 +808,7 @@ class MLZeroExecutor(BaseExecutor):
             best_model=best_model,
             metric_name=metric_name,
             metric_value=metric_value,
+            validation_score=validation_score,
             leaderboard=leaderboard,
             output_dir=str(output_dir),
             token_usage=token_usage,
@@ -653,24 +843,8 @@ class MLZeroExecutor(BaseExecutor):
             return f"local model file missing at {self.settings.mlzero_model_path}"
         return None
 
-    def _resolve_search_plan(self, time_limit: int) -> tuple[int, bool]:
-        timeout_seconds = max(300, time_limit * 60)
-
-        # Each search step can require multiple LLM calls plus a real training
-        # run. Small user budgets should allow a few repair attempts, but should
-        # not keep spending time on post-success refinement loops.
-        startup_buffer_seconds = 45
-        iteration_budget_seconds = 80
-        continuous_budget_seconds = self.settings.mlzero_max_iterations * 150
-
-        available_seconds = max(iteration_budget_seconds, timeout_seconds - startup_buffer_seconds)
-        planned_iterations = max(1, available_seconds // iteration_budget_seconds)
-        max_iterations = min(self.settings.mlzero_max_iterations, planned_iterations)
-        continuous_improvement = (
-            self.settings.mlzero_continuous_improvement
-            and timeout_seconds >= continuous_budget_seconds
-        )
-        return max_iterations, continuous_improvement
+    def _resolve_search_plan(self, _time_limit: int | None = None) -> tuple[int, bool]:
+        return max(1, self.settings.mlzero_max_iterations), self.settings.mlzero_continuous_improvement
 
     def _build_runtime_config(self, output_dir: Path, *, continuous_improvement: bool) -> Path:
         template = self.settings.mlzero_config_path.read_text(encoding="utf-8")
@@ -678,6 +852,11 @@ class MLZeroExecutor(BaseExecutor):
         proxy_value = json.dumps(self.settings.mlzero_provider_base_url, ensure_ascii=False)
         wire_api_value = json.dumps(self.settings.mlzero_provider_wire_api, ensure_ascii=False)
         continuous_value = str(continuous_improvement).lower()
+        mcp_web_search_enabled_value = str(bool(getattr(self.settings, "mlzero_mcp_web_search_enabled", False))).lower()
+        mcp_web_search_server_url_value = json.dumps(getattr(self.settings, "mlzero_mcp_web_search_server_url", ""), ensure_ascii=False)
+        mcp_web_search_tool_name_value = json.dumps(getattr(self.settings, "mlzero_mcp_web_search_tool_name", ""), ensure_ascii=False)
+        mcp_web_search_top_k_value = str(max(1, int(getattr(self.settings, "mlzero_mcp_web_search_top_k", 5) or 5)))
+        mcp_web_search_timeout_value = str(max(1, int(getattr(self.settings, "mlzero_mcp_web_search_timeout_seconds", 20) or 20)))
 
         resolved, model_count = re.subn(
             r"(^\s*model:\s*).*$",
@@ -700,6 +879,14 @@ class MLZeroExecutor(BaseExecutor):
             count=1,
             flags=re.MULTILINE,
         )
+        request_timeout_value = str(max(180, self.settings.mlzero_provider_request_timeout_seconds))
+        resolved, request_timeout_count = re.subn(
+            r"(^\s*request_timeout:\s*).*$",
+            lambda match: f"{match.group(1)}{request_timeout_value}",
+            resolved,
+            count=1,
+            flags=re.MULTILINE,
+        )
         resolved, continuous_count = re.subn(
             r"(^\s*continuous_improvement:\s*).*$",
             rf"\1{continuous_value}",
@@ -707,8 +894,34 @@ class MLZeroExecutor(BaseExecutor):
             count=1,
             flags=re.MULTILINE,
         )
+        replacements = {
+            "mcp_web_search_enabled": mcp_web_search_enabled_value,
+            "mcp_web_search_server_url": mcp_web_search_server_url_value,
+            "mcp_web_search_tool_name": mcp_web_search_tool_name_value,
+            "mcp_web_search_top_k": mcp_web_search_top_k_value,
+            "mcp_web_search_timeout_seconds": mcp_web_search_timeout_value,
+        }
+        replacement_counts: dict[str, int] = {}
+        for key, value in replacements.items():
+            resolved, replacement_counts[key] = re.subn(
+                rf"(^\s*{re.escape(key)}:\s*).*$",
+                lambda match, replacement=value: f"{match.group(1)}{replacement}",
+                resolved,
+                count=1,
+                flags=re.MULTILINE,
+            )
+            if replacement_counts[key] == 0:
+                resolved = f"{key}: {value}\n{resolved}"
+                replacement_counts[key] = 1
 
-        if model_count != 1 or proxy_count != 1 or wire_api_count != 1 or continuous_count != 1:
+        if (
+            model_count != 1
+            or proxy_count != 1
+            or wire_api_count != 1
+            or request_timeout_count != 1
+            or continuous_count != 1
+            or any(count != 1 for count in replacement_counts.values())
+        ):
             raise RuntimeError(
                 "Failed to materialize MLZero runtime config with the active provider settings."
             )
@@ -795,6 +1008,51 @@ class MLZeroExecutor(BaseExecutor):
         if not logs_tail and not stdout_tail and not stderr_tail:
             parts.append("No captured stdout/stderr and no logs.txt found in output directory.")
         return "\n".join(parts)
+
+    def _append_repair_note(self, output_dir: Path, message: str) -> None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        line = f"{timestamp} INFO     [ai4ml.runtime_repair] {message}\n"
+        for name in ("logs.txt", "info_logs.txt", "detail_logs.txt", "mlzero_stdout.log"):
+            try:
+                with (output_dir / name).open("a", encoding="utf-8", errors="replace") as handle:
+                    handle.write(line)
+            except OSError:
+                continue
+
+    def _combined_failure_text(self, result: subprocess.CompletedProcess[str], output_dir: Path) -> str:
+        parts = [
+            result.stdout or "",
+            result.stderr or "",
+            self._read_tail(output_dir / "logs.txt", lines=160),
+            self._read_tail(output_dir / "info_logs.txt", lines=160),
+            self._read_tail(output_dir / "detail_logs.txt", lines=160),
+            self._read_tail(output_dir / "mlzero_stderr.log", lines=160),
+        ]
+        return "\n".join(part for part in parts if part)
+
+    def _is_transient_provider_timeout(self, result: subprocess.CompletedProcess[str], output_dir: Path) -> bool:
+        text = self._combined_failure_text(result, output_dir).lower()
+        return "apitimeouterror" in text or "request timed out" in text or "readtimeout" in text
+
+    def _is_recoverable_failure(self, result: subprocess.CompletedProcess[str], output_dir: Path) -> bool:
+        text = self._combined_failure_text(result, output_dir).lower()
+        if any(marker in text for marker in ("apitimeouterror", "request timed out", "readtimeout", "retryerror")):
+            return True
+        if any(marker in text for marker in ("modulenotfounderror", "no module named", "run_summary.json", "leaderboard")):
+            return True
+        return False
+
+    def _infer_retry_stage(self, result: subprocess.CompletedProcess[str], output_dir: Path) -> str | None:
+        text = self._combined_failure_text(result, output_dir).lower()
+        if "coderagent" in text or "python_coder" in text or "apitimeouterror" in text or "request timed out" in text:
+            return "feature_engineering"
+        if "fitting model" in text or "training" in text or "validation score" in text:
+            return "training_validation"
+        if "run_summary" in text or "leaderboard" in text:
+            return "report_generation"
+        if "reading file" in text or "data_perception" in text or "no module named" in text:
+            return "data_analysis"
+        return None
 
     @staticmethod
     def _tail_text(text: str, *, lines: int) -> str:

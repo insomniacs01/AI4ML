@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -23,50 +24,50 @@ from backend.app.models.task import (
 
 AGENT_DEFINITIONS: dict[WorkflowStage, dict[str, Any]] = {
     WorkflowStage.requirement_analysis: {
-        "name": "Agent-Alpha",
-        "role": "需求解析",
+        "name": "需求理解",
+        "role": "理解任务",
         "short_role": "需求",
         "description": "理解业务目标，整理任务约束与输出要求。",
         "x": 10,
         "y": 45,
     },
     WorkflowStage.data_analysis: {
-        "name": "Agent-Beta",
-        "role": "数据分析",
+        "name": "数据检查",
+        "role": "检查数据",
         "short_role": "数据",
         "description": "检查 CSV 字段、目标列、缺失值与任务类型。",
         "x": 27,
         "y": 24,
     },
     WorkflowStage.feature_engineering: {
-        "name": "Agent-Gamma",
-        "role": "特征工程",
+        "name": "数据处理",
+        "role": "准备训练数据",
         "short_role": "特征",
         "description": "生成数据处理与训练前特征逻辑。",
         "x": 45,
         "y": 57,
     },
     WorkflowStage.model_selection: {
-        "name": "Agent-Delta",
-        "role": "模型选择",
+        "name": "模型准备",
+        "role": "选择候选模型",
         "short_role": "模型",
-        "description": "选择 AutoGluon 候选模型并组织比较策略。",
+        "description": "选择候选模型并组织比较方案。",
         "x": 62,
         "y": 30,
     },
     WorkflowStage.training_validation: {
-        "name": "Agent-Epsilon",
-        "role": "训练验证",
+        "name": "训练验证",
+        "role": "训练并检查结果",
         "short_role": "训练",
-        "description": "执行训练、验证、错误修复和 leaderboard 落盘。",
+        "description": "执行训练、验证、错误修复和结果记录。",
         "x": 76,
         "y": 62,
     },
     WorkflowStage.report_generation: {
-        "name": "Agent-Zeta",
-        "role": "报告生成",
+        "name": "报告整理",
+        "role": "生成报告",
         "short_role": "报告",
-        "description": "汇总指标、产物、报告快照和在线预测入口。",
+        "description": "汇总指标、生成文件、报告快照和试算入口。",
         "x": 90,
         "y": 44,
     },
@@ -81,13 +82,37 @@ STATUS_LABELS = {
 }
 
 MESSAGE_TYPE_LABELS = {
-    "coordination": "协作安排",
+    "coordination": "步骤安排",
     "handoff": "阶段交接",
     "acknowledgement": "接收确认",
     "blocker": "阻塞通知",
-    "human_review": "人工节点",
+    "human_review": "人工确认",
     "result": "结果广播",
 }
+
+_RAW_RUNTIME_FALLBACK = "系统已隐藏原始运行日志；请查看诊断结论或报错文件。"
+_RAW_RUNTIME_MARKERS = (
+    "mlzero run failed",
+    "return code:",
+    "traceback (most recent call last)",
+    "[autogluon.assistant",
+    "autogluon.assistant.",
+    "\\mlzero_runs\\",
+    "/mlzero_runs/",
+    "\\storage\\mlzero_runs\\",
+    "/storage/mlzero_runs/",
+    "logs.txt tail",
+    "info_logs.txt tail",
+    "detail_logs.txt tail",
+    "debugging_logs.txt",
+    "captured stdout tail",
+    "captured stderr",
+    "http request: post",
+    "using openai model",
+    "wire_api=chat_completions",
+    "tutorial retrieval is disabled",
+    "install faiss-cpu",
+)
 
 
 def build_task_agent_collaboration_response(
@@ -132,14 +157,18 @@ def build_task_agent_collaboration_response(
         )
 
     runtime_mode = "persistent_agent_runtime" if agent_runs else "stage_agent_orchestrator"
+    safe_stages = [_sanitize_stage_record(stage) for stage in stages]
+    safe_agents = [_sanitize_agent_record(agent) for agent in agents]
+    safe_events = _sanitize_agent_events(_build_events(safe_agents, requests, agent_events=agent_events if agent_runs else None))
+    safe_messages = _sanitize_agent_messages(_sort_messages(agent_messages or []))
     return TaskAgentCollaborationResponse(
         task=task,
         runtime_mode=runtime_mode,
-        stages=stages,
+        stages=safe_stages,
         requests=requests,
-        agents=agents,
-        events=_build_events(agents, requests, agent_events=agent_events if agent_runs else None),
-        messages=_sort_messages(agent_messages or []),
+        agents=safe_agents,
+        events=safe_events,
+        messages=safe_messages,
     )
 
 
@@ -327,7 +356,7 @@ def _build_stage_message_specs(
         )
         acknowledgement = (
             f"{receiver['name']} 已接收 {sender['name']} 的阶段结果，"
-            f"后续将在“{receiver['role']}”中使用这些约束、指标和产物。"
+            f"后续将在“{receiver['role']}”中使用这些约束、指标和生成文件。"
         )
         return [
             _message_spec(sender, receiver, "handoff", handoff, payload),
@@ -347,7 +376,7 @@ def _build_stage_message_specs(
 
     if stage_status == WorkflowStageStatus.waiting_human:
         content = (
-            f"{sender['name']} 暂停在人工协同节点：{summary}"
+            f"{sender['name']} 暂停在人工确认：{summary}"
             f"{' 完成人工确认后再交接给 ' + str(receiver['name']) + '。' if receiver is not None else ''}"
         )
         return [_message_spec(sender, receiver, "human_review", content, payload)]
@@ -398,7 +427,7 @@ def _next_primary_stage(stage: WorkflowStage) -> WorkflowStage | None:
 
 
 def _artifact_suffix(count: int) -> str:
-    return f" 已附带 {count} 个真实产物引用。" if count else ""
+    return f" 已附带 {count} 个真实文件引用。" if count else ""
 
 
 def _last_action_at(stage_record: WorkflowStageRecord | None) -> datetime | None:
@@ -446,7 +475,7 @@ def _build_events(
                 stage=stage,
                 kind="human_request",
                 status=request_status,
-                text=f"人工节点 {title or stage.value} 当前状态：{request_status}",
+                text=f"人工确认 {title or stage.value} 当前状态：{request_status}",
                 time=request.updated_at or request.created_at,
                 artifact_refs=_flatten_artifact_refs(request.payload.get("artifact_paths") if isinstance(request.payload, dict) else None),
             )
@@ -476,3 +505,88 @@ def _flatten_artifact_refs(value: Any) -> list[str]:
                 flattened.append(f"{key}: {item}")
         return flattened
     return [str(value)]
+
+
+def _sanitize_stage_record(record: WorkflowStageRecord) -> WorkflowStageRecord:
+    data = record.model_dump()
+    data["summary"] = _sanitize_runtime_text(data.get("summary"), fallback=_fallback_for_stage(record.stage, record.status))
+    data["log_excerpt"] = _sanitize_runtime_text(data.get("log_excerpt"), fallback=None)
+    return WorkflowStageRecord.model_validate(data)
+
+
+def _sanitize_agent_record(record: TaskAgentRecord) -> TaskAgentRecord:
+    data = record.model_dump()
+    data["current_task"] = _sanitize_runtime_text(
+        data.get("current_task"),
+        fallback=_fallback_for_stage(record.stage, record.status),
+    )
+    data["log_excerpt"] = _sanitize_runtime_text(data.get("log_excerpt"), fallback=None)
+    return TaskAgentRecord.model_validate(data)
+
+
+def _sanitize_agent_events(events: list[TaskAgentEventRecord]) -> list[TaskAgentEventRecord]:
+    sanitized: list[TaskAgentEventRecord] = []
+    for event in events:
+        data = event.model_dump()
+        data["text"] = _sanitize_runtime_text(data.get("text"), fallback=_fallback_for_stage(event.stage, event.status))
+        sanitized.append(TaskAgentEventRecord.model_validate(data))
+    return sanitized
+
+
+def _sanitize_agent_messages(messages: list[TaskAgentMessageRecord]) -> list[TaskAgentMessageRecord]:
+    sanitized: list[TaskAgentMessageRecord] = []
+    for message in messages:
+        data = message.model_dump()
+        data["content"] = _sanitize_runtime_text(data.get("content"), fallback=_RAW_RUNTIME_FALLBACK)
+        payload = data.get("payload")
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            for key in ("summary", "log_excerpt"):
+                if key in payload:
+                    payload[key] = _sanitize_runtime_text(payload.get(key), fallback=None)
+            data["payload"] = payload
+        sanitized.append(TaskAgentMessageRecord.model_validate(data))
+    return sanitized
+
+
+def _sanitize_runtime_text(value: Any, *, fallback: str | None) -> str | None:
+    if value is None:
+        return None
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if not text:
+        return None
+    if _looks_like_raw_runtime_text(text):
+        return fallback
+    return text
+
+
+def _looks_like_raw_runtime_text(value: str) -> bool:
+    lowered = value.lower()
+    if any(marker in lowered for marker in _RAW_RUNTIME_MARKERS):
+        return True
+    if re.search(r"[a-z]:\\[^ ]{10,}", lowered):
+        return True
+    if len(value) > 420 and any(marker in lowered for marker in ("info ", "brief ", "warning ", "autogluon", "mlzero")):
+        return True
+    return False
+
+
+def _fallback_for_stage(stage: WorkflowStage | str | None, status: WorkflowStageStatus | str | None) -> str:
+    try:
+        normalized_stage = normalize_workflow_stage(stage) if stage is not None else None
+    except ValueError:
+        normalized_stage = None
+    raw_status = status.value if hasattr(status, "value") else str(status or "")
+    if raw_status == WorkflowStageStatus.failed.value:
+        if normalized_stage == WorkflowStage.report_generation:
+            return "训练验证失败，报告暂未生成。"
+        if normalized_stage == WorkflowStage.training_validation:
+            return "训练或验证失败，系统已保留报错文件并等待诊断。"
+        return "当前阶段失败，系统已保留报错文件并等待诊断。"
+    if raw_status == WorkflowStageStatus.running.value:
+        return "当前阶段正在运行，等待系统更新状态。"
+    if raw_status == WorkflowStageStatus.completed.value:
+        return "当前阶段已完成。"
+    if raw_status == WorkflowStageStatus.waiting_human.value:
+        return "当前阶段等待人工协同处理。"
+    return _RAW_RUNTIME_FALLBACK

@@ -38,8 +38,8 @@ export default function AuthScreen({
           <p className="eyebrow">Supabase 认证</p>
           <h1>进入 AI4ML 之前先登录</h1>
           <p>
-            前端会用 Supabase 处理登录和团队身份，后端再根据当前团队隔离任务和连接器数据。
-            登录后，你就能直接在页面里录入 AI 连接器、上传 CSV，并触发 AI 解析任务。
+            前端会用 Supabase 处理登录和团队身份，后端再根据当前团队隔离任务和 AI 设置。
+            登录后，你就能直接在页面里录入 AI 服务、上传 CSV，并让 AI 理解任务。
           </p>
         </div>
 

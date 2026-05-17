@@ -65,11 +65,6 @@ def _raise_governance_http_error(exc: RuntimeError | PermissionError | Connectio
 def _validate_routing_update(payload: AIRoutingPoliciesUpdateRequest) -> None:
     for item in payload.items:
         stage = item.stage.strip()
-        if item.fallback_connector_id or (item.fallback_model_name and item.fallback_model_name.strip()):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"{stage} 阶段仍提交了 fallback 路由。当前运行链路要求显式主路由失败即失败，不再保存备用路由。",
-            )
         if item.model_name and item.model_name.strip() and not item.connector_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

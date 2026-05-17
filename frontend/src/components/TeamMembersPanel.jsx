@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { formatDateTime } from "../lib/taskPresentation.js";
+
 const ROLE_LABELS = {
   team_owner: "团队所有者",
   admin: "管理员",
@@ -35,12 +37,6 @@ function formatMemberStatus(status) {
 
 function formatTeamStatus(status) {
   return TEAM_STATUS_LABELS[status] ?? status;
-}
-
-function formatDateTime(value) {
-  if (!value) return "暂无";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function formatMemberLabel(member) {
@@ -137,7 +133,7 @@ export default function TeamMembersPanel({
         <div className="section-head">
           <div>
             <h3>当前团队</h3>
-            <p>这里集中显示团队邀请码、你的角色、团队状态，以及成员治理入口。</p>
+            <p>这里显示当前小组、你的身份和邀请码，方便课堂展示和成员加入。</p>
           </div>
           <div className="section-actions">
             <button type="button" className="ghost-button" onClick={onRefresh}>
@@ -150,9 +146,8 @@ export default function TeamMembersPanel({
           <div className="summary-grid">
             <article className="summary-item"><span>团队名称</span><strong>{activeTeam.name}</strong></article>
             <article className="summary-item"><span>我的角色</span><strong>{formatRole(activeTeam.role)}</strong></article>
-            <article className="summary-item"><span>团队状态</span><strong>{formatTeamStatus(teamSettings?.status ?? activeTeam.status)}</strong></article>
             <article className="summary-item"><span>邀请码</span><strong>{activeTeam.invite_code}</strong></article>
-            <article className="summary-item"><span>团队所有者</span><strong>{teamSettings?.owner_display_name || teamSettings?.owner_email || ownerUserId || "未记录"}</strong></article>
+            <article className="summary-item"><span>成员数量</span><strong>{teamMembers.length}</strong></article>
             <article className="summary-item"><span>加入时间</span><strong>{formatDateTime(activeTeam.joined_at ?? activeTeam.created_at)}</strong></article>
           </div>
         ) : (
@@ -160,7 +155,7 @@ export default function TeamMembersPanel({
         )}
       </section>
 
-      <section className="section-card">
+      <section className="section-card team-admin-settings">
         <div className="section-head">
           <div>
             <h3>团队设置</h3>
@@ -219,7 +214,7 @@ export default function TeamMembersPanel({
           <div className="section-head compact-section-head">
             <div>
               <h3>所有权转移</h3>
-              <p>转移后，新的所有者获得团队设置和所有权治理权限，当前所有者会降为管理员。</p>
+              <p>转移后，新的所有者可以管理团队设置和所有权，当前所有者会降为管理员。</p>
             </div>
           </div>
           <div className="form-row">
@@ -248,11 +243,11 @@ export default function TeamMembersPanel({
       </section>
 
       {memberships.length > 1 ? (
-        <section className="section-card">
+        <section className="section-card team-switch-section">
           <div className="section-head">
             <div>
               <h3>我的团队</h3>
-              <p>切换团队后，任务、连接器、配额和默认 AI 路由都会同步切换。</p>
+              <p>切换后会看到另一个小组的任务和成员。</p>
             </div>
           </div>
           <div className="task-cards">
@@ -318,7 +313,7 @@ export default function TeamMembersPanel({
         <div className="section-head">
           <div>
             <h3>团队成员</h3>
-            <p>管理员可以维护成员角色和成员状态；团队所有者身份通过上方“所有权转移”单独治理。</p>
+            <p>查看小组成员和分工。展示时重点看谁负责创建任务、谁负责复核。</p>
           </div>
         </div>
 
@@ -357,7 +352,7 @@ export default function TeamMembersPanel({
                         {canManage ? (
                           <div className="detail-stack">
                             {isOwner ? (
-                              <span className="meta-note">团队所有者请通过所有权转移变更。</span>
+                              <span className="meta-note">团队负责人</span>
                             ) : (
                               <div className="button-row">
                                 <select

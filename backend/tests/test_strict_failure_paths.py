@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest import TestCase
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from backend.app.api.routes import tasks as task_routes
 from backend.app.api.routes import team as team_routes
@@ -141,15 +142,13 @@ class StrictFailurePathTests(TestCase):
         self.assertEqual(raised.exception.status_code, 409)
         self.assertIn("connector_id", str(raised.exception.detail))
 
-    def test_team_policy_fallback_is_not_used_as_runtime_route(self) -> None:
+    def test_team_policy_without_primary_route_is_not_used_as_runtime_route(self) -> None:
         connector = _connector()
         runtime_context = task_routes._RoutingRuntimeContext(
             team_policies={
                 WorkflowStage.requirement_analysis.value: AIRoutingPolicyRecord(
                     team_id="team-1",
                     stage=WorkflowStage.requirement_analysis.value,
-                    fallback_connector_id=connector.id,
-                    fallback_model_name="fallback-model",
                 )
             },
             connector_cache={connector.id: connector},
@@ -179,18 +178,15 @@ class StrictFailurePathTests(TestCase):
         self.assertEqual(raised.exception.status_code, 422)
         self.assertIn("connector_id", str(raised.exception.detail))
 
-    def test_team_routing_update_rejects_fallback_payload(self) -> None:
-        with self.assertRaises(HTTPException) as raised:
-            team_routes._validate_routing_update(
-                AIRoutingPoliciesUpdateRequest(
-                    items=[
-                        AIRoutingPolicyUpsertRequest(
-                            stage=WorkflowStage.requirement_analysis.value,
-                            fallback_connector_id="connector-1",
-                        )
+    def test_team_routing_update_schema_rejects_fallback_payload(self) -> None:
+        with self.assertRaises(ValidationError):
+            AIRoutingPoliciesUpdateRequest.model_validate(
+                {
+                    "items": [
+                        {
+                            "stage": WorkflowStage.requirement_analysis.value,
+                            "fallback_connector_id": "connector-1",
+                        }
                     ]
-                )
+                }
             )
-
-        self.assertEqual(raised.exception.status_code, 422)
-        self.assertIn("fallback", str(raised.exception.detail))

@@ -1,4 +1,6 @@
-﻿const API_ROOT = import.meta.env.VITE_API_ROOT;
+﻿import { formatErrorMessage } from "./errorMessages.js";
+
+const API_ROOT = import.meta.env.VITE_API_ROOT;
 const GET_CACHE_TTL_MS = 30_000;
 const getCache = new Map();
 const inFlightGets = new Map();
@@ -28,7 +30,9 @@ function getCacheKey(path, accessToken, teamId) {
 
 function requireTeamScopedPath(path, context = {}) {
   const teamId = context?.teamId;
-  if (!teamId) return path;
+  if (!teamId) {
+    throw new Error("缺少当前团队 ID，业务接口必须使用 /api/teams/{team_id}/... 路径。请先选择团队后重试。");
+  }
   return `/teams/${encodeURIComponent(teamId)}${path}`;
 }
 
@@ -67,10 +71,10 @@ async function request(path, options = {}) {
   }).then(async (response) => {
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      if (typeof payload.detail === "string" && payload.detail) {
-        throw new Error(payload.detail);
+      if (payload.detail) {
+        throw new Error(formatErrorMessage(payload));
       }
-      throw new Error(`接口 ${path} 返回 HTTP ${response.status}，但响应体没有 detail 字段。`);
+      throw new Error(formatErrorMessage(`接口 ${path} 返回 HTTP ${response.status}，但响应体没有 detail 字段。`));
     }
 
     const payload = await response.json();
@@ -98,10 +102,10 @@ async function requestBlob(path, options = {}) {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    if (typeof payload.detail === "string" && payload.detail) {
-      throw new Error(payload.detail);
+    if (payload.detail) {
+      throw new Error(formatErrorMessage(payload));
     }
-    throw new Error(`接口 ${path} 返回 HTTP ${response.status}，但响应体没有 detail 字段。`);
+    throw new Error(formatErrorMessage(`接口 ${path} 返回 HTTP ${response.status}，但响应体没有 detail 字段。`));
   }
 
   const disposition = response.headers.get("content-disposition") ?? "";
@@ -340,7 +344,7 @@ export const api = {
     formData.append("file", file);
     const params = new URLSearchParams();
     params.set("auto_run", options.autoRun === false ? "false" : "true");
-    params.set("time_limit", String(options.timeLimit ?? 20));
+    if (options.timeLimit != null) params.set("time_limit", String(options.timeLimit));
     return request(requireTeamScopedPath(`/tasks/${taskId}/dataset?${params.toString()}`, context), {
       ...context,
       method: "POST",
@@ -439,12 +443,13 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  runTask(taskId, timeLimit = 20, context = {}) {
+  runTask(taskId, timeLimit = null, context = {}) {
+    const body = timeLimit == null ? {} : { time_limit: timeLimit };
     return request(requireTeamScopedPath(`/tasks/${taskId}/run`, context), {
       ...context,
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ time_limit: timeLimit }),
+      body: JSON.stringify(body),
     });
   },
   deleteTask(taskId, context = {}) {

@@ -51,8 +51,6 @@ export default function RoutingPolicyPanel({
         stage: stage.key,
         connector_id: draft[stage.key]?.connector_id || null,
         model_name: draft[stage.key]?.connector_id ? draft[stage.key]?.model_name?.trim() || null : null,
-        fallback_connector_id: null,
-        fallback_model_name: null,
       })),
     });
   }
@@ -62,8 +60,8 @@ export default function RoutingPolicyPanel({
       <section className="section-card">
         <div className="section-head">
           <div>
-            <h3>团队默认 AI 路由</h3>
-            <p>这里定义的是阶段级默认连接器和模型。任务未显式覆盖时会继承这里的配置；未配置则在运行时直接报错。</p>
+            <h3>团队默认 AI 设置</h3>
+            <p>这里设置每一步默认使用哪个 AI 服务。任务没有单独指定时，会自动沿用这里的设置。</p>
           </div>
           <button type="button" className="chip-button" onClick={onRefresh} disabled={loading}>
             {loading ? "刷新中..." : "刷新配置"}
@@ -79,13 +77,13 @@ export default function RoutingPolicyPanel({
               <div className="section-head">
                 <div>
                   <h3>{stage.label}</h3>
-                  <p>这个阶段必须使用一个明确的连接器。只填模型名不会自动借用当前运行时连接器。</p>
+                  <p>这个步骤需要指定一个可用的 AI 服务。只填模型名称是不够的。</p>
                 </div>
               </div>
 
               <div className="form-row">
                 <label className="field">
-                  <span>连接器</span>
+                  <span>AI 服务</span>
                   <select
                     value={draft[stage.key]?.connector_id || ""}
                     onChange={(event) => setDraft((current) => ({
@@ -108,14 +106,14 @@ export default function RoutingPolicyPanel({
                 </label>
 
                 <label className="field">
-                  <span>模型覆盖</span>
+                  <span>单独指定模型</span>
                   <input
                     value={draft[stage.key]?.model_name || ""}
                     onChange={(event) => setDraft((current) => ({
                       ...current,
                       [stage.key]: { ...current[stage.key], model_name: event.target.value },
                     }))}
-                    placeholder="留空则跟随连接器默认模型"
+                    placeholder="留空则使用该服务的默认模型"
                     disabled={!canManage || !draft[stage.key]?.connector_id}
                   />
                 </label>
@@ -125,7 +123,7 @@ export default function RoutingPolicyPanel({
 
           <div className="button-row">
             <button type="submit" className="primary-button" disabled={saving || !canManage}>
-              {saving ? "保存中..." : "保存默认 AI 路由"}
+              {saving ? "保存中..." : "保存默认 AI 设置"}
             </button>
           </div>
         </form>

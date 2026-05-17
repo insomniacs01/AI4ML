@@ -41,54 +41,54 @@ export default function TaskForm({
 }) {
   const connectorOptions = Array.isArray(connectors) ? connectors : [];
 
+  const derivedName = form.name?.trim() || selectedFile?.name?.replace(/\.csv$/i, "") || form.description?.trim()?.slice(0, 24) || "";
+
   return (
-    <section className="section-card task-form-card task-panel">
-      <div className="section-head">
-        <div>
-          <p className="eyebrow">新任务</p>
-          <h3>描述需求并上传 CSV</h3>
-        </div>
-      </div>
+    <section className="showcase-card task-form-card task-panel">
+      <form className="showcase-task-form" onSubmit={(event) => {
+        if (!form.name?.trim() && derivedName) onFieldChange("name", derivedName);
+        onSubmit(event);
+      }}>
+        <input type="hidden" name="name" value={form.name} />
 
-      <form className="task-form" onSubmit={onSubmit}>
-        <label className="field">
-          <span>任务名称</span>
-          <input
-            name="name"
-            value={form.name}
-            onChange={(event) => onFieldChange("name", event.target.value)}
-            placeholder="例如：预测产量"
-            required
-          />
-        </label>
-
-        <label className="field">
-          <span>任务描述</span>
+        <label className="showcase-big-field">
+          <span>这次想解决什么问题？</span>
           <textarea
             name="description"
             value={form.description}
-            onChange={(event) => onFieldChange("description", event.target.value)}
-            placeholder="例如：请根据土壤和气象特征预测作物产量，目标列是 yield。"
-            rows={5}
+            onChange={(event) => {
+              const value = event.target.value;
+              onFieldChange("description", value);
+              if (!form.name?.trim() && value.trim()) onFieldChange("name", value.trim().slice(0, 24));
+            }}
+            placeholder="例如：根据土壤和天气数据预测作物产量"
+            rows={4}
             required
           />
         </label>
 
-        <label className="field">
-          <span>CSV 数据集</span>
-          <input key={fileInputKey} type="file" accept=".csv" onChange={onFileChange} required />
-          <small className="helper-text">{selectedFile ? `已选择：${selectedFile.name}` : "只支持 .csv 文件"}</small>
+        <label className="showcase-upload-zone">
+          <input key={fileInputKey} type="file" accept=".csv" onChange={(event) => {
+            const file = event.target.files?.[0] ?? null;
+            if (file && !form.name?.trim()) onFieldChange("name", file.name.replace(/\.csv$/i, ""));
+            onFileChange(event);
+          }} required />
+          <span className="upload-cloud">☁</span>
+          <strong>拖入 CSV，或点击上传</strong>
+          <small>{selectedFile ? `已选择：${selectedFile.name}` : "仅支持 .csv 文件，大小不超过 200MB"}</small>
         </label>
 
-        <button type="submit" className="primary-button task-submit-button" disabled={submitting}>
-          {submitting ? "提交中..." : "提交并解析"}
-        </button>
+        <div className="showcase-form-actions">
+          <button type="submit" className="primary-button task-submit-button" disabled={submitting}>
+            {submitting ? "提交中..." : "让 AI 先理解我的需求"}
+          </button>
+        </div>
 
-        <details className="task-advanced-section">
+        <details className="task-advanced-section" hidden>
           <summary>
             <div>
-              <strong>高级配置</strong>
-              <span>阶段 AI 覆盖、人工复核节点</span>
+              <strong>高级设置（可不填）</strong>
+              <span>默认会自动选择 AI 和复核方式，只有特殊情况才需要展开</span>
             </div>
             <em>展开</em>
           </summary>
@@ -96,8 +96,8 @@ export default function TaskForm({
           <section className="task-subsection">
             <div className="section-head">
               <div>
-                <h3>阶段 AI 覆盖</h3>
-                <p>只在当前任务上生效。留空表示继承团队默认 AI 路由。</p>
+                <h3>单独指定 AI</h3>
+                <p>只在当前任务上生效。留空表示使用团队默认 AI 设置。</p>
               </div>
             </div>
 
@@ -109,12 +109,12 @@ export default function TaskForm({
                     <div className="section-head">
                       <div>
                         <h3>{stage.label}</h3>
-                        <p>覆盖当前任务在这个阶段使用的连接器和模型。</p>
+                        <p>单独指定当前任务在这个步骤使用的 AI 服务和模型。</p>
                       </div>
                     </div>
                     <div className="form-row">
                       <label className="field">
-                        <span>连接器</span>
+                        <span>AI 服务</span>
                         <select
                           value={current.connector_id || ""}
                           onChange={(event) => onStageRoutingChange(stage.value, "connector_id", event.target.value)}
@@ -129,11 +129,11 @@ export default function TaskForm({
                       </label>
 
                       <label className="field">
-                        <span>模型覆盖</span>
+                        <span>单独指定模型</span>
                         <input
                           value={current.model_name || ""}
                           onChange={(event) => onStageRoutingChange(stage.value, "model_name", event.target.value)}
-                          placeholder="留空则跟随选中连接器默认模型"
+                          placeholder="留空则使用该 AI 服务的默认模型"
                           disabled={!current.connector_id}
                         />
                       </label>
@@ -147,23 +147,23 @@ export default function TaskForm({
           <section className="task-subsection">
             <div className="section-head">
               <div>
-                <h3>人工参与策略</h3>
-                <p>你可以在运行前或运行后自动插入人工复核节点。这里的配置会写入任务本身。</p>
+                <h3>人工确认设置</h3>
+                <p>你可以让任务在某一步前后停下来，等待指定成员确认。</p>
               </div>
               <button type="button" className="ghost-button" onClick={onAddPolicy}>
-                添加策略
+                添加确认
               </button>
             </div>
 
-            {!form.interaction_policies?.length ? <div className="empty-state compact">当前还没有人工参与策略。</div> : null}
+            {!form.interaction_policies?.length ? <div className="empty-state compact">当前还没有人工确认设置。</div> : null}
 
             <div className="policy-list">
               {(form.interaction_policies ?? []).map((policy, index) => (
                 <article key={policy.client_id ?? `${policy.stage}-${index}`} className="policy-card">
                   <div className="section-head">
                     <div>
-                      <h3>策略 {index + 1}</h3>
-                      <p>到达对应阶段时创建一个复核节点。</p>
+                      <h3>确认设置 {index + 1}</h3>
+                      <p>到达对应步骤时创建一个复核待办。</p>
                     </div>
                     <button type="button" className="ghost-button" onClick={() => onRemovePolicy(index)}>
                       删除

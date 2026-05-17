@@ -73,7 +73,7 @@ export default function PredictionDemoPanel({
         <div className="section-head">
           <div>
             <h3>选择任务</h3>
-            <p>在线预测只会调用真实运行产物。没有 AutoGluon predictor 或统一预测合约时，接口会明确返回暂不支持。</p>
+            <p>试算只会使用真实训练好的模型。没有可用模型时，接口会明确返回暂不支持。</p>
           </div>
         </div>
 
@@ -94,17 +94,17 @@ export default function PredictionDemoPanel({
         <section className="section-card">
           <div className="section-head">
             <div>
-              <h3>单行在线预测</h3>
-              <p>输入字段必须匹配训练时的特征列。目标列会在后端自动忽略。</p>
+              <h3>试算一条数据</h3>
+              <p>输入字段需要和训练时的数据列一致。预测目标那一列会自动忽略。</p>
             </div>
             <span className={selectedTask.last_run ? "runtime-pill success" : "runtime-pill warning"}>
-              {selectedTask.last_run ? "已有运行产物" : "暂无成功运行"}
+              {selectedTask.last_run ? "已有可用结果" : "暂无成功运行"}
             </span>
           </div>
 
           <form className="task-form" onSubmit={handleSubmit}>
             <label className="field">
-              <span>Features JSON</span>
+              <span>输入数据 JSON</span>
               <textarea
                 rows={12}
                 className="mono-text"
@@ -115,7 +115,7 @@ export default function PredictionDemoPanel({
             </label>
             <div className="button-row">
               <button type="submit" className="primary-button" disabled={state === "loading" || !selectedTask.last_run}>
-                {state === "loading" ? "预测中..." : "运行在线预测"}
+                {state === "loading" ? "试算中..." : "开始试算"}
               </button>
               <button type="button" className="ghost-button" onClick={() => setFeaturesText(formatJson(sampleFeatures))}>
                 使用数据预览样例
@@ -140,7 +140,7 @@ export default function PredictionDemoPanel({
           ) : null}
         </section>
       ) : (
-        <div className="empty-state">先选择一个任务，再打开 Web Demo。</div>
+        <div className="empty-state">先选择一个任务，再开始试算。</div>
       )}
     </div>
   );

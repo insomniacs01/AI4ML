@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 
+import { formatDateTime } from "../lib/taskPresentation.js";
+
 const ASSET_TYPE_OPTIONS = [
   { value: "dataset", label: "数据集" },
   { value: "model", label: "模型" },
@@ -24,12 +26,6 @@ const STATUS_LABELS = {
 };
 
 const ASSET_RENDER_LIMIT = 200;
-
-function formatDateTime(value) {
-  if (!value) return "暂无";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-}
 
 const EMPTY_FORM = {
   asset_type: "dataset",
@@ -152,6 +148,12 @@ export default function AssetCenterPanel({
           <article className="summary-item"><span>当前筛选</span><strong>{visibleAssets.length}</strong></article>
         </div>
 
+        <details className="expert-advanced-fold">
+          <summary>
+            <span>登记或沉淀新资产</span>
+            <small>手工登记、从当前任务沉淀数据集/模型/报告</small>
+          </summary>
+          <div className="expert-advanced-stack">
         <form className="task-form" onSubmit={handleSubmit}>
           <div className="form-row">
             <label className="field">
@@ -229,6 +231,8 @@ export default function AssetCenterPanel({
             <button type="button" className="ghost-button" disabled={!selectedTask || creating} onClick={() => onCreateFromTask?.("workflow")}>工作流</button>
           </div>
         </div>
+          </div>
+        </details>
       </section>
 
       <section className="section-card">
