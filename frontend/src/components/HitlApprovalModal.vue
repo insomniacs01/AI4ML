@@ -8,6 +8,8 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   taskId: { type: String, required: true },
   hitl: { type: Object, default: null },
+  loading: { type: Boolean, default: false },
+  loadError: { type: String, default: '' },
 })
 
 const emit = defineEmits(['close', 'submitted'])
@@ -93,6 +95,7 @@ const requestDescription = computed(() => requestPayload.value.summary || stageM
 const suggestedAction = computed(() => requestPayload.value.suggested_action || requestPayload.value.default_action || stageMeta.value.defaultAction)
 const parameterDefaults = computed(() => requestPayload.value.parameters || requestPayload.value.details?.parameters || {})
 const riskNotes = computed(() => requestPayload.value.risk_notes || props.hitl?.risk_notes || [])
+const submittingDisabled = computed(() => busy.value || props.loading || Boolean(props.loadError))
 
 function normalizeStage(value) {
   return {
@@ -210,15 +213,20 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
           </button>
         </div>
 
-        <p v-if="error" class="form-error">{{ error }}</p>
+        <p v-if="error || loadError" class="form-error">{{ error || loadError }}</p>
 
-        <div class="hitl-summary">
+        <div v-if="loading" class="form-warning progress-alert">
+          <RefreshCw class="spinning" :size="17" />
+          <span>正在加载人工确认内容，请稍候。</span>
+        </div>
+
+        <div v-if="!loading" class="hitl-summary">
           <span>状态：{{ hitl?.status || requestPayload.status || '-' }}</span>
           <span>阶段：{{ requestPayload.stage_label || stageMeta.title }}</span>
           <span>建议动作：{{ suggestedAction }}</span>
         </div>
 
-        <div v-if="isCodexPlanApproval" class="form-stack">
+        <div v-if="!loading && isCodexPlanApproval" class="form-stack">
           <label class="field">
             <span>{{ modelDisplayName }} 建模计划</span>
             <textarea
@@ -229,14 +237,14 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
           </label>
         </div>
 
-        <div v-else-if="stage === 'requirement_analysis'" class="form-stack">
+        <div v-else-if="!loading && stage === 'requirement_analysis'" class="form-stack">
           <label class="field">
             <span>需求补充说明</span>
             <textarea v-model="requirementForm.requirement_notes" rows="3" placeholder="例如：优先解释业务影响、重点关注召回率" />
           </label>
         </div>
 
-        <div v-else-if="stage === 'data_analysis'" class="form-stack">
+        <div v-else-if="!loading && stage === 'data_analysis'" class="form-stack">
           <div class="inline-fields compact-fields">
             <label class="field"><span>目标列</span><input v-model="dataForm.label_column" /></label>
             <label class="field">
@@ -251,21 +259,21 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
           </div>
         </div>
 
-        <div v-else-if="stage === 'feature_engineering'" class="form-stack">
+        <div v-else-if="!loading && stage === 'feature_engineering'" class="form-stack">
           <div class="inline-fields compact-fields">
             <label class="field"><span>保留特征列</span><input v-model="featureForm.include_columns" placeholder="age, income" /></label>
             <label class="field"><span>排除特征列</span><input v-model="featureForm.exclude_columns" placeholder="id, name" /></label>
           </div>
         </div>
 
-        <div v-else-if="stage === 'model_selection'" class="form-stack">
+        <div v-else-if="!loading && stage === 'model_selection'" class="form-stack">
           <div class="inline-fields compact-fields">
             <label class="field"><span>允许模型</span><input v-model="modelForm.allowed_models" placeholder="GBM, RF, XGBoost" /></label>
             <label class="field"><span>排除模型</span><input v-model="modelForm.excluded_models" placeholder="KNN, SVM" /></label>
           </div>
         </div>
 
-        <div v-else-if="stage === 'training_validation'" class="form-stack">
+        <div v-else-if="!loading && stage === 'training_validation'" class="form-stack">
           <div class="inline-fields compact-fields">
             <label class="field"><span>训练预算（秒）</span><input v-model.number="trainingForm.time_limit" type="number" min="5" max="300" /></label>
             <label class="field"><span>交叉验证折数</span><input v-model.number="trainingForm.cv_folds" type="number" min="2" max="20" /></label>
@@ -273,25 +281,25 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
           </div>
         </div>
 
-        <div v-else class="form-stack">
+        <div v-else-if="!loading" class="form-stack">
           <label class="field">
             <span>报告重点</span>
             <textarea v-model="reportForm.report_focus" rows="3" placeholder="业务结论, 模型限制, 特征解释" />
           </label>
         </div>
 
-        <div v-if="riskNotes.length" class="hitl-notes">
+        <div v-if="!loading && riskNotes.length" class="hitl-notes">
           <span v-for="item in riskNotes.slice(0, 2)" :key="item">{{ item }}</span>
         </div>
 
-        <div class="modal-actions">
-          <button class="primary-action" type="button" :disabled="busy" @click="submit('verify')">
+        <div v-if="!loading" class="modal-actions">
+          <button class="primary-action" type="button" :disabled="submittingDisabled" @click="submit('verify')">
             <CheckCircle2 :size="17" />{{ busy ? '正在提交' : (isCodexPlanApproval ? '确认执行' : '确认继续') }}
           </button>
-          <button class="secondary-action" type="button" :disabled="busy" @click="submit('retry')">
+          <button class="secondary-action" type="button" :disabled="submittingDisabled" @click="submit('retry')">
             <RefreshCw :class="{ spinning: busy }" :size="17" />{{ isCodexPlanApproval ? '重写计划' : '应用调整并重试' }}
           </button>
-          <button class="danger-action" type="button" :disabled="busy" @click="submit('reject')">
+          <button class="danger-action" type="button" :disabled="submittingDisabled" @click="submit('reject')">
             <X :size="17" />拒绝任务
           </button>
         </div>

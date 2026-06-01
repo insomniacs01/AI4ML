@@ -71,6 +71,8 @@ const sectionLoading = ref(false)
 const error = ref('')
 const message = ref('')
 const hitlModalOpen = ref(false)
+const hitlLoading = ref(false)
+const hitlLoadError = ref('')
 const predictionResult = ref(null)
 const predictionError = ref('')
 const predictionLoading = ref(false)
@@ -492,11 +494,16 @@ async function openHitlApproval(step = null) {
   if (!canHandleHitl.value) return
   if (step && !isHumanWaitingStatus(step.status)) return
   error.value = ''
+  hitl.value = null
+  hitlLoadError.value = ''
+  hitlLoading.value = true
+  hitlModalOpen.value = true
   try {
     hitl.value = await getHitl(props.taskId)
-    hitlModalOpen.value = true
   } catch (err) {
-    error.value = err.message
+    hitlLoadError.value = err.message
+  } finally {
+    hitlLoading.value = false
   }
 }
 
@@ -666,6 +673,8 @@ onUnmounted(() => {
     :open="hitlModalOpen"
     :task-id="taskId"
     :hitl="hitl"
+    :loading="hitlLoading"
+    :load-error="hitlLoadError"
     @close="hitlModalOpen = false"
     @submitted="handleHitlSubmitted"
   />

@@ -30,6 +30,8 @@ const loading = ref(false)
 const pausing = ref(false)
 const hitl = ref(null)
 const hitlModalOpen = ref(false)
+const hitlLoading = ref(false)
+const hitlLoadError = ref('')
 let pollTimer = null
 const pausableStatuses = new Set(['running'])
 const runtimeActiveStatuses = new Set(['running'])
@@ -131,11 +133,16 @@ async function openDetail() {
 async function openHitlApproval(step = null) {
   if (step && !isHumanWaitingStatus(step.status)) return
   error.value = ''
+  hitl.value = null
+  hitlLoadError.value = ''
+  hitlLoading.value = true
+  hitlModalOpen.value = true
   try {
     hitl.value = await getHitl(props.taskId)
-    hitlModalOpen.value = true
   } catch (err) {
-    error.value = err.message
+    hitlLoadError.value = err.message
+  } finally {
+    hitlLoading.value = false
   }
 }
 
@@ -320,6 +327,8 @@ onUnmounted(() => {
     :open="hitlModalOpen"
     :task-id="taskId"
     :hitl="hitl"
+    :loading="hitlLoading"
+    :load-error="hitlLoadError"
     @close="hitlModalOpen = false"
     @submitted="handleHitlSubmitted"
   />

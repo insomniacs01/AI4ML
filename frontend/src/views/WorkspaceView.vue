@@ -45,6 +45,8 @@ const cacheSyncedAt = ref(null)
 const pausing = ref(false)
 const hitl = ref(null)
 const hitlModalOpen = ref(false)
+const hitlLoading = ref(false)
+const hitlLoadError = ref('')
 const taskRun = ref(null)
 const codexRealtime = ref(createCodexRealtimeState())
 let pollTimer = null
@@ -362,11 +364,16 @@ async function openHitlApproval(step = null) {
   if (step && !isHumanWaitingStatus(step.status)) return
   if (!activeTaskId.value) return
   error.value = ''
+  hitl.value = null
+  hitlLoadError.value = ''
+  hitlLoading.value = true
+  hitlModalOpen.value = true
   try {
     hitl.value = await getHitl(activeTaskId.value)
-    hitlModalOpen.value = true
   } catch (err) {
-    error.value = err.message
+    hitlLoadError.value = err.message
+  } finally {
+    hitlLoading.value = false
   }
 }
 
@@ -583,6 +590,8 @@ onUnmounted(() => {
     :open="hitlModalOpen"
     :task-id="activeTaskId"
     :hitl="hitl"
+    :loading="hitlLoading"
+    :load-error="hitlLoadError"
     @close="hitlModalOpen = false"
     @submitted="handleHitlSubmitted"
   />
