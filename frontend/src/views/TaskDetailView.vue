@@ -572,7 +572,7 @@ onUnmounted(() => {
   </section>
 
   <div class="detail-section-selector">
-    <p>用能看懂的话解释模型结果和注意事项。</p>
+    <p>详情视图</p>
     <select :value="activeTab" @change="setActiveTab($event.target.value)">
       <option v-for="section in detailSections" :key="section.value" :value="section.value">
         {{ section.label }}

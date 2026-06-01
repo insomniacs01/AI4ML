@@ -1,4 +1,5 @@
 <script setup>
+import { CheckCircle2, ClipboardList, FileText, Shield } from 'lucide-vue-next'
 import CodexRealtimePanel from '@/components/CodexRealtimePanel.vue'
 
 defineProps({
@@ -21,63 +22,103 @@ defineProps({
   showRealtime: { type: Boolean, default: false },
   codexRealtime: { type: Object, default: () => ({ events: [], status: 'idle', activity: '' }) },
 })
+
+function isLongText(value, limit = 72) {
+  return String(value || '').length > limit
+}
 </script>
 
 <template>
   <section class="overview-board">
-    <div class="overview-summary-grid">
-      <article class="overview-summary-card conclusion">
-        <span class="summary-icon">☆</span>
-        <div>
-          <span>结论</span>
-          <strong>{{ overviewConclusion }}</strong>
-          <p>{{ task?.status === 'completed' ? '完成建模后，这里会展示可读结论。' : '完成建模后，这里会展示可读结论。' }}</p>
+    <div class="overview-report-grid">
+      <article class="panel overview-report-card overview-core-card">
+        <div class="overview-card-head">
+          <span class="overview-card-icon"><FileText :size="18" /></span>
+          <span>核心结果</span>
+        </div>
+        <strong class="overview-core-title" :title="overviewConclusion">{{ overviewConclusion }}</strong>
+        <details v-if="isLongText(overviewConclusion, 54)" class="overview-expand">
+          <summary>展开完整结论</summary>
+          <p>{{ overviewConclusion }}</p>
+        </details>
+      </article>
+
+      <article class="panel overview-report-card overview-kpi-card">
+        <div class="overview-card-head">
+          <span class="overview-card-icon"><ClipboardList :size="18" /></span>
+          <span>关键指标</span>
+        </div>
+        <div class="overview-kpi-grid">
+          <div class="overview-kpi-item">
+            <span>预测误差</span>
+            <strong :title="predictionErrorText">{{ predictionErrorText }}</strong>
+            <p :title="predictionErrorDescription">{{ predictionErrorDescription }}</p>
+            <details v-if="isLongText(predictionErrorDescription, 56)" class="overview-expand">
+              <summary>展开说明</summary>
+              <p>{{ predictionErrorDescription }}</p>
+            </details>
+          </div>
+          <div class="overview-kpi-item">
+            <span>可信度</span>
+            <strong :title="overviewConfidence">{{ overviewConfidence }}</strong>
+            <p :title="confidenceDescription">{{ confidenceDescription }}</p>
+            <details v-if="isLongText(confidenceDescription, 56)" class="overview-expand">
+              <summary>展开说明</summary>
+              <p>{{ confidenceDescription }}</p>
+            </details>
+          </div>
+        </div>
+        <div v-if="targetSummaries.length" class="overview-target-strip">
+          <span
+            v-for="item in targetSummaries"
+            :key="item.name"
+            :title="item.metric ? `${item.name} · ${item.metric} ${item.value}` : item.name"
+          >
+            {{ item.name }}{{ item.metric ? ` · ${item.metric} ${item.value}` : '' }}
+          </span>
         </div>
       </article>
-      <article class="overview-summary-card">
-        <span>预测误差</span>
-        <strong>{{ predictionErrorText }}</strong>
-        <p>{{ predictionErrorDescription }}</p>
-      </article>
-      <article class="overview-summary-card">
-        <span>可信度</span>
-        <strong>{{ overviewConfidence }}</strong>
-        <p>{{ confidenceDescription }}</p>
-      </article>
-      <article class="overview-summary-card">
-        <span>建议</span>
-        <strong>{{ overviewRecommendation }}</strong>
-        <p>结合实际情况再决策</p>
+
+      <article class="panel overview-report-card overview-advice-card">
+        <div class="overview-card-head">
+          <span class="overview-card-icon"><Shield :size="18" /></span>
+          <span>建议</span>
+        </div>
+        <strong class="overview-advice-text" :title="overviewRecommendation">{{ overviewRecommendation }}</strong>
+        <details v-if="isLongText(overviewRecommendation, 42)" class="overview-expand">
+          <summary>展开完整建议</summary>
+          <p>{{ overviewRecommendation }}</p>
+        </details>
       </article>
     </div>
 
     <div class="overview-content-grid">
       <div class="overview-left-column">
         <section class="panel overview-check-panel">
-          <h3>系统有没有认真检查？</h3>
-          <p>这里展示简单对照、结果检查和反复优化记录。</p>
-          <div class="overview-check-grid">
-            <article v-for="item in overviewCheckItems" :key="item.label">
-              <span>{{ item.label }}</span>
-              <strong>{{ item.value }}</strong>
-            </article>
+          <div class="overview-panel-head">
+            <h3>系统检查</h3>
+            <span>{{ overviewCheckItems.length }} 项</span>
           </div>
+          <ul class="overview-check-list">
+            <li v-for="item in overviewCheckItems" :key="item.label">
+              <CheckCircle2 :size="16" />
+              <span>{{ item.label }}</span>
+              <strong :title="item.value">{{ item.value }}</strong>
+            </li>
+          </ul>
           <div class="overview-badge-row">
             <span v-for="badge in overviewBadges" :key="badge">{{ badge }}</span>
-          </div>
-          <div v-if="targetSummaries.length" class="overview-badge-row">
-            <span v-for="item in targetSummaries" :key="item.name">
-              {{ item.name }}{{ item.metric ? ` · ${item.metric} ${item.value}` : '' }}
-            </span>
           </div>
         </section>
 
         <section class="panel overview-factor-panel">
-          <h3>影响结果的关键因素</h3>
-          <p>{{ overviewFactorDescription }}</p>
+          <div class="overview-panel-head stacked">
+            <h3>影响因素</h3>
+            <p>{{ overviewFactorDescription }}</p>
+          </div>
           <div class="overview-factor-list">
             <div v-for="item in overviewFactors" :key="item.label" class="overview-factor-row">
-              <strong>{{ item.label }}</strong>
+              <strong :title="item.label">{{ item.label }}</strong>
               <div><span :style="{ width: `${item.percent}%` }"></span></div>
               <small>{{ item.percent }}%</small>
             </div>
@@ -87,8 +128,10 @@ defineProps({
       </div>
 
       <aside class="panel overview-explain-panel">
-        <h3>结果怎么理解？</h3>
-        <p>完成建模后，这里会展示最重要的指标和可读解释。</p>
+        <div class="overview-panel-head stacked">
+          <h3>结果怎么理解</h3>
+          <p>辅助解释</p>
+        </div>
         <div v-if="hasOverviewChart" class="overview-mini-chart">
           <svg viewBox="0 0 100 80" role="img" aria-label="结果趋势图">
             <polyline :points="overviewChartPoints" fill="none" stroke="#2563eb" stroke-width="2.2" />
@@ -96,9 +139,13 @@ defineProps({
           </svg>
         </div>
         <p v-else class="muted">当前任务没有返回可绘制的真实预测对比点。</p>
-        <div class="overview-insight">
+        <div class="overview-insight" :title="explanationText">
           {{ explanationText }}
         </div>
+        <details v-if="isLongText(explanationText, 96)" class="overview-expand">
+          <summary>展开完整解释</summary>
+          <p>{{ explanationText }}</p>
+        </details>
       </aside>
     </div>
 
