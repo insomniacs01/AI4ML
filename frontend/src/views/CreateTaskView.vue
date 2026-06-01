@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Brain, ClipboardList, FileText, UploadCloud, X } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
+import TaskFlowSteps from '@/components/TaskFlowSteps.vue'
 import { createTask, getPlanDetail, getPlans, getPromptDetail, getPrompts, uploadDataset } from '@/api/client'
 import { modelDisplayName } from '@/utils/modelProfile'
 
@@ -42,6 +43,7 @@ const form = ref({
 
 const hasDataset = computed(() => Boolean(form.value.dataset_file || form.value.dataset_path.trim()))
 const canSubmit = computed(() => form.value.requirement.trim() && hasDataset.value)
+const taskFlowStep = computed(() => (hasDataset.value ? 2 : 1))
 const currentTaskType = computed(() => form.value.task_type || '')
 const uploadedDatasetLabel = computed(() => form.value.dataset_file?.name || '')
 
@@ -178,24 +180,7 @@ onMounted(loadRouteInputs)
   <PageHeader title="开始任务" description="填写任务主题、描述信息并上传数据集，AI 会先理解需求，再进入工作台执行。" />
 
   <section class="start-task-shell">
-    <div class="start-task-steps" aria-label="任务流程">
-      <article class="active">
-        <strong>1</strong>
-        <span>填写任务</span>
-      </article>
-      <article :class="{ active: hasDataset }">
-        <strong>2</strong>
-        <span>上传数据</span>
-      </article>
-      <article>
-        <strong>3</strong>
-        <span>AI 自动尝试</span>
-      </article>
-      <article>
-        <strong>4</strong>
-        <span>查看结果</span>
-      </article>
-    </div>
+    <TaskFlowSteps :current-step="taskFlowStep" />
 
     <div class="start-task-layout">
       <section class="panel start-task-card">
@@ -334,7 +319,7 @@ onMounted(loadRouteInputs)
         <div class="start-next-icon">
           <Brain :size="30" />
         </div>
-        <p>上传数据后，AI 会先帮你确认要预测什么、适合怎么建模。</p>
+        <p>上传数据后会进入工作台运行，完成后在任务详情中查看报告和结果。</p>
         <div>
           <strong>不用担心</strong>
           <span>我们会一步步帮你完成建模。</span>

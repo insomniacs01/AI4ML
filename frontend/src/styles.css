@@ -1107,14 +1107,14 @@ textarea:focus {
   gap: 22px;
 }
 
-.start-task-steps {
+.task-flow-steps {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   padding: 0 24px;
 }
 
-.start-task-steps article {
+.task-flow-steps article {
   position: relative;
   display: grid;
   justify-items: center;
@@ -1123,7 +1123,7 @@ textarea:focus {
   font-weight: 800;
 }
 
-.start-task-steps article:not(:last-child)::after {
+.task-flow-steps article:not(:last-child)::after {
   content: "";
   position: absolute;
   top: 17px;
@@ -1132,7 +1132,7 @@ textarea:focus {
   border-top: 2px dashed color-mix(in srgb, var(--accent) 30%, var(--line));
 }
 
-.start-task-steps strong {
+.task-flow-steps strong {
   position: relative;
   z-index: 1;
   display: grid;
@@ -1145,14 +1145,21 @@ textarea:focus {
   color: var(--muted);
 }
 
-.start-task-steps .active strong {
+.task-flow-steps .done strong {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent-strong);
+}
+
+.task-flow-steps .active strong {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   background: var(--accent);
   color: #ffffff;
   box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.start-task-steps .active span {
+.task-flow-steps .done span,
+.task-flow-steps .active span {
   color: var(--accent-strong);
 }
 

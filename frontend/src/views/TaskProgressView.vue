@@ -7,6 +7,7 @@ import CodexRealtimePanel from '@/components/CodexRealtimePanel.vue'
 import HitlApprovalModal from '@/components/HitlApprovalModal.vue'
 import LoadingBlock from '@/components/LoadingBlock.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import TaskFlowSteps from '@/components/TaskFlowSteps.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import { getHitl, getTaskRuntimeSnapshot, pauseTask, rerunTask } from '@/api/client'
 import { createCodexRealtimeStream } from '@/composables/useCodexRealtimeStream'
@@ -222,6 +223,8 @@ onUnmounted(() => {
       </button>
     </template>
   </PageHeader>
+
+  <TaskFlowSteps :current-step="3" />
 
   <p v-if="error" class="form-error">{{ error }}</p>
 

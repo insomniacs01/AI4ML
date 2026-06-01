@@ -7,6 +7,7 @@ import HitlApprovalModal from '@/components/HitlApprovalModal.vue'
 import LoadingBlock from '@/components/LoadingBlock.vue'
 import MetricCard from '@/components/MetricCard.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import TaskFlowSteps from '@/components/TaskFlowSteps.vue'
 import TaskOverviewPanel from '@/components/TaskOverviewPanel.vue'
 import TaskPredictionPanel from '@/components/TaskPredictionPanel.vue'
 import { displayTaskTitle, taskStatusLabel, taskTypeLabel } from '@/utils/labels'
@@ -96,6 +97,11 @@ const runActionLabel = computed(() => (startableStatuses.has(task.value?.status)
 const canHandleHitl = computed(() => canControlTask.value && task.value?.status === 'waiting_human')
 const canEditCode = computed(() => !readOnlyMode.value)
 const llmUsageText = computed(() => formatTokenCount(task.value?.llm_usage?.total_tokens))
+const taskFlowStep = computed(() => {
+  if (task.value?.status === 'completed') return 4
+  if (['running', 'waiting_human', 'paused_for_review', 'failed', 'cancelled'].includes(task.value?.status)) return 3
+  return 2
+})
 const {
   effectiveMetrics,
   effectiveOverview,
@@ -520,6 +526,8 @@ onUnmounted(() => {
       <button class="danger-action" type="button" @click="removeTask"><Trash2 :size="18" />删除</button>
     </template>
   </PageHeader>
+
+  <TaskFlowSteps :current-step="taskFlowStep" />
 
   <p v-if="error" class="form-error">{{ error }}</p>
   <p v-if="message" class="form-success">{{ message }}</p>

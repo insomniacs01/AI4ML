@@ -8,6 +8,7 @@ import CodexRealtimePanel from '@/components/CodexRealtimePanel.vue'
 import HitlApprovalModal from '@/components/HitlApprovalModal.vue'
 import LoadingBlock from '@/components/LoadingBlock.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import TaskFlowSteps from '@/components/TaskFlowSteps.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import { getHitl, getMyTasks, getTaskRuntimeSnapshot, pauseTask, rerunTask } from '@/api/client'
 import { getActiveTeamHint, getCachedUser } from '@/api/session'
@@ -455,6 +456,8 @@ onUnmounted(() => {
       <RouterLink class="primary-action" to="/create"><FilePlus2 :size="18" />开始任务</RouterLink>
     </template>
   </PageHeader>
+
+  <TaskFlowSteps :current-step="3" />
 
   <p v-if="error" class="form-error">{{ error }}</p>
   <p v-if="syncLabel" class="workspace-sync-note">
