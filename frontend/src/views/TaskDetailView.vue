@@ -1,7 +1,7 @@
 ﻿<script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Play, RefreshCw, Save, Send, Trash2, X } from 'lucide-vue-next'
+import { CheckCircle2, Play, RefreshCw, Save, Send, Trash2, X } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import HitlApprovalModal from '@/components/HitlApprovalModal.vue'
 import LoadingBlock from '@/components/LoadingBlock.vue'
@@ -38,6 +38,7 @@ import { optionalLoad } from '@/utils/async'
 import { createCodexRealtimeState, seedCodexRealtimeFromSnapshot } from '@/utils/codexRealtime'
 import { modelDisplayName } from '@/utils/modelProfile'
 import { continueRunOptions } from '@/utils/taskRunControl'
+import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
 import { isFinishedTaskStatus, taskIdOf } from '@/utils/taskRecords'
 
 const props = defineProps({ taskId: { type: String, required: true } })
@@ -93,9 +94,15 @@ const isRuntimeActive = computed(() => runtimeActiveStatuses.has(task.value?.sta
 const canControlTask = computed(() => !readOnlyMode.value && !isFinished.value)
 const showRealtime = computed(() => isCurrentActiveTask.value && !isFinished.value && isRuntimeActive.value)
 const pausable = computed(() => isCurrentActiveTask.value && task.value?.status === 'running')
-const canContinueRun = computed(() => canControlTask.value && ['planning', 'uploaded', 'paused_for_review'].includes(task.value?.status))
+const waitingStep = computed(() => firstWaitingHumanStep(steps.value))
+const isWaitingHuman = computed(() => hasPendingHumanConfirmation(task.value, taskRun.value, steps.value))
+const canContinueRun = computed(() => (
+  canControlTask.value
+  && ['planning', 'uploaded', 'paused_for_review'].includes(task.value?.status)
+  && !isWaitingHuman.value
+))
 const runActionLabel = computed(() => (startableStatuses.has(task.value?.status) ? '启动运行' : '继续运行'))
-const canHandleHitl = computed(() => canControlTask.value && task.value?.status === 'waiting_human')
+const canHandleHitl = computed(() => canControlTask.value && isWaitingHuman.value)
 const canEditCode = computed(() => !readOnlyMode.value)
 const llmUsageText = computed(() => formatTokenCount(task.value?.llm_usage?.total_tokens))
 const taskFlowStep = computed(() => {
@@ -483,7 +490,7 @@ function scheduleSnapshotRefresh() {
 
 async function openHitlApproval(step = null) {
   if (!canHandleHitl.value) return
-  if (step && step.status !== 'waiting_human') return
+  if (step && !isHumanWaitingStatus(step.status)) return
   error.value = ''
   try {
     hitl.value = await getHitl(props.taskId)
@@ -524,6 +531,9 @@ onUnmounted(() => {
       <button v-if="canContinueRun" class="secondary-action" type="button" :disabled="loading" @click="continueRun">
         <Play :size="18" />{{ runActionLabel }}
       </button>
+      <button v-if="canHandleHitl" class="primary-action" type="button" :disabled="loading" @click="openHitlApproval(waitingStep)">
+        <CheckCircle2 :size="18" />处理人工确认
+      </button>
       <button v-if="pausable" class="secondary-action" type="button" @click="pauseRunningTask">暂停运行</button>
       <button class="danger-action" type="button" @click="removeTask"><Trash2 :size="18" />删除</button>
     </template>
@@ -540,7 +550,12 @@ onUnmounted(() => {
   <LoadingBlock v-if="loading" />
 
   <template v-else>
-  <p v-if="canHandleHitl" class="form-warning">当前任务正在等待人工确认。</p>
+  <div v-if="canHandleHitl" class="form-warning progress-alert">
+    <span>当前任务正在等待人工确认。</span>
+    <button class="primary-action compact-action" type="button" @click="openHitlApproval(waitingStep)">
+      处理人工确认
+    </button>
+  </div>
 
   <section class="detail-top">
     <MetricCard label="状态" :value="taskStatusLabel(task?.status)" />

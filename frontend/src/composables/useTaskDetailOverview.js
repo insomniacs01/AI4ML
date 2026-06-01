@@ -4,6 +4,7 @@ import { metricLabel } from '@/utils/labels'
 import { renderMarkdown } from '@/utils/markdown'
 import { modelDisplayName } from '@/utils/modelProfile'
 import { chartPolylinePoints } from '@/utils/taskDetail'
+import { hasPendingHumanConfirmation } from '@/utils/taskHumanState'
 
 function addMetricValues(target, source, prefix = '') {
   Object.entries(source || {}).forEach(([key, value]) => {
@@ -38,6 +39,7 @@ function targetSummariesFromOverview(value) {
 }
 
 export function useTaskDetailOverview({ task, taskRun, metrics, importance, overview, report, planText }) {
+  const waitingHuman = computed(() => hasPendingHumanConfirmation(task.value, taskRun.value, taskRun.value?.steps || []))
   const effectiveMetrics = computed(() => {
     const values = {}
     addMetricValues(values, metrics.value?.values || {})
@@ -120,8 +122,8 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     if (!task.value) return '等待任务数据加载'
     if (task.value.status === 'completed') return '已生成可读报告'
     if (task.value.status === 'failed') return '运行遇到问题'
+    if (waitingHuman.value) return '等待人工确认'
     if (task.value.status === 'paused_for_review') return '运行已暂停'
-    if (task.value.status === 'waiting_human') return '等待人工确认'
     if (task.value.status === 'running') return '等待生成可读报告'
     return '等待开始运行'
   })
@@ -129,8 +131,8 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     const recommendation = effectiveOverview.value?.task_summary?.recommendation
     if (recommendation) return recommendation
     if (task.value?.status === 'completed') return '先查看报告'
+    if (waitingHuman.value) return '先处理人工确认'
     if (task.value?.status === 'paused_for_review') return '继续运行'
-    if (task.value?.status === 'waiting_human') return '先确认方案'
     if (task.value?.status === 'failed') return '先查看诊断'
     return '先完成运行'
   })
@@ -170,7 +172,7 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
       ]
     }
     if (task.value?.status === 'completed') return ['结果已生成', '可查看报告']
-    if (task.value?.status === 'waiting_human') return ['需要人工确认', '确认后继续运行']
+    if (waitingHuman.value) return ['需要人工确认', '确认后继续运行']
     if (task.value?.status === 'failed') return ['运行遇到问题', '需要查看诊断']
     return ['任务语义可执行', '等待完成运行']
   })

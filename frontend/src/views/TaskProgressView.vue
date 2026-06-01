@@ -16,6 +16,7 @@ import { createCodexRealtimeState, seedCodexRealtimeFromSnapshot } from '@/utils
 import { modelDisplayName } from '@/utils/modelProfile'
 import { taskProgressPercent } from '@/utils/progress'
 import { continueRunOptions } from '@/utils/taskRunControl'
+import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
 import { isFinishedTaskStatus, stepStatusLabel } from '@/utils/taskRecords'
 
 const props = defineProps({ taskId: { type: String, required: true } })
@@ -38,10 +39,10 @@ const finished = computed(() => isFinishedTaskStatus(task.value?.status))
 const canPauseRun = computed(() => pausableStatuses.has(task.value?.status))
 const isStartableTask = computed(() => startableStatuses.has(task.value?.status))
 const isRuntimeActive = computed(() => runtimeActiveStatuses.has(task.value?.status))
-const canContinueRun = computed(() => task.value?.status === 'paused_for_review' || isStartableTask.value)
 const runActionLabel = computed(() => (isStartableTask.value ? '启动运行' : '继续运行'))
-const waitingStep = computed(() => steps.value.find((step) => step.status === 'waiting_human') || null)
-const isWaitingHuman = computed(() => task.value?.status === 'waiting_human' || (!finished.value && Boolean(waitingStep.value)))
+const waitingStep = computed(() => firstWaitingHumanStep(steps.value))
+const isWaitingHuman = computed(() => hasPendingHumanConfirmation(task.value, taskRun.value, steps.value))
+const canContinueRun = computed(() => (task.value?.status === 'paused_for_review' || isStartableTask.value) && !isWaitingHuman.value)
 const isBootstrapping = computed(() => isRuntimeActive.value && !finished.value && steps.value.length === 0)
 const stepSummary = computed(() => steps.value.slice(0, 8))
 const codexWorkspacePath = computed(() => taskRun.value?.codex?.workspace_path || task.value?.codex_workspace_path || '')
@@ -128,7 +129,7 @@ async function openDetail() {
 }
 
 async function openHitlApproval(step = null) {
-  if (step && step.status !== 'waiting_human') return
+  if (step && !isHumanWaitingStatus(step.status)) return
   error.value = ''
   try {
     hitl.value = await getHitl(props.taskId)

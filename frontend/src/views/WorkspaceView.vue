@@ -23,6 +23,7 @@ import {
 import { modelDisplayName } from '@/utils/modelProfile'
 import { taskProgressPercent } from '@/utils/progress'
 import { continueRunOptions } from '@/utils/taskRunControl'
+import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
 import { isFinishedTaskStatus, pickActiveTask, stepStatusLabel, taskIdOf } from '@/utils/taskRecords'
 import {
   isWorkspaceRuntimeCacheFresh,
@@ -64,7 +65,8 @@ const syncLabel = computed(() => {
   if (hydratedFromCache.value && cacheAgeLabel.value) return `显示上次同步状态：${cacheAgeLabel.value}`
   return ''
 })
-const isWaitingHuman = computed(() => activeTask.value?.status === 'waiting_human')
+const waitingStep = computed(() => firstWaitingHumanStep(steps.value))
+const isWaitingHuman = computed(() => hasPendingHumanConfirmation(activeTask.value, taskRun.value, steps.value))
 const isPausedRun = computed(() => activeTask.value?.status === 'paused_for_review')
 const isStartableTask = computed(() => startableStatuses.has(activeTask.value?.status))
 const isRuntimeActive = computed(() => runtimeActiveStatuses.has(activeTask.value?.status))
@@ -78,7 +80,6 @@ const canContinueRun = computed(() => (
 ))
 const canPauseRun = computed(() => activeTaskId.value && pausableStatuses.has(activeTask.value?.status))
 const runActionLabel = computed(() => (isStartableTask.value ? '启动运行' : '继续运行'))
-const waitingStep = computed(() => steps.value.find((step) => step.status === 'waiting_human') || null)
 const codexWorkspacePath = computed(() => taskRun.value?.codex?.workspace_path || activeTask.value?.codex_workspace_path || '')
 const reportRoute = computed(() => {
   if (!activeTaskId.value) return null
@@ -358,7 +359,7 @@ async function openDetail() {
 }
 
 async function openHitlApproval(step = null) {
-  if (step && step.status !== 'waiting_human') return
+  if (step && !isHumanWaitingStatus(step.status)) return
   if (!activeTaskId.value) return
   error.value = ''
   try {
@@ -370,7 +371,7 @@ async function openHitlApproval(step = null) {
 }
 
 async function continueRun() {
-  if (!activeTaskId.value) return
+  if (!activeTaskId.value || !canContinueRun.value) return
   loading.value = true
   error.value = ''
   try {
