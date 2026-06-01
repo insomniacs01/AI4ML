@@ -3,15 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.models.task import TaskRecord
+from backend.app.services.task_human_parameter_guidance import build_task_human_parameter_guidance_lines
 
 
 HUMAN_LOOP_KEY = "human_loop"
 MAX_DECISION_HISTORY = 20
 DEFAULT_PROMPT_DECISION_LIMIT = 5
 HUMAN_GUIDANCE_TARGETS = [
-    "MLZero input/descriptions.txt",
-    "MLZero input/human_collaboration_instructions.txt",
-    "MLZero initial instruction",
+    "Codex task prompt",
+    "Codex output/plan.md",
+    "Codex runtime workspace context",
     "Task interactive AI chat context",
 ]
 
@@ -75,38 +76,18 @@ def append_task_human_decision(task: TaskRecord, entry: dict[str, Any]) -> dict[
 
 
 def build_task_human_guidance_lines(task: TaskRecord, *, limit: int = DEFAULT_PROMPT_DECISION_LIMIT) -> list[str]:
+    parameter_lines = build_task_human_parameter_guidance_lines(task)
     history = get_task_human_decision_history(task, limit=limit)
-    if not history:
+    if not history and not parameter_lines:
         return []
 
     lines = [
         "Human-reviewed decisions are available below. Treat them as higher-priority instructions for the next run unless the CSV clearly contradicts them.",
     ]
+    lines.extend(parameter_lines)
 
     for index, item in enumerate(history, start=1):
-        stage = STAGE_LABELS.get(str(item.get("stage") or ""), str(item.get("stage") or "unknown stage"))
-        action = ACTION_LABELS.get(str(item.get("action") or ""), str(item.get("action") or "unknown action"))
-        title = _clip_text(str(item.get("title") or "untitled request"), 160)
-        decision_summary = _clip_text(str(item.get("decision_summary") or "no decision summary"), 320)
-        request_summary = _clip_text(str(item.get("request_summary") or ""), 220)
-        suggested_action = _clip_text(str(item.get("suggested_action") or ""), 220)
-        artifact_paths = item.get("artifact_paths")
-        artifact_text = ""
-        if isinstance(artifact_paths, list):
-            normalized_paths = [str(path).strip() for path in artifact_paths if str(path).strip()]
-            if normalized_paths:
-                artifact_text = f" Relevant artifacts: {', '.join(normalized_paths[:4])}."
-
-        line = (
-            f"Human decision {index}: Stage={stage}; request='{title}'; status={action}; "
-            f"decision='{decision_summary}'."
-        )
-        if request_summary:
-            line += f" Original issue: {request_summary}."
-        if suggested_action:
-            line += f" Requested change: {suggested_action}."
-        line += artifact_text
-        lines.append(line)
+        lines.append(_decision_guidance_line(index, item))
 
     return lines
 
@@ -132,7 +113,7 @@ def build_task_human_instruction_file(task: TaskRecord, *, limit: int = DEFAULT_
     return "\n".join(
         [
             f"Task name: {task.name}",
-            "These are human-reviewed decisions that must influence the next MLZero run.",
+            "These are human-reviewed decisions that must influence the next Codex run.",
             "Treat them as explicit user-approved corrections unless the dataset itself proves they are impossible.",
             "",
             *lines,
@@ -168,3 +149,32 @@ def _clip_text(value: str, limit: int) -> str:
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[:limit]}..."
+
+
+def _decision_guidance_line(index: int, item: dict[str, Any]) -> str:
+    stage = STAGE_LABELS.get(str(item.get("stage") or ""), str(item.get("stage") or "unknown stage"))
+    action = ACTION_LABELS.get(str(item.get("action") or ""), str(item.get("action") or "unknown action"))
+    title = _clip_text(str(item.get("title") or "untitled request"), 160)
+    decision_summary = _clip_text(str(item.get("decision_summary") or "no decision summary"), 320)
+    request_summary = _clip_text(str(item.get("request_summary") or ""), 220)
+    suggested_action = _clip_text(str(item.get("suggested_action") or ""), 220)
+
+    line = (
+        f"Human decision {index}: Stage={stage}; request='{title}'; status={action}; "
+        f"decision='{decision_summary}'."
+    )
+    if request_summary:
+        line += f" Original issue: {request_summary}."
+    if suggested_action:
+        line += f" Requested change: {suggested_action}."
+    return line + _artifact_paths_text(item.get("artifact_paths"))
+
+
+def _artifact_paths_text(artifact_paths: Any) -> str:
+    if not isinstance(artifact_paths, list):
+        return ""
+
+    normalized_paths = [str(path).strip() for path in artifact_paths if str(path).strip()]
+    if not normalized_paths:
+        return ""
+    return f" Relevant artifacts: {', '.join(normalized_paths[:4])}."

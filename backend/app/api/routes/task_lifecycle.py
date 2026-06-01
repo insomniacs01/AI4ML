@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
+from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
 from backend.app.models.task import (
+    HumanInteractionRequestStatus,
     TaskCreateRequest,
     TaskDeleteResponse,
     TaskInteractionPolicyRecord,
     TaskListResponse,
     TaskRecord,
+    TaskRuntimeSnapshotResponse,
     TaskRunRequest,
     TaskSemanticUpdateRequest,
     TaskStageRoutingRecord,
@@ -19,32 +23,93 @@ from backend.app.models.task import (
     normalize_workflow_stage,
 )
 from backend.app.services.dataset_profile import build_dataset_profile, dataset_profile_to_plain
+from backend.app.services.task_codex_sync import sync_codex_task_state
 from backend.app.services.task_agent_loop import initialize_agent_loop_for_upload
 from backend.app.services.task_semantics import apply_human_semantic_update
-from backend.app.api.routes.task_route_common import (
-    CSV_UPLOAD_CHUNK_BYTES,
-    MAX_CSV_UPLOAD_BYTES,
+from backend.app.services.service_registry import get_task_store
+from backend.app.services.task_routing import (
     _build_runtime_context,
     _build_stage_selection_map,
+    _validate_task_stage_routing_overrides,
+)
+from backend.app.services.platform_limits import PlatformLimitError, assert_user_can_create_task
+from backend.app.services.task_human_policy import _validate_interaction_policy_assignees
+from backend.app.services.task_runtime_snapshot import (
+    TaskRuntimeSnapshotNotFound,
+    TaskRuntimeSnapshotSyncError,
+    build_task_runtime_snapshot_response,
+)
+from backend.app.services.task_uploads import (
+    CSV_UPLOAD_CHUNK_BYTES,
+    MAX_CSV_UPLOAD_BYTES,
+    validate_csv_sample as _validate_csv_sample,
+    validate_upload_content_type as _validate_upload_content_type,
+    validate_upload_filename as _validate_upload_filename,
+)
+from backend.app.services.task_workflow_tracking import (
     _record_stage_selection_map,
     _record_workflow_stage,
-    _run_ai_analysis,
     _sync_task_human_collaboration,
-    _validate_csv_sample,
-    _validate_interaction_policy_assignees,
-    _validate_task_stage_routing_overrides,
-    _validate_upload_content_type,
-    _validate_upload_filename,
-    _write_task_audit,
-    get_task_store,
 )
 from backend.app.api.routes.task_runtime import run_task
 
 router = APIRouter(tags=["task-lifecycle"])
 
+
+class TaskCacheWarmupResponse(BaseModel):
+    warmed: bool
+    task_count: int = 0
+    detail_task_id: str | None = None
+
+
+def _raise_task_store_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
+    if isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    if isinstance(exc, PermissionError):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+def _enum_value(value: object) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+@router.post("/cache/warmup", response_model=TaskCacheWarmupResponse)
+def warmup_task_cache(team_access: TeamAccessContext = Depends(require_team_access)) -> TaskCacheWarmupResponse:
+    try:
+        task_store = get_task_store()
+        tasks = task_store.list_tasks(
+            team_access.team_id,
+            access_token=team_access.access_token,
+            prefer_cache=False,
+        )
+        detail_task_id = tasks[0].id if tasks else None
+        if detail_task_id:
+            task_store.get_task(
+                team_access.team_id,
+                detail_task_id,
+                access_token=team_access.access_token,
+                prefer_cache=False,
+            )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_task_store_http_error(exc)
+    return TaskCacheWarmupResponse(warmed=True, task_count=len(tasks), detail_task_id=detail_task_id)
+
+
 @router.get("", response_model=TaskListResponse)
 def list_tasks(team_access: TeamAccessContext = Depends(require_team_access)) -> TaskListResponse:
-    return TaskListResponse(items=get_task_store().list_tasks(team_access.team_id, access_token=team_access.access_token))
+    try:
+        task_store = get_task_store()
+        items = task_store.list_tasks(
+            team_access.team_id,
+            access_token=team_access.access_token,
+            allow_stale_cache=True,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_task_store_http_error(exc)
+    return TaskListResponse(items=items)
 
 
 @router.post("", response_model=TaskRecord, status_code=status.HTTP_201_CREATED)
@@ -54,33 +119,68 @@ def create_task(
 ) -> TaskRecord:
     _validate_task_stage_routing_overrides(payload.stage_routing)
     _validate_interaction_policy_assignees(payload.interaction_policies, team_access)
-    task = get_task_store().create_task(
+    task_store = get_task_store()
+    try:
+        tasks = task_store.list_tasks(
+            team_access.team_id,
+            access_token=team_access.access_token,
+            lightweight=True,
+            prefer_cache=False,
+        )
+        assert_user_can_create_task(get_settings(), tasks=tasks, user_id=team_access.user.id)
+    except PlatformLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_task_store_http_error(exc)
+
+    task = task_store.create_task(
         payload,
         team_id=team_access.team_id,
         created_by=team_access.user.id,
         access_token=team_access.access_token,
     )
     _sync_task_human_collaboration(task, team_access, stage_selection_map={})
-    _write_task_audit(
-        team_access,
-        action="task.create",
-        task_id=task.id,
-        detail={
-            "name": task.name,
-            "status": task.status.value,
-            "stage_routing_count": len(task.stage_routing),
-            "interaction_policy_count": len(task.interaction_policies),
-        },
-    )
     return task
 
 
 @router.get("/{task_id}", response_model=TaskRecord)
 def get_task(task_id: str, team_access: TeamAccessContext = Depends(require_team_access)) -> TaskRecord:
-    task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    try:
+        task = get_task_store().get_task(
+            team_access.team_id,
+            task_id,
+            access_token=team_access.access_token,
+            allow_stale_cache=True,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_task_store_http_error(exc)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    task.executor_type = "codex"
+    task, _artifacts = sync_codex_task_state(
+        task,
+        get_settings(),
+        task_store=get_task_store(),
+        access_token=team_access.access_token,
+        fail_on_error=False,
+    )
     return task
+
+
+@router.get("/{task_id}/runtime-snapshot", response_model=TaskRuntimeSnapshotResponse)
+def get_task_runtime_snapshot(
+    task_id: str,
+    sync: bool = Query(True),
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskRuntimeSnapshotResponse:
+    try:
+        return build_task_runtime_snapshot_response(task_id, team_access, sync_runtime=sync)
+    except TaskRuntimeSnapshotNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TaskRuntimeSnapshotSyncError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_task_store_http_error(exc)
 
 @router.put("/{task_id}/workflow-config", response_model=TaskRecord)
 def update_task_workflow_config(
@@ -126,15 +226,6 @@ def update_task_workflow_config(
     runtime_context = _build_runtime_context(team_access)
     stage_selection_map = _build_stage_selection_map(saved_task, team_access, runtime_context)
     _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
-    _write_task_audit(
-        team_access,
-        action="task.workflow_config.update",
-        task_id=saved_task.id,
-        detail={
-            "stage_routing_count": len(saved_task.stage_routing),
-            "interaction_policy_count": len(saved_task.interaction_policies),
-        },
-    )
     return saved_task
 
 
@@ -186,23 +277,12 @@ def update_task_semantic_analysis(
             WorkflowStage.report_generation: WorkflowStageStatus.pending,
         },
         summary_by_stage={
-            WorkflowStage.feature_engineering: "任务语义已人工修正，等待下一次 MLZero 运行重新生成特征与训练代码。",
-            WorkflowStage.model_selection: "任务语义已人工修正，等待下一次 MLZero 运行重新选择候选模型。",
-            WorkflowStage.training_validation: "任务语义已人工修正，等待下一次 MLZero 运行重新训练验证。",
+            WorkflowStage.feature_engineering: "任务语义已人工修正，等待下一次 Codex 运行重新生成特征与训练代码。",
+            WorkflowStage.model_selection: "任务语义已人工修正，等待下一次 Codex 运行重新选择候选模型。",
+            WorkflowStage.training_validation: "任务语义已人工修正，等待下一次 Codex 运行重新训练验证。",
             WorkflowStage.report_generation: "任务语义已人工修正，等待新的真实运行结果后生成报告。",
         },
         artifact_refs=[saved_task.dataset_path] if saved_task.dataset_path else None,
-    )
-    _write_task_audit(
-        team_access,
-        action="task.semantic_analysis.update",
-        task_id=saved_task.id,
-        detail={
-            "label_column": saved_task.label_column,
-            "problem_type": saved_task.problem_type,
-            "metric_name": payload.metric_name.strip().lower(),
-            "cleared_last_run": True,
-        },
     )
     return saved_task
 
@@ -260,14 +340,27 @@ async def upload_dataset(
     task.dataset_path = str(dataset_path)
     task.dataset_profile = dataset_profile
     task.status = TaskStatus.uploaded
+    task.executor_type = "codex"
+    task.codex_workspace_path = None
+    task.codex_session_id = None
+    task.codex_thread_id = None
+    task.codex_status = None
+    task.codex_started_at = None
+    task.codex_finished_at = None
     task.last_run = None
     task.last_run_attempt = None
     task.label_column = None
     task.problem_type = None
     task.analysis_token_usage = None
-    task.structured_requirements = {"dataset_profile": dataset_profile_to_plain(dataset_profile)}
+    structured_requirements = (
+        dict(task.structured_requirements)
+        if isinstance(task.structured_requirements, dict)
+        else {}
+    )
+    structured_requirements["dataset_profile"] = dataset_profile_to_plain(dataset_profile)
+    task.structured_requirements = structured_requirements
     initialize_agent_loop_for_upload(task)
-    task.notes = "CSV 已上传并完成基础画像，系统会根据当前阶段路由自动执行 AI 解析并启动 MLZero 工作流。"
+    task.notes = "CSV 已上传并完成基础画像，Codex 将创建任务工作区并生成建模计划。"
     task = task_store.save_task(task, access_token=team_access.access_token)
     _record_workflow_stage(
         task,
@@ -284,27 +377,11 @@ async def upload_dataset(
             f"columns={', '.join(column.name for column in dataset_profile.columns[:12])}"
         ),
     )
-    _write_task_audit(
-        team_access,
-        action="task.dataset.upload",
-        task_id=task.id,
-        detail={
-            "filename": filename,
-            "size_bytes": size_bytes,
-            "content_type": file.content_type,
-            "row_count": dataset_profile.row_count,
-            "column_count": dataset_profile.column_count,
-            "status": task.status.value,
-            "auto_run": auto_run,
-            "time_limit": time_limit,
-        },
-    )
 
-    analyzed_task = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
     if not auto_run:
-        return analyzed_task
+        return task
     return run_task(
-        analyzed_task.id,
+        task.id,
         TaskRunRequest(time_limit=time_limit),
         team_access,
     )
@@ -319,27 +396,10 @@ def analyze_task(
     task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    try:
-        result = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
-    except HTTPException as exc:
-        _write_task_audit(
-            team_access,
-            action="task.analyze",
-            task_id=task.id,
-            detail={"status": "failed", "detail": exc.detail},
-        )
-        raise
-    _write_task_audit(
-        team_access,
-        action="task.analyze",
-        task_id=result.id,
-        detail={
-            "status": "completed",
-            "label_column": result.label_column,
-            "problem_type": result.problem_type,
-        },
-    )
-    return result
+    task.executor_type = "codex"
+    task.status = TaskStatus.planning if task.dataset_path else TaskStatus.draft
+    task.notes = "Codex 会在运行时读取数据并生成计划；当前不再调用独立语义解析。"
+    return task_store.save_task(task, access_token=team_access.access_token)
 
 @router.delete("/{task_id}", response_model=TaskDeleteResponse)
 def delete_task(task_id: str, team_access: TeamAccessContext = Depends(require_team_access)) -> TaskDeleteResponse:
@@ -350,17 +410,11 @@ def delete_task(task_id: str, team_access: TeamAccessContext = Depends(require_t
     if task.status == TaskStatus.running and "Agent 自动修复受阻" not in (task.notes or ""):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="任务仍在运行中，请等运行结束后再删除。",
+            detail="任务仍在运行中，请先取消任务后再删除。",
         )
 
     deleted = task_store.delete_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
 
-    _write_task_audit(
-        team_access,
-        action="task.delete",
-        task_id=task_id,
-        detail={"name": task.name, "status": task.status.value},
-    )
     return TaskDeleteResponse(deleted=True, task_id=task_id)

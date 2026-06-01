@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from backend.app.models.task import DatasetColumnProfile, DatasetProfile
 
 MAX_PREVIEW_ROWS = 20
 MAX_SAMPLE_VALUES_PER_COLUMN = 6
+logger = logging.getLogger(__name__)
 
 
 def build_dataset_profile(
@@ -57,7 +59,8 @@ def dataset_profile_from_plain(value: Any) -> DatasetProfile | None:
         return None
     try:
         return DatasetProfile.model_validate(value)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Could not restore dataset profile from stored payload: %s", exc)
         return None
 
 

@@ -1,129 +1,222 @@
 # AI4ML
 
-AI4ML 是一个面向团队协作的 AI4ML 社区平台原型。当前仓库已经不再是早期的 Week 2 脚手架状态，而是一个包含真实前后端、Supabase 团队体系、AI 连接器、任务执行、人工复核、代码工作区、资产登记和审计能力的可运行版本。
+更新时间：2026-05-26
 
-## 当前项目状态
+AI4ML 是一个团队协作式智能建模工作台。当前主线不是固定的 MLZero / AutoGluon 流水线，而是通过 `codex_use` 接入 Codex-native workspace：用户创建任务并提供数据与目标后，Codex 先生成可确认的执行方案，用户确认后再执行建模、生成报告、结果文件和预测入口。
 
-- 前端：React + Vite 工作台，已接入真实登录、团队、任务、连接器、默认 AI 路由、配额、资产、审计、AI 记录、代码工作区。
-- 后端：FastAPI 服务，负责团队鉴权后的任务编排、AI 解析、MLZero 执行、人工复核、代码工件读取与 Token 记账。
-- 身份与团队：Supabase Auth + Postgres，作为用户、团队、成员、路由、配额、资产和审计的真实数据源。
-- 执行引擎：以 `MLZero / AutoGluon Assistant` 为基础，已做本地二次改造，支持 OpenAI-compatible 云模型提供方。
-- 当前优先完成的是 P0 能力闭环；资产发布/Fork 已有基础能力，更高层的工作流广场、模型广场运营仍处于后续阶段。
+当前事实以 `docs/current-memory.md` 和 `codex_use/current-memory.md` 为准。旧文档中关于 React 主入口、模型广场、数据中心、工作流广场、业务/技术双报告、MLZero 作为主执行器等说法已经过时。
 
-## 已实现的核心能力
+## 当前定位
 
-- Supabase 登录、注册、建队、邀请码入队
-- 团队成员角色与状态管理
-  - `team_owner`
-  - `admin`
-  - `business_user`
-  - `developer_user`
-  - `member`
-  - 成员状态支持 `active / invited / frozen / removed`
-- AI 连接器管理
-  - 创建连接器
-  - 测试连接器
-  - 激活团队当前运行连接器
-- 团队默认 AI 路由
-  - 按阶段配置显式连接器与模型；未配置或配置不完整时直接失败
-- 任务链路
-  - 创建任务
-  - 上传 CSV
-  - AI 自动解析目标列、任务类型、指标等结构化信息
-  - 触发 MLZero 运行
-  - 查看真实模型报告、在线预测 Demo、代码工件下载与 Python 工件重跑
-- 人工复核
-  - 手动发起复核请求
-  - 运行前 `before_run` 自动复核策略
-  - 任务 `paused_for_review` / 恢复继续执行
-- 代码工作区
-  - 查看最新运行目录中的真实代码与日志工件
-  - 开发成员可编辑可写文件
-  - 保存版本记录、下载工件、重跑可执行 Python 工件
-- 配额与 Token
-  - 团队成员配额管理
-  - 预警阈值拦截高开销阶段
-  - Token ledger 记账
-- 资产与审计
-  - 资产登记与基础审核状态流转
-  - 资产发布到团队广场视图与 Fork 派生
-  - 审计日志记录团队治理动作
+AI4ML 负责：
+
+- 团队、成员、角色和权限管理。
+- 任务创建、数据上传、计划确认、状态同步和结果展示。
+- Codex workspace 的创建、恢复、产物读取和结果落库。
+- 报告、源码、预测入口、运行进度和 token usage 的真实展示。
+- 提示词和执行方案的社区复用。
+
+Codex 负责：
+
+- 理解任务目标和数据结构。
+- 生成 `output/plan.md`，等待用户确认。
+- 在用户确认后执行建模、实验、修复和报告撰写。
+- 产出 `metrics.json`、`report.md`、`predict.py`、源码、日志和模型文件。
+
+系统硬约束：
+
+- 不展示伪数据。
+- 不制造假成功。
+- 不用演示值冒充真实结果。
+- 不做静默 fallback。
+- 缺少连接器、权限、运行产物或 token usage 时必须明确失败或显示未接入。
+
+## 服务入口
+
+- AI4ML 前端：`http://127.0.0.1:5173`
+- AI4ML 后端：`http://127.0.0.1:8000`
+- `codex_use` Web Console / Codex app-server 代理：`http://127.0.0.1:3000`
+
+除 `/api/health` 外，正式业务 API 统一使用团队作用域：
+
+```text
+/api/teams/{team_id}/...
+```
+
+不要新增非团队作用域业务接口。
 
 ## 技术栈
 
 ### 前端
 
-- React 18
+- Vue 3
 - Vite 5
+- Vue Router
 - `@supabase/supabase-js`
+
+当前入口：
+
+- `frontend/src/App.vue`
+- `frontend/src/main.js`
+- `frontend/src/router.js`
+- `frontend/src/api/client.js`
+
+旧的 `frontend/src/App.jsx`、`frontend/src/lib/api.js` 和一批 React 组件已经不是当前主入口。
 
 ### 后端
 
 - FastAPI
 - Pydantic / pydantic-settings
-- Supabase REST/Auth API
+- Supabase Auth / REST API
+- 本地 SQLite cache
 
-### 执行与模型
+当前入口：
 
-- MLZero
-- AutoGluon Assistant（仓库内 `external/` 已有补丁）
-- OpenAI-compatible provider
-  - `chat_completions`
-  - `responses`
+- `backend/app/main.py`
+- `backend/app/application.py`
+- `backend/app/api/router.py`
+
+### 执行桥
+
+- `codex_use/` 是 AI4ML 主项目使用的 Codex-native 执行桥。
+- `backend/app/services/codex_backend.py` 负责创建和读取 Codex workspace。
+- `codex_use` 通过 Codex app-server 维护 Web session、事件流、计划确认、恢复执行和 token usage 持久化。
 
 ## 目录结构
 
 ```text
 AI4ML/
 ├─ backend/                    # FastAPI 后端
-├─ frontend/                   # React + Vite 前端
-├─ supabase/                   # Supabase schema 与数据库结构
-├─ external/                   # 上游依赖仓库与本地补丁
+├─ frontend/                   # Vue + Vite 前端
+├─ codex_use/                  # Codex-native 执行桥
+├─ supabase/                   # Supabase schema
+├─ docs/                       # 当前记忆和项目文档
 ├─ scripts/                    # 验证与辅助脚本
 ├─ data/                       # 示例数据
 ├─ storage/                    # 本地任务与运行产物
-├─ docs/                       # 记忆文档与项目过程记录
-├─ tools/                      # 其他辅助工具
-└─ 周报/                       # 周报文档
+├─ external/                   # 上游依赖仓库与本地补丁
+└─ 周报/                       # 周报材料
 ```
+
+## Codex Workspace 协议
+
+AI4ML 任务 workspace 通常位于：
+
+```text
+codex_use/workspaces/ai4ml-{task_id}
+```
+
+输入文件：
+
+```text
+input/task_request.json
+input/project_rules.md
+```
+
+输出文件：
+
+```text
+output/plan.md
+output/progress.json
+output/metrics.json
+output/report.md
+output/predict.py
+output/code/
+output/model/
+output/logs/
+output/token_usage.json
+```
+
+关键规则：
+
+- 计划阶段必须先写 `output/plan.md`。
+- 用户确认计划前，不能训练模型、生成最终报告、写指标或创建预测入口。
+- 执行阶段由 Codex 原生能力和 subagents 完成。
+- 最终用户可见产物以 `output/` 为准。
+- token usage 只能来自真实 Codex usage 事件，不能估算。
+
+## 当前产品能力
+
+### 团队与权限
+
+- Supabase 登录和 session。
+- 团队空间、成员和角色。
+- FastAPI 按 Supabase bearer token 和 team scope 校验访问。
+- 正式业务接口统一走 `/api/teams/{team_id}/...`。
+
+### 任务
+
+- 创建任务。
+- 上传或指定数据。
+- 生成 Codex plan。
+- 用户查看、编辑和确认 plan。
+- 确认后启动或恢复 Codex 执行。
+- 读取真实进度、报告、指标、源码、预测入口和 token usage。
+
+### 人工确认
+
+- plan 确认是当前主流程的核心节点。
+- 后续人工问题、恢复执行和中断处理通过 Codex workspace 与后端状态同步。
+- 不把“缺少信息”包装成成功结果。
+
+### 报告与预测
+
+- 报告页只展示最终报告，不再拆业务报告和技术报告。
+- 预测 Demo 优先读取真实 `output/predict.py`。
+- 缺少模型或预测合约时返回不支持，不伪造预测结果。
+
+### 源码与结果文件
+
+- 源码页优先展示真实运行产物。
+- 重点文件包括 `output/code/`、`output/predict.py` 和相关日志。
+- 空产物不能假装有源码。
+
+### 社区复用
+
+社区广场当前只保留两类资产：
+
+- `prompt`：提示词资产，保存任务主题和描述。
+- `plan`：执行方案资产，保存已确认或编辑过的 Codex plan。
+
+模型广场、数据中心、工作流广场和报告类社区资产不再属于当前产品口径。
+
+如果发布提示词或方案时报 Supabase 约束错误，通常说明线上数据库仍保留旧 `platform_assets.asset_type` 约束，需要执行当前 `supabase/schema.sql` 或对应迁移，让资产类型收敛到 `prompt` / `plan`。
 
 ## 主要后端接口
 
-- `GET /api/health`
-- 除健康检查外，正式业务接口统一使用团队作用域：`/api/teams/{team_id}/...`
-- `GET/POST /api/teams/{team_id}/tasks`
-- `POST /api/teams/{team_id}/tasks/{task_id}/dataset`
-- `POST /api/teams/{team_id}/tasks/{task_id}/analyze`
-- `POST /api/teams/{team_id}/tasks/{task_id}/run`
-- `GET /api/teams/{team_id}/tasks/{task_id}/run-progress`
-- `GET /api/teams/{team_id}/tasks/{task_id}/agent-collaboration`
-- `GET /api/teams/{team_id}/tasks/{task_id}/human-collaboration`
-- `POST /api/teams/{team_id}/tasks/{task_id}/human-requests`
-- `POST /api/teams/{team_id}/tasks/{task_id}/human-requests/{request_id}/decision`
-- `POST /api/teams/{team_id}/tasks/{task_id}/resume`
-- `GET /api/teams/{team_id}/tasks/{task_id}/ai-conversations`
-- `POST /api/teams/{team_id}/tasks/{task_id}/chat`
-- `GET /api/teams/{team_id}/tasks/{task_id}/report`
-- `POST /api/teams/{team_id}/tasks/{task_id}/prediction-demo`
-- `GET /api/teams/{team_id}/tasks/{task_id}/code-workspace`
-- `GET/PUT /api/teams/{team_id}/tasks/{task_id}/code-workspace/file`
-- `GET /api/teams/{team_id}/tasks/{task_id}/code-workspace/download`
-- `POST /api/teams/{team_id}/tasks/{task_id}/code-workspace/rerun`
-- `GET/POST /api/teams/{team_id}/connectors`
-- `GET/PATCH /api/teams/{team_id}/members`
-- `GET/POST /api/teams/{team_id}/quotas`
-- `GET/PUT /api/teams/{team_id}/routing`
-- `GET/POST /api/teams/{team_id}/assets`
-- `POST /api/teams/{team_id}/assets/{asset_id}/publish`
-- `POST /api/teams/{team_id}/assets/{asset_id}/fork`
-- `GET /api/teams/{team_id}/token-ledgers`
-- `GET /api/teams/{team_id}/audit-logs`
+健康检查：
 
-## 环境准备
+```text
+GET /api/health
+```
 
-### 1. 前端 Supabase 配置
+团队作用域业务接口示例：
 
-在 [`frontend/.env.example`](frontend/.env.example) 的基础上创建 `frontend/.env.local`：
+```text
+GET    /api/teams/{team_id}/tasks
+POST   /api/teams/{team_id}/tasks
+GET    /api/teams/{team_id}/tasks/{task_id}
+POST   /api/teams/{team_id}/tasks/{task_id}/dataset
+POST   /api/teams/{team_id}/tasks/{task_id}/run
+POST   /api/teams/{team_id}/tasks/{task_id}/resume
+GET    /api/teams/{team_id}/tasks/{task_id}/runtime-snapshot
+GET    /api/teams/{team_id}/tasks/{task_id}/run-progress
+GET    /api/teams/{team_id}/tasks/{task_id}/report
+POST   /api/teams/{team_id}/tasks/{task_id}/prediction-demo
+GET    /api/teams/{team_id}/tasks/{task_id}/code-workspace
+GET    /api/teams/{team_id}/assets
+POST   /api/teams/{team_id}/assets
+POST   /api/teams/{team_id}/assets/{asset_id}/publish
+POST   /api/teams/{team_id}/assets/{asset_id}/fork
+```
+
+实际接口以 `backend/app/api/router.py` 和 `backend/app/api/routes/` 为准。
+
+## 环境配置
+
+### 前端
+
+基于 `frontend/.env.example` 创建 `frontend/.env.local`：
 
 ```env
 VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
@@ -131,53 +224,32 @@ VITE_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
 VITE_API_ROOT=/api
 ```
 
-### 2. 后端 AI Provider 配置
+### 后端
 
-在 [`backend/.env.example`](backend/.env.example) 的基础上创建 `backend/.env.local`。
+基于 `backend/.env.example` 创建 `backend/.env.local`。
 
-最小示例：
+需要配置 Supabase、连接器密钥、Codex / OpenAI-compatible provider 和本地运行相关环境。不要把真实密钥提交到仓库。
 
-```env
-AI4ML_MLZERO_PROVIDER_MODE=cloud
-AI4ML_MLZERO_PROVIDER_BASE_URL_OVERRIDE=https://your-provider.example.com/v1
-AI4ML_MLZERO_MODEL_ALIAS=your-model
-AI4ML_MLZERO_PROVIDER_WIRE_API=chat_completions
-AI4ML_MLZERO_EXECUTION_MODE=python
-AI4ML_MLZERO_PYTHON_EXECUTABLE=D:\333\AI4ML\.venv\Scripts\python.exe
-AI4ML_MLZERO_OPENAI_API_KEY=YOUR_REAL_API_KEY
-AI4ML_CONNECTOR_SECRET_KEY=replace-with-a-stable-random-secret-at-least-16-bytes
-AI4ML_MLZERO_MAX_ITERATIONS=6
-AI4ML_MLZERO_CONTINUOUS_IMPROVEMENT=true
-AI4ML_MLZERO_MIN_CANDIDATE_MODELS=3
-```
-
-说明：
-
-- 后端会自动读取 `.env`、`.env.local`、`backend/.env.local`、`frontend/.env.local` 等文件。
-- 不要把真实密钥提交到仓库。
-- `AI4ML_CONNECTOR_SECRET_KEY` 用于加密新保存的连接器 API Key，必须保持稳定；更换后旧的加密连接器密钥将无法解密。历史明文连接器仍可读取，但新建或更新连接器必须配置该值。
-- 模型报告、在线预测 Demo、代码工作区重跑都只读取真实任务产物；如果缺少运行目录、缺少 AutoGluon predictor 或缺少可重跑的 Python 工件，会明确返回“不支持/缺少产物”，不会生成假结果。
-
-### 3. Supabase 数据库初始化
+### Supabase
 
 在 Supabase SQL Editor 中执行：
 
-- [`supabase/schema.sql`](supabase/schema.sql)
+```text
+supabase/schema.sql
+```
 
-这是当前团队、成员、任务、连接器、配额、路由、协同、资产、审计等能力的数据库基础。
+实际 Supabase 数据库不会自动跟随仓库文件变化。遇到资产类型约束、团队权限、表字段缺失等问题时，优先检查线上 schema 是否已同步。
 
 ## 启动方式
 
 ### 后端
 
-PowerShell：
-
 ```powershell
-cd <repo-root>
+cd D:\333\AI4ML
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r backend\requirements.txt
-uvicorn backend.app.main:app --reload --port 8000
+uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 健康检查：
@@ -189,109 +261,55 @@ curl http://127.0.0.1:8000/api/health
 ### 前端
 
 ```powershell
-cd <repo-root>\frontend
+cd D:\333\AI4ML\frontend
 npm install
 npm run dev
 ```
 
 访问：
 
-- 前端：[http://localhost:5173](http://localhost:5173)
-- 后端：[http://127.0.0.1:8000](http://127.0.0.1:8000)
+```text
+http://127.0.0.1:5173
+```
 
-## 运行时说明
+### codex_use
 
-- 默认任务产物会写到系统本地运行目录，而不是强依赖仓库内目录。
-- Windows 默认运行产物目录通常位于：
-  - `%LOCALAPPDATA%\AI4ML\mlzero_runs`
-- 这样可以避免 `uvicorn --reload` 被运行过程中生成的 Python 文件反复触发。
-
-## 前端主要页面
-
-- 任务
-- 运行控制台：运行态、Agent Runtime、事件流、leaderboard、训练遥测和最后日志
-- AI 记录：只展示用户手动对话和当前连接器回复
-- 代码工作区
-- 复核待办：只处理人工请求、决策、转交、驳回和恢复任务
-- Token 用量
-- 连接器
-- 默认 AI
-- 配额
-- 资产
-- 团队
-- 审计
-- 系统
-
-## 资产页面说明
-
-当前“资产中心”是一个团队内部的资产登记台账，不是完整的文件托管系统。它主要用于登记以下几类产物：
-
-- `dataset`
-- `model`
-- `workflow`
-- `report`
-
-并给它们附加：
-
-- 标题
-- 描述
-- 存储路径
-- 元数据
-- 审核状态
-
-当前版本更偏“资产登记与审核目录”。已支持团队内发布与 Fork 派生，但仍不是完整文件托管系统，也不是跨团队公开市场。
+`codex_use` 的具体启动方式以 `codex_use/current-memory.md` 和子项目脚本为准。它是当前 AI4ML 后端读取 Codex 产物的关键执行桥。
 
 ## 验证方式
 
-### 后端基础检查
+后端基础检查：
 
 ```powershell
-cd <repo-root>
+cd D:\333\AI4ML
 .\.venv\Scripts\python.exe -m compileall backend\app
-.\.venv\Scripts\python.exe -m unittest discover backend\tests
+.\.venv\Scripts\python.exe -m pytest backend\tests -q
 ```
 
-### 前端构建检查
+前端检查：
 
 ```powershell
-cd <repo-root>\frontend
+cd D:\333\AI4ML\frontend
+npm test
 npm run build
 ```
 
-### 已做过的真实联调验证
-
-当前代码已经做过真实 Supabase 联调，验证通过的关键链路包括：
-
-- 注册 / 登录
-- 创建团队
-- 邀请码入队
-- 成员冻结 / 恢复
-- 角色提升到 `developer_user`
-- 连接器创建 / 激活
-- 团队默认 AI 路由保存 / 读取
-- 手工人工复核请求
-- `before_run` 自动复核策略
-- 代码工作区权限隔离
-- 配额与预警阈值拦截
-- 审计日志读取
+近期记忆中的验证状态见 `docs/current-memory.md`。如果代码或环境变化，应重新运行对应检查，不能把历史验证当作当前结果。
 
 ## 当前限制
 
-- 更高层的工作流广场、模型广场运营仍未完全产品化。
-- 资产中心已有发布和 Fork，但仍是登记台账，不是完整资产平台。
-- CSV 上传会生成真实数据集画像；工作流阶段记录会保存开始/结束时间、耗时、日志摘要和关键产物入口。
-- Token 用量已同时支持任务级汇总和管理员可见的逐次 TokenLedger 流水。
-- 代码工作区已有下载、版本记录和 Python 工件重跑，但仍是运行工件编辑器，不是完整 IDE。
-- MLZero 长时多轮搜索虽然可配置，但实际稳定性仍依赖当前机器环境和所配置的云模型提供方。
+- 当前社区资产是提示词和执行方案复用，不是完整模型市场或数据集托管平台。
+- `codex_use` 当前需要重新设计后才能稳定支持多任务并行，不要直接把单活动任务模型硬扩成多 runner。
+- 历史任务缺少 `output/token_usage.json` 时无法恢复真实 token usage。
+- 缺少 workspace、报告、指标、源码或预测入口时，系统应明确显示不可用。
+- 华为云部署信息没有在最近记忆中重新验证，部署前必须重新检查服务器、网络、密钥和线上 schema。
 
-## 重要文件
+## 关键文档
 
-- [`docs/current-memory.md`](docs/current-memory.md)
-- [`supabase/schema.sql`](supabase/schema.sql)
-- [`backend/.env.example`](backend/.env.example)
-- [`frontend/.env.example`](frontend/.env.example)
+- `docs/current-memory.md`
+- `codex_use/current-memory.md`
+- `supabase/schema.sql`
 
-## 许可与备注
+## 维护原则
 
-- 本仓库包含基于上游 `MLZero / AutoGluon Assistant` 的本地改造。
-- `external/` 目录中的改动用于当前项目集成验证，不代表上游原始实现状态。
+项目文档只保留当前仍然成立的事实。与当前代码、`docs/current-memory.md` 或 `codex_use/current-memory.md` 冲突的历史口径应直接更新或删除，不再保留多个过时版本。

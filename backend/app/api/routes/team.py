@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from backend.app.core.config import get_settings
+from backend.app.api.errors import raise_store_http_error
 from backend.app.core.supabase_auth import (
     TeamAccessContext,
     require_team_access,
@@ -12,13 +10,19 @@ from backend.app.core.supabase_auth import (
     require_team_owner_access,
 )
 from backend.app.models.governance import (
+    AdminPasswordResetRequest,
+    AdminPasswordResetResponse,
+    AdminUserUpdateRequest,
+    AdminUserUpdateResponse,
     AIRoutingPoliciesResponse,
     AIRoutingPoliciesUpdateRequest,
     AIRoutingPoliciesUpdateResponse,
-    AuditLogsResponse,
     PlatformAssetCreateRequest,
+    PlatformAssetDeleteResponse,
     PlatformAssetForkRequest,
     PlatformAssetMutationResponse,
+    PlatformLimitsRecord,
+    PlatformLimitsResponse,
     PlatformAssetPublishRequest,
     PlatformAssetReviewRequest,
     PlatformAssetsResponse,
@@ -39,27 +43,21 @@ from backend.app.models.governance import (
     TeamSettingsUpdateRequest,
     TokenLedgersResponse,
 )
-from backend.app.services.governance_store import GovernanceStore
+from backend.app.services.admin_user_management import (
+    AdminUserManagementError,
+    reset_supabase_user_password,
+    update_supabase_user_profile,
+)
+from backend.app.services.platform_limits import read_platform_limits, save_platform_limits
+from backend.app.services.quota_runtime_guard import pause_member_tasks_for_quota, quota_is_exhausted
+from backend.app.services.service_registry import get_governance_store, get_task_store
 
 
 router = APIRouter(tags=["team"])
 
 
-@lru_cache
-def get_governance_store() -> GovernanceStore:
-    return GovernanceStore(get_settings())
-
-
 def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    if isinstance(exc, RuntimeError):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-    if isinstance(exc, PermissionError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    raise_store_http_error(exc)
 
 
 def _validate_routing_update(payload: AIRoutingPoliciesUpdateRequest) -> None:
@@ -109,15 +107,6 @@ def update_team_settings(
             payload,
             access_token=team_access.access_token,
         )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.settings.update",
-            resource_type="team",
-            resource_id=team_access.team_id,
-            detail=payload.model_dump(exclude_none=True),
-            access_token=team_access.access_token,
-        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
@@ -136,18 +125,6 @@ def transfer_team_ownership(
             team_access.team_id,
             current_owner_id=team_access.user.id,
             new_owner_user_id=payload.new_owner_user_id,
-            access_token=team_access.access_token,
-        )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.owner.transfer",
-            resource_type="team",
-            resource_id=team_access.team_id,
-            detail={
-                "previous_owner_user_id": previous_owner.user_id,
-                "new_owner_user_id": new_owner.user_id,
-            },
             access_token=team_access.access_token,
         )
     except ValueError as exc:
@@ -172,15 +149,6 @@ def get_team_invite_details(
         team = store.get_team(team_access.team_id, access_token=team_access.access_token)
         if team is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team not found")
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.invite.prepare",
-            resource_type="team",
-            resource_id=team_access.team_id,
-            detail={"email": payload.email, "note": payload.note},
-            access_token=team_access.access_token,
-        )
     except HTTPException:
         raise
     except (RuntimeError, PermissionError, ConnectionError) as exc:
@@ -223,15 +191,6 @@ def update_team_member_role(
             payload.role,
             access_token=team_access.access_token,
         )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.member.role.update",
-            resource_type="team_member",
-            resource_id=member_id,
-            detail={"next_role": payload.role},
-            access_token=team_access.access_token,
-        )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return TeamMemberRoleUpdateResponse(detail="成员角色已更新。", member=member)
@@ -249,15 +208,6 @@ def update_team_member_status(
             team_access.team_id,
             member_id,
             payload.member_status,
-            access_token=team_access.access_token,
-        )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.member.status.update",
-            resource_type="team_member",
-            resource_id=member_id,
-            detail={"next_status": payload.member_status},
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
@@ -301,21 +251,6 @@ def adjust_team_quota_scope(
             warning_threshold=payload.warning_threshold,
             access_token=team_access.access_token,
         )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.quota.scope.adjust",
-            resource_type="quota_account",
-            resource_id=f"{scope_type}:{scope_key}",
-            detail={
-                "scope_type": scope_type,
-                "scope_key": scope_key,
-                "token_quota": payload.token_quota,
-                "status": payload.status,
-                "warning_threshold": payload.warning_threshold,
-            },
-            access_token=team_access.access_token,
-        )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return TeamQuotaAdjustResponse(detail="团队配额已更新。", quota=quota)
@@ -337,22 +272,105 @@ def adjust_team_quota(
             warning_threshold=payload.warning_threshold,
             access_token=team_access.access_token,
         )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.quota.adjust",
-            resource_type="quota_account",
-            resource_id=member_id,
-            detail={
-                "token_quota": payload.token_quota,
-                "status": payload.status,
-                "warning_threshold": payload.warning_threshold,
-            },
-            access_token=team_access.access_token,
-        )
+        _pause_member_tasks_if_quota_exhausted(quota, member_id, team_access)
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return TeamQuotaAdjustResponse(detail="成员配额已更新。", quota=quota)
+
+
+@router.put("/admin/users/{member_id}", response_model=AdminUserUpdateResponse)
+def update_admin_user(
+    member_id: str,
+    payload: AdminUserUpdateRequest,
+    team_access: TeamAccessContext = Depends(require_team_admin_access),
+) -> AdminUserUpdateResponse:
+    store = get_governance_store()
+    member = None
+    quota = None
+    try:
+        existing_member = next(
+            (item for item in store.list_members(team_access.team_id, access_token=team_access.access_token) if item.user_id == member_id),
+            None,
+        )
+        if existing_member is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member not found")
+        if payload.display_name is not None:
+            update_supabase_user_profile(store.settings, user_id=member_id, display_name=payload.display_name)
+        if payload.role is not None:
+            if payload.role == "team_owner":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="team_owner must be assigned through the ownership transfer endpoint.",
+                )
+            if existing_member.role == "team_owner" and payload.role != "team_owner":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="team_owner cannot be changed through this endpoint. Use ownership transfer instead.",
+                )
+            member = store.update_member_role(team_access.team_id, member_id, payload.role, access_token=team_access.access_token)
+        if payload.member_status is not None:
+            member = store.update_member_status(
+                team_access.team_id,
+                member_id,
+                payload.member_status,
+                access_token=team_access.access_token,
+            )
+        if payload.token_quota is not None or payload.quota_status is not None or payload.warning_threshold is not None:
+            quota = store.adjust_quota(
+                team_access.team_id,
+                member_id,
+                payload.token_quota,
+                status=payload.quota_status,
+                warning_threshold=payload.warning_threshold,
+                access_token=team_access.access_token,
+            )
+        if member is None:
+            member = existing_member
+        if quota is None:
+            quota = store.get_member_quota(team_access.team_id, member_id, access_token=team_access.access_token)
+        _pause_member_tasks_if_quota_exhausted(quota, member_id, team_access)
+    except HTTPException:
+        raise
+    except AdminUserManagementError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    return AdminUserUpdateResponse(detail="用户权限与额度已更新。", member=member, quota=quota)
+
+
+def _pause_member_tasks_if_quota_exhausted(quota, member_id: str, team_access: TeamAccessContext) -> None:
+    if not quota_is_exhausted(quota):
+        return
+    pause_member_tasks_for_quota(get_task_store(), team_access, user_id=member_id)
+
+
+@router.post("/admin/users/{member_id}/reset-password", response_model=AdminPasswordResetResponse)
+def reset_admin_user_password(
+    member_id: str,
+    payload: AdminPasswordResetRequest,
+    team_access: TeamAccessContext = Depends(require_team_admin_access),
+) -> AdminPasswordResetResponse:
+    try:
+        reset_supabase_user_password(get_governance_store().settings, user_id=member_id, password=payload.password)
+    except AdminUserManagementError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+    return AdminPasswordResetResponse(detail="用户密码已重置。", user_id=member_id)
+
+
+@router.get("/admin/platform-limits", response_model=PlatformLimitsResponse)
+def get_admin_platform_limits(
+    team_access: TeamAccessContext = Depends(require_team_admin_access),
+) -> PlatformLimitsResponse:
+    return PlatformLimitsResponse(**read_platform_limits(get_governance_store().settings).model_dump())
+
+
+@router.put("/admin/platform-limits", response_model=PlatformLimitsResponse)
+def update_admin_platform_limits(
+    payload: PlatformLimitsRecord,
+    team_access: TeamAccessContext = Depends(require_team_admin_access),
+) -> PlatformLimitsResponse:
+    limits = save_platform_limits(get_governance_store().settings, payload)
+    return PlatformLimitsResponse(**limits.model_dump())
 
 
 @router.get("/routing", response_model=AIRoutingPoliciesResponse)
@@ -381,24 +399,6 @@ def save_team_routing(
             payload,
             access_token=team_access.access_token,
         )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.routing.update",
-            resource_type="ai_routing_policy",
-            resource_id=team_access.team_id,
-            detail={
-                "stages": [
-                    {
-                        "stage": item.stage,
-                        "connector_id": item.connector_id,
-                        "model_name": item.model_name,
-                    }
-                    for item in payload.items
-                ]
-            },
-            access_token=team_access.access_token,
-        )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return AIRoutingPoliciesUpdateResponse(
@@ -416,6 +416,8 @@ def list_team_assets(
     category: str | None = Query(default=None),
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> PlatformAssetsResponse:
+    if asset_type is not None and asset_type not in {"prompt", "plan"}:
+        return PlatformAssetsResponse(team_id=team_access.team_id, items=[])
     try:
         items = get_governance_store().list_assets(
             team_access.team_id,
@@ -443,15 +445,6 @@ def create_team_asset(
             payload,
             access_token=team_access.access_token,
         )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.asset.create",
-            resource_type=payload.asset_type,
-            resource_id=asset.id,
-            detail={"title": payload.title, "review_status": payload.review_status},
-            access_token=team_access.access_token,
-        )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产记录已创建。", asset=asset)
@@ -469,15 +462,6 @@ def review_team_asset(
             team_access.team_id,
             asset_id,
             payload,
-            access_token=team_access.access_token,
-        )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.asset.review",
-            resource_type=str(asset.asset_type),
-            resource_id=asset.id,
-            detail={"review_status": payload.review_status, "note": payload.note},
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
@@ -498,15 +482,6 @@ def publish_team_asset(
             asset_id,
             team_access.user.id,
             payload,
-            access_token=team_access.access_token,
-        )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.asset.publish",
-            resource_type=str(asset.asset_type),
-            resource_id=asset.id,
-            detail={"note": payload.note},
             access_token=team_access.access_token,
         )
     except ValueError as exc:
@@ -531,24 +506,29 @@ def fork_team_asset(
             payload,
             access_token=team_access.access_token,
         )
-        store.create_audit_log(
-            team_access.team_id,
-            team_access.user.id,
-            action="team.asset.fork",
-            resource_type=str(asset.asset_type),
-            resource_id=asset.id,
-            detail={
-                "source_asset_id": asset_id,
-                "title": asset.title,
-                "review_status": asset.review_status,
-            },
-            access_token=team_access.access_token,
-        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产 Fork 已创建。", asset=asset)
+
+
+@router.delete("/assets/{asset_id}", response_model=PlatformAssetDeleteResponse)
+def delete_team_asset(
+    asset_id: str,
+    team_access: TeamAccessContext = Depends(require_team_admin_access),
+) -> PlatformAssetDeleteResponse:
+    try:
+        deleted = get_governance_store().delete_asset(
+            team_access.team_id,
+            asset_id,
+            access_token=team_access.access_token,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        _raise_governance_http_error(exc)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
+    return PlatformAssetDeleteResponse(deleted=True, asset_id=asset_id)
 
 
 @router.get("/token-ledgers", response_model=TokenLedgersResponse)
@@ -575,15 +555,3 @@ def list_team_token_ledgers(
         input_tokens=sum(item.input_tokens for item in items),
         output_tokens=sum(item.output_tokens for item in items),
     )
-
-
-@router.get("/audit-logs", response_model=AuditLogsResponse)
-def list_team_audit_logs(team_access: TeamAccessContext = Depends(require_team_admin_access)) -> AuditLogsResponse:
-    try:
-        items = get_governance_store().list_audit_logs(
-            team_access.team_id,
-            access_token=team_access.access_token,
-        )
-    except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
-    return AuditLogsResponse(team_id=team_access.team_id, items=items)

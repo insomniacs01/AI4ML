@@ -196,7 +196,7 @@ create table if not exists public.ai_tasks (
   description text not null,
   label_column text,
   problem_type text check (problem_type is null or problem_type in ('classification', 'regression')),
-  status text not null default 'draft' check (status in ('draft', 'uploaded', 'planning', 'running', 'paused_for_review', 'waiting_human', 'completed', 'failed', 'published')),
+  status text not null default 'draft' check (status in ('draft', 'uploaded', 'planning', 'running', 'paused_for_review', 'waiting_human', 'completed', 'failed', 'cancelled', 'published')),
   dataset_filename text,
   dataset_path text,
   dataset_profile jsonb,
@@ -204,6 +204,13 @@ create table if not exists public.ai_tasks (
   analysis_token_usage jsonb,
   last_run jsonb,
   last_run_attempt jsonb,
+  executor_type text not null default 'codex' check (executor_type in ('codex')),
+  codex_workspace_path text,
+  codex_session_id text,
+  codex_thread_id text,
+  codex_status text,
+  codex_started_at timestamptz,
+  codex_finished_at timestamptz,
   structured_requirements jsonb,
   routing_policy_id text,
   routing_source text,
@@ -227,9 +234,26 @@ alter table public.ai_tasks
   add column if not exists routing_policy_id text;
 alter table public.ai_tasks
   add column if not exists routing_source text;
+alter table public.ai_tasks
+  add column if not exists executor_type text not null default 'codex';
+alter table public.ai_tasks
+  add column if not exists codex_workspace_path text;
+alter table public.ai_tasks
+  add column if not exists codex_session_id text;
+alter table public.ai_tasks
+  add column if not exists codex_thread_id text;
+alter table public.ai_tasks
+  add column if not exists codex_status text;
+alter table public.ai_tasks
+  add column if not exists codex_started_at timestamptz;
+alter table public.ai_tasks
+  add column if not exists codex_finished_at timestamptz;
 update public.ai_tasks
 set creator_user_id = created_by
 where creator_user_id is null;
+update public.ai_tasks
+set executor_type = 'codex'
+where executor_type is null or executor_type <> 'codex';
 
 drop trigger if exists ai_tasks_set_updated_at on public.ai_tasks;
 create trigger ai_tasks_set_updated_at
@@ -257,7 +281,10 @@ alter table public.ai_tasks
   check (problem_type is null or problem_type in ('classification', 'regression'));
 alter table public.ai_tasks
   add constraint ai_tasks_status_check
-  check (status in ('draft', 'uploaded', 'planning', 'running', 'paused_for_review', 'waiting_human', 'completed', 'failed', 'published'));
+  check (status in ('draft', 'uploaded', 'planning', 'running', 'paused_for_review', 'waiting_human', 'completed', 'failed', 'cancelled', 'published'));
+alter table public.ai_tasks
+  add constraint ai_tasks_executor_type_check
+  check (executor_type in ('codex'));
 
 create table if not exists public.task_runs (
   id uuid primary key default gen_random_uuid(),
@@ -589,7 +616,7 @@ create table if not exists public.platform_assets (
   id uuid primary key default gen_random_uuid(),
   team_id uuid not null references public.teams(id) on delete cascade,
   created_by uuid references public.profiles(user_id) on delete set null,
-  asset_type text not null check (asset_type in ('dataset', 'model', 'workflow', 'report')),
+  asset_type text not null check (asset_type in ('prompt', 'plan')),
   title text not null,
   description text,
   storage_path text,
@@ -626,6 +653,16 @@ alter table public.platform_assets
 
 do $$
 begin
+  alter table public.platform_assets
+    drop constraint if exists platform_assets_asset_type_check;
+
+  delete from public.platform_assets
+  where asset_type not in ('prompt', 'plan');
+
+  alter table public.platform_assets
+    add constraint platform_assets_asset_type_check
+    check (asset_type in ('prompt', 'plan'));
+
   alter table public.platform_assets
     drop constraint if exists platform_assets_visibility_check;
   alter table public.platform_assets

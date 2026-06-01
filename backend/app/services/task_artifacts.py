@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
-from backend.app.core.config import Settings
+from backend.app.core.config import Settings, get_settings
 from backend.app.models.task import TaskRecord, TaskStatus, WorkflowStage
 
 
@@ -18,15 +17,17 @@ LOG_CANDIDATE_NAMES = (
     "info_logs.txt",
     "detail_logs.txt",
     "debugging_logs.txt",
-    "mlzero_stdout.log",
-    "mlzero_stderr.log",
+    "progress.json",
 )
 DIRECT_ARTIFACT_NAMES = (
     "run_summary.json",
+    "metrics.json",
     "leaderboard.json",
     "leaderboard.csv",
     "token_usage.json",
     "generated_code.py",
+    "predict.py",
+    "report.md",
 )
 FEATURE_IMPORTANCE_FILENAMES = {
     "feature_importance.csv",
@@ -35,22 +36,23 @@ FEATURE_IMPORTANCE_FILENAMES = {
     "feature_importances.json",
 }
 RUN_ERROR_LOG_NAMES = (
-    "mlzero_stderr.log",
     "logs.txt",
     "info_logs.txt",
     "detail_logs.txt",
     "debugging_logs.txt",
-    "mlzero_stdout.log",
 )
 STAGE_ARTIFACT_PATTERNS: dict[WorkflowStage, tuple[str, ...]] = {
     WorkflowStage.feature_engineering: (
         "generated_code.py",
+        "predict.py",
+        "final_modeling.py",
         "python_code.py",
         "python_coder_prompt.txt",
         "python_coder_response.txt",
         "execution_script.sh",
     ),
     WorkflowStage.model_selection: (
+        "metrics.json",
         "leaderboard.csv",
         "leaderboard.json",
         "run_summary.json",
@@ -58,7 +60,9 @@ STAGE_ARTIFACT_PATTERNS: dict[WorkflowStage, tuple[str, ...]] = {
         "tool_selector_response.txt",
     ),
     WorkflowStage.training_validation: (
+        "metrics.json",
         "run_summary.json",
+        "final_predictions.csv",
         "validation_predictions.csv",
         "results.csv",
         "stdout",
@@ -67,6 +71,9 @@ STAGE_ARTIFACT_PATTERNS: dict[WorkflowStage, tuple[str, ...]] = {
         "execution_stderr.txt",
     ),
     WorkflowStage.report_generation: (
+        "report.md",
+        "metrics.json",
+        "progress.json",
         "summary.txt",
         "run_summary.json",
         "feature_importance.csv",
@@ -86,7 +93,6 @@ class RunArtifactIndex:
     leaderboard_path: Path | None = None
     token_usage_path: Path | None = None
     generated_code_path: Path | None = None
-    predictor_dir: Path | None = None
     feature_importance_paths: list[Path] = field(default_factory=list)
 
     @property
@@ -115,9 +121,10 @@ def build_run_artifact_index(
     require_current_running: bool = False,
     current_attempt_started_at: datetime | None = None,
 ) -> RunArtifactIndex:
+    effective_settings = settings or get_settings()
     requested_output_dir, output_dir = resolve_task_output_dir(
         task,
-        settings=settings,
+        settings=effective_settings,
         prefer_success=prefer_success,
         include_candidate_roots=include_candidate_roots,
         require_current_running=require_current_running,
@@ -130,6 +137,7 @@ def build_run_artifact_index(
     run_summary_path = latest_existing(
         [
             output_dir / "run_summary.json",
+            output_dir / "output" / "metrics.json",
             output_dir / "best_run" / "output" / "run_summary.json",
             *(node_dir / "output" / "run_summary.json" for node_dir in node_dirs),
         ]
@@ -150,6 +158,8 @@ def build_run_artifact_index(
     generated_code_path = latest_existing(
         [
             output_dir / "generated_code.py",
+            output_dir / "output" / "predict.py",
+            output_dir / "output" / "code" / "final_modeling.py",
             output_dir / "best_run" / "generated_code.py",
             *(node_dir / "generated_code.py" for node_dir in node_dirs),
             *(node_dir / "states" / "python_code.py" for node_dir in node_dirs),
@@ -163,7 +173,6 @@ def build_run_artifact_index(
         leaderboard_path=leaderboard_path,
         token_usage_path=token_usage_path,
         generated_code_path=generated_code_path,
-        predictor_dir=find_autogluon_predictor_dir(output_dir, node_dirs=node_dirs),
         feature_importance_paths=find_feature_importance_paths(output_dir, node_dirs=node_dirs),
     )
 
@@ -177,42 +186,89 @@ def resolve_task_output_dir(
     require_current_running: bool = False,
     current_attempt_started_at: datetime | None = None,
 ) -> tuple[Path | None, Path | None]:
-    candidates = _direct_task_output_candidates(task, prefer_success=prefer_success)
-    if include_candidate_roots and settings is not None:
-        for root in candidate_task_run_roots(task, settings):
-            if not root.exists():
-                continue
-            candidates.extend(
-                sorted(
-                    (path for path in root.iterdir() if path.is_dir()),
-                    key=path_mtime,
-                    reverse=True,
-                )
-            )
-
+    candidates = _task_output_candidates(
+        task,
+        settings=settings,
+        prefer_success=prefer_success,
+        include_candidate_roots=include_candidate_roots,
+    )
     requested = candidates[0] if candidates else None
-    existing = [path for path in candidates if path.exists()]
+    existing = _existing_output_candidates(candidates)
     if require_current_running and existing:
-        threshold = current_attempt_started_at or _as_utc(task.updated_at) - timedelta(minutes=2)
-        current_paths = [path for path in existing if fast_latest_modified_at(path) >= threshold]
-        if current_paths:
-            return requested, sorted(current_paths, key=fast_latest_mtime_timestamp, reverse=True)[0]
-        return requested, None
-    if prefer_success and task.last_run and task.last_run.output_dir:
-        success_path = Path(task.last_run.output_dir)
-        if success_path.exists():
+        return requested, _current_running_output_dir(task, existing, current_attempt_started_at)
+    if prefer_success:
+        success_path = _successful_output_dir(task)
+        if success_path is not None:
             return requested, success_path
-    if existing:
-        return requested, sorted(existing, key=fast_latest_mtime_timestamp, reverse=True)[0]
-    return requested, None
+    return requested, _latest_output_dir(existing)
+
+
+def _task_output_candidates(
+    task: TaskRecord,
+    *,
+    settings: Settings | None,
+    prefer_success: bool,
+    include_candidate_roots: bool,
+) -> list[Path]:
+    candidates = _direct_task_output_candidates(task, prefer_success=prefer_success)
+    if settings is not None:
+        codex_workspace = _deterministic_codex_workspace_for_task(task, settings)
+        if codex_workspace is not None:
+            candidates.append(codex_workspace)
+    if include_candidate_roots and settings is not None:
+        candidates.extend(_candidate_root_output_dirs(task, settings))
+    return candidates
+
+
+def _candidate_root_output_dirs(task: TaskRecord, settings: Settings) -> list[Path]:
+    candidates: list[Path] = []
+    for root in candidate_task_run_roots(task, settings):
+        if not root.exists():
+            continue
+        candidates.extend(
+            sorted(
+                (path for path in root.iterdir() if path.is_dir()),
+                key=path_mtime,
+                reverse=True,
+            )
+        )
+    return candidates
+
+
+def _existing_output_candidates(candidates: list[Path]) -> list[Path]:
+    return [path for path in candidates if path.exists()]
+
+
+def _current_running_output_dir(
+    task: TaskRecord,
+    existing: list[Path],
+    current_attempt_started_at: datetime | None,
+) -> Path | None:
+    threshold = current_attempt_started_at or _as_utc(task.updated_at) - timedelta(minutes=2)
+    current_paths = [path for path in existing if fast_latest_modified_at(path) >= threshold]
+    return _latest_output_dir(current_paths)
+
+
+def _successful_output_dir(task: TaskRecord) -> Path | None:
+    if not task.last_run or not task.last_run.output_dir:
+        return None
+    success_path = Path(task.last_run.output_dir)
+    return success_path if success_path.exists() else None
+
+
+def _latest_output_dir(existing: list[Path]) -> Path | None:
+    if not existing:
+        return None
+    return sorted(existing, key=fast_latest_mtime_timestamp, reverse=True)[0]
 
 
 def candidate_task_run_roots(task: TaskRecord, settings: Settings) -> list[Path]:
     roots = [settings.run_output_dir / task.id]
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if local_appdata:
-        roots.append(Path(local_appdata) / "AI4ML" / "mlzero_runs" / task.id)
-    roots.append(settings.repo_root / "storage" / "mlzero_runs" / task.id)
+    if task.codex_workspace_path:
+        roots.append(Path(task.codex_workspace_path).parent)
+    codex_workspace_root = getattr(settings, "codex_workspace_root", None)
+    if codex_workspace_root:
+        roots.append(codex_workspace_root)
 
     unique: list[Path] = []
     seen: set[str] = set()
@@ -270,9 +326,9 @@ def read_run_log_excerpt(output_dir: str | Path | None, *, max_chars: int = 1800
     if root is None:
         return None
     candidates = [
+        root / "output" / "report.md",
+        root / "output" / "progress.json",
         root / "summary.txt",
-        root / "mlzero_stderr.log",
-        root / "mlzero_stdout.log",
         root / "info_logs.txt",
         root / "detail_logs.txt",
         root / "logs.txt",
@@ -303,6 +359,7 @@ def select_run_error_artifact(output_dir: str | Path | None) -> str | None:
     if root is None:
         return None
     candidates = [root / name for name in RUN_ERROR_LOG_NAMES]
+    candidates.extend([root / "output" / "progress.json", root / "output" / "report.md"])
     try:
         candidates.extend(
             sorted(
@@ -343,24 +400,6 @@ def count_leaderboard_rows(path: Path | None) -> int | None:
             return len(list(csv.DictReader(handle)))
     except (OSError, json.JSONDecodeError, csv.Error):
         return None
-
-
-def find_autogluon_predictor_dir(output_dir: Path, *, node_dirs: list[Path] | None = None) -> Path | None:
-    nodes = node_dirs if node_dirs is not None else recent_node_dirs(output_dir)
-    candidates = [
-        path.parent
-        for path in [
-            output_dir / "predictor.pkl",
-            output_dir / "best_run" / "predictor.pkl",
-            output_dir / "best_run" / "output" / "predictor.pkl",
-            *(node_dir / "predictor.pkl" for node_dir in nodes),
-            *(node_dir / "output" / "predictor.pkl" for node_dir in nodes),
-        ]
-        if path.is_file()
-    ]
-    if not candidates:
-        return None
-    return sorted(candidates, key=lambda item: path_mtime(item), reverse=True)[0]
 
 
 def find_feature_importance_paths(output_dir: Path, *, node_dirs: list[Path] | None = None) -> list[Path]:
@@ -441,6 +480,19 @@ def _direct_task_output_candidates(task: TaskRecord, *, prefer_success: bool) ->
     attempt = Path(task.last_run_attempt.output_dir) if task.last_run_attempt and task.last_run_attempt.output_dir else None
     ordered = [success, attempt] if prefer_success else [attempt, success]
     return [path for path in ordered if path is not None]
+
+
+def _deterministic_codex_workspace_for_task(task: TaskRecord, settings: Settings) -> Path | None:
+    workspace_root = getattr(settings, "codex_workspace_root", None)
+    if workspace_root is None:
+        return None
+    safe_task_id = "".join(
+        char if char.isalnum() or char in {"_", "-"} else "-"
+        for char in task.id.strip()
+    )[:64]
+    if not safe_task_id:
+        return None
+    return Path(workspace_root) / f"ai4ml-{safe_task_id}"
 
 
 def _as_utc(value: datetime) -> datetime:

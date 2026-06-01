@@ -26,23 +26,23 @@ def call_openai_compatible_provider(
     temperature: float = 0,
     max_tokens: int = 1200,
 ) -> ProviderCallResult:
-    base_url = settings.mlzero_provider_base_url.rstrip("/")
+    base_url = settings.ai_provider_base_url.rstrip("/")
     headers = {
-        "Authorization": f"Bearer {settings.mlzero_openai_api_key}",
+        "Authorization": f"Bearer {settings.ai_provider_api_key}",
         "Content-Type": "application/json",
-        "User-Agent": settings.mlzero_provider_user_agent,
+        "User-Agent": settings.ai_provider_user_agent,
     }
 
-    if settings.mlzero_provider_wire_api == "responses":
+    if settings.ai_provider_wire_api == "responses":
         endpoint = f"{base_url}/responses"
         body: dict[str, Any] = {
-            "model": settings.mlzero_model_alias,
+            "model": settings.ai_provider_model_name,
             "input": f"System instruction:\n{system_message}\n\nUser prompt:\n{prompt}",
         }
     else:
         endpoint = f"{base_url}/chat/completions"
         body = {
-            "model": settings.mlzero_model_alias,
+            "model": settings.ai_provider_model_name,
             "messages": [
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": prompt},
@@ -53,7 +53,7 @@ def call_openai_compatible_provider(
 
     request = Request(endpoint, data=json.dumps(body).encode("utf-8"), headers=headers)
     try:
-        with urlopen(request, timeout=settings.mlzero_provider_request_timeout_seconds) as response:  # noqa: S310
+        with urlopen(request, timeout=settings.ai_provider_request_timeout_seconds) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -61,7 +61,7 @@ def call_openai_compatible_provider(
     except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"AI 请求失败：{exc}") from exc
 
-    text = _extract_response_text(payload, wire_api=settings.mlzero_provider_wire_api)
+    text = _extract_response_text(payload, wire_api=settings.ai_provider_wire_api)
     if not text:
         raise RuntimeError("AI 返回了空内容。")
 
@@ -72,9 +72,9 @@ def call_openai_compatible_provider(
             prompt=prompt,
             system_message=system_message,
             response_text=text,
-            model_name=settings.mlzero_model_alias,
-            tokenizer_model_name=settings.mlzero_tokenizer_model_alias or None,
-            wire_api=settings.mlzero_provider_wire_api,
+            model_name=settings.ai_provider_model_name,
+            tokenizer_model_name=settings.ai_provider_tokenizer_model_alias or None,
+            wire_api=settings.ai_provider_wire_api,
         )
         calculation_method = "tokenizer_estimate"
 
@@ -87,29 +87,30 @@ def call_openai_compatible_provider(
 
 def _extract_response_text(payload: dict[str, Any], *, wire_api: str) -> str:
     if wire_api == "responses":
-        output_text = payload.get("output_text")
-        if isinstance(output_text, str) and output_text.strip():
-            return output_text.strip()
+        return _extract_responses_text(payload)
+    return _extract_chat_completion_text(payload)
 
-        output = payload.get("output")
-        if not isinstance(output, list):
-            return ""
 
-        parts: list[str] = []
-        for item in output:
-            if not isinstance(item, dict):
-                continue
-            content = item.get("content")
-            if not isinstance(content, list):
-                continue
-            for content_item in content:
-                if not isinstance(content_item, dict):
-                    continue
-                text = content_item.get("text")
-                if isinstance(text, str) and text.strip():
-                    parts.append(text.strip())
-        return "\n\n".join(parts).strip()
+def _extract_responses_text(payload: dict[str, Any]) -> str:
+    output_text = _strip_text(payload.get("output_text"))
+    if output_text:
+        return output_text
 
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return ""
+
+    parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if isinstance(content, list):
+            parts.extend(_extract_dict_text_parts(content))
+    return _join_text_parts(parts)
+
+
+def _extract_chat_completion_text(payload: dict[str, Any]) -> str:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         return ""
@@ -123,20 +124,35 @@ def _extract_response_text(payload: dict[str, Any], *, wire_api: str) -> str:
         return ""
 
     content = message.get("content")
-    if isinstance(content, str):
-        return content.strip()
-
-    if not isinstance(content, list):
-        return ""
+    text = _strip_text(content)
+    if text:
+        return text
 
     parts: list[str] = []
-    for item in content:
-        if isinstance(item, str) and item.strip():
-            parts.append(item.strip())
-            continue
+    if isinstance(content, list):
+        for item in content:
+            item_text = _strip_text(item)
+            if item_text:
+                parts.append(item_text)
+            elif isinstance(item, dict):
+                parts.extend(_extract_dict_text_parts([item]))
+    return _join_text_parts(parts)
+
+
+def _extract_dict_text_parts(items: list[Any]) -> list[str]:
+    parts: list[str] = []
+    for item in items:
         if not isinstance(item, dict):
             continue
-        text = item.get("text")
-        if isinstance(text, str) and text.strip():
-            parts.append(text.strip())
+        text = _strip_text(item.get("text"))
+        if text:
+            parts.append(text)
+    return parts
+
+
+def _strip_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) and value.strip() else ""
+
+
+def _join_text_parts(parts: list[str]) -> str:
     return "\n\n".join(parts).strip()

@@ -6,7 +6,6 @@ from unittest import TestCase
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from backend.app.api.routes import tasks as task_routes
 from backend.app.api.routes import team as team_routes
 from backend.app.core.supabase_auth import SupabaseUser, TeamAccessContext
 from backend.app.models.connector import ConnectorTestStatus, ConnectorWireApi, StoredConnectorRecord
@@ -18,6 +17,7 @@ from backend.app.models.task import (
     TaskStatus,
     WorkflowStage,
 )
+from backend.app.services import task_routing
 
 
 def _utcnow() -> datetime:
@@ -71,13 +71,13 @@ def _task(*, stage_routing: list[TaskStageRoutingRecord] | None = None) -> TaskR
 class StrictFailurePathTests(TestCase):
     def test_active_connector_is_not_used_without_explicit_stage_route(self) -> None:
         connector = _connector()
-        runtime_context = task_routes._RoutingRuntimeContext(
+        runtime_context = task_routing._RoutingRuntimeContext(
             team_policies={},
             connector_cache={connector.id: connector},
         )
 
         with self.assertRaises(HTTPException) as raised:
-            task_routes._resolve_preferred_selection(
+            task_routing._resolve_preferred_selection(
                 _task(),
                 _team_access(),
                 runtime_context,
@@ -89,7 +89,7 @@ class StrictFailurePathTests(TestCase):
 
     def test_explicit_task_stage_route_still_resolves(self) -> None:
         connector = _connector()
-        runtime_context = task_routes._RoutingRuntimeContext(
+        runtime_context = task_routing._RoutingRuntimeContext(
             team_policies={},
             connector_cache={connector.id: connector},
         )
@@ -105,7 +105,7 @@ class StrictFailurePathTests(TestCase):
             ]
         )
 
-        selection = task_routes._resolve_preferred_selection(
+        selection = task_routing._resolve_preferred_selection(
             task,
             _team_access(),
             runtime_context,
@@ -117,7 +117,7 @@ class StrictFailurePathTests(TestCase):
 
     def test_model_only_task_route_is_rejected_instead_of_using_active_connector(self) -> None:
         connector = _connector()
-        runtime_context = task_routes._RoutingRuntimeContext(
+        runtime_context = task_routing._RoutingRuntimeContext(
             team_policies={},
             connector_cache={connector.id: connector},
         )
@@ -132,7 +132,7 @@ class StrictFailurePathTests(TestCase):
         )
 
         with self.assertRaises(HTTPException) as raised:
-            task_routes._resolve_preferred_selection(
+            task_routing._resolve_preferred_selection(
                 task,
                 _team_access(),
                 runtime_context,
@@ -144,7 +144,7 @@ class StrictFailurePathTests(TestCase):
 
     def test_team_policy_without_primary_route_is_not_used_as_runtime_route(self) -> None:
         connector = _connector()
-        runtime_context = task_routes._RoutingRuntimeContext(
+        runtime_context = task_routing._RoutingRuntimeContext(
             team_policies={
                 WorkflowStage.requirement_analysis.value: AIRoutingPolicyRecord(
                     team_id="team-1",
@@ -155,7 +155,7 @@ class StrictFailurePathTests(TestCase):
         )
 
         with self.assertRaises(HTTPException) as raised:
-            task_routes._resolve_preferred_selection(
+            task_routing._resolve_preferred_selection(
                 _task(),
                 _team_access(),
                 runtime_context,
@@ -166,7 +166,7 @@ class StrictFailurePathTests(TestCase):
 
     def test_task_stage_input_rejects_model_without_connector(self) -> None:
         with self.assertRaises(HTTPException) as raised:
-            task_routes._validate_task_stage_routing_overrides(
+            task_routing._validate_task_stage_routing_overrides(
                 [
                     TaskStageRoutingOverrideInput(
                         stage=WorkflowStage.requirement_analysis,

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TaskStatus(str, Enum):
@@ -16,6 +16,7 @@ class TaskStatus(str, Enum):
     waiting_human = "waiting_human"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
     published = "published"
 
 
@@ -50,10 +51,12 @@ class TaskRunProgressArtifactSummary(BaseModel):
     has_leaderboard: bool = False
     has_token_usage: bool = False
     has_generated_code: bool = False
+    has_overview: bool = False
     run_summary_path: Optional[str] = None
     leaderboard_path: Optional[str] = None
     token_usage_path: Optional[str] = None
     generated_code_path: Optional[str] = None
+    overview_path: Optional[str] = None
     error_log_path: Optional[str] = None
     error_log_name: Optional[str] = None
     best_model: Optional[str] = None
@@ -141,6 +144,28 @@ class TaskRunProgressResponse(BaseModel):
     latest_validation_score: Optional[float] = None
     telemetry_note: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
+    codex_raw_progress: Optional[dict[str, Any]] = None
+    codex_raw_steps: list[dict[str, Any]] = Field(default_factory=list)
+    codex_workspace_path: Optional[str] = None
+
+
+class TaskStepSummaryRecord(BaseModel):
+    id: str
+    name: str
+    node: str
+    title: str
+    agent_role: str
+    status: str = "pending"
+    message: str = ""
+    summary: str = ""
+    duration_s: Optional[float] = None
+    artifacts: list[str] = Field(default_factory=list)
+    updated_at: Optional[datetime] = None
+
+
+class TaskRuntimeSnapshotResponse(BaseModel):
+    task: "TaskRecord"
+    task_run: dict[str, Any] = Field(default_factory=dict)
 
 
 class DatasetColumnProfile(BaseModel):
@@ -186,6 +211,7 @@ class TaskModelReportResponse(BaseModel):
     data_quality_notes: list[str] = Field(default_factory=list)
     relationship_notes: list[str] = Field(default_factory=list)
     limitation_notes: list[str] = Field(default_factory=list)
+    overview: dict[str, Any] = Field(default_factory=dict)
     artifact_paths: list[str] = Field(default_factory=list)
     report_markdown: str = ""
 
@@ -328,21 +354,12 @@ class TaskInteractionPolicyRecord(BaseModel):
     artifact_paths: list[str] = Field(default_factory=list)
 
 
-class TokenUsageResponse(BaseModel):
-    task_id: str
-    run_output_dir: str
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    source: str
-    updated_at: datetime
-
-
 class TaskCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(min_length=1, max_length=500)
     label_column: Optional[str] = Field(default=None, min_length=1, max_length=80)
     problem_type: Optional[Literal["classification", "regression"]] = None
+    structured_requirements: Optional[dict[str, Any]] = None
     stage_routing: list[TaskStageRoutingOverrideInput] = Field(default_factory=list)
     interaction_policies: list[TaskInteractionPolicyInput] = Field(default_factory=list)
 
@@ -363,6 +380,10 @@ class TaskRunRequest(BaseModel):
     time_limit: Optional[int] = Field(default=None, ge=5, le=300)
     rerun_from_stage: Optional[WorkflowStage] = None
     force_full_run: bool = False
+    resume_after_human: bool = False
+    resume_interrupted: bool = False
+    regenerate_plan: bool = False
+    plan_text: Optional[str] = Field(default=None, max_length=200000)
 
 
 class TaskInteractiveChatRequest(BaseModel):
@@ -482,6 +503,13 @@ class TaskRecord(BaseModel):
     analysis_token_usage: Optional[TokenUsageReport] = None
     last_run: Optional[RunSummary] = None
     last_run_attempt: Optional[RunAttempt] = None
+    executor_type: Optional[Literal["codex"]] = "codex"
+    codex_workspace_path: Optional[str] = None
+    codex_session_id: Optional[str] = None
+    codex_thread_id: Optional[str] = None
+    codex_status: Optional[str] = None
+    codex_started_at: Optional[datetime] = None
+    codex_finished_at: Optional[datetime] = None
     routing_policy_id: Optional[str] = None
     routing_source: Optional[str] = None
     structured_requirements: Optional[dict[str, Any]] = None
@@ -489,6 +517,11 @@ class TaskRecord(BaseModel):
     interaction_policies: list[TaskInteractionPolicyRecord] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("executor_type", mode="before")
+    @classmethod
+    def normalize_executor_type(cls, value: object) -> str:
+        return "codex"
 
 
 class TaskListResponse(BaseModel):
@@ -628,19 +661,9 @@ class TeamTokenUsageResponse(BaseModel):
     items: list[TaskTokenUsageSummaryItem]
 
 
-class TokenUsageResponse(BaseModel):
-    task_id: str
-    run_output_dir: str
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    source: str
-    updated_at: datetime
-
-
 class TaskAIConversationEntry(BaseModel):
     id: str
-    phase: Literal["analysis", "mlzero"]
+    phase: Literal["analysis", "codex"]
     stage: str
     title: str
     origin: Literal["ai_model", "local_runtime", "unknown"]
@@ -666,7 +689,7 @@ class TaskInteractiveChatMessage(BaseModel):
 
 class TaskAIInternalStateEntry(BaseModel):
     id: str
-    phase: Literal["analysis", "mlzero"]
+    phase: Literal["analysis", "codex"]
     title: str
     category: Literal["decision", "error", "log", "retrieval", "code", "summary", "metric", "artifact", "other"]
     description: Optional[str] = None

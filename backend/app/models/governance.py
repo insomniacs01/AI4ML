@@ -10,7 +10,7 @@ TeamMemberRole = Literal["admin", "member", "team_owner", "business_user", "deve
 TeamMemberStatus = Literal["invited", "active", "frozen", "removed"]
 QuotaStatus = Literal["active", "frozen", "exhausted"]
 QuotaScopeType = Literal["member", "team", "connector"]
-AssetType = Literal["dataset", "model", "workflow", "report"]
+AssetType = Literal["prompt", "plan"]
 TeamStatus = Literal["active", "disabled", "archived"]
 
 
@@ -146,6 +146,40 @@ class TeamQuotaAdjustResponse(BaseModel):
     quota: TeamQuotaRecord
 
 
+class AdminUserUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=120)
+    role: TeamMemberRole | str | None = None
+    member_status: TeamMemberStatus | str | None = None
+    token_quota: int | None = Field(default=None, ge=0)
+    quota_status: QuotaStatus | None = None
+    warning_threshold: int | None = Field(default=None, ge=0)
+
+
+class AdminUserUpdateResponse(BaseModel):
+    detail: str
+    member: TeamMemberRecord
+    quota: TeamQuotaRecord | None = None
+
+
+class AdminPasswordResetRequest(BaseModel):
+    password: str = Field(min_length=6, max_length=128)
+
+
+class AdminPasswordResetResponse(BaseModel):
+    detail: str
+    user_id: str
+
+
+class PlatformLimitsRecord(BaseModel):
+    max_concurrent_tasks_per_user: int = Field(default=2, ge=0)
+    max_queued_tasks_per_user: int = Field(default=5, ge=0)
+    max_task_time_budget_s: int = Field(default=300, ge=0)
+
+
+class PlatformLimitsResponse(PlatformLimitsRecord):
+    pass
+
+
 class AIRoutingPolicyRecord(BaseModel):
     id: str | None = None
     team_id: str
@@ -256,6 +290,11 @@ class PlatformAssetMutationResponse(BaseModel):
     asset: PlatformAssetRecord
 
 
+class PlatformAssetDeleteResponse(BaseModel):
+    deleted: bool
+    asset_id: str
+
+
 class TokenLedgerRecord(BaseModel):
     id: str
     team_id: str
@@ -285,21 +324,3 @@ class TokenLedgersResponse(BaseModel):
     total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-
-
-class AuditLogRecord(BaseModel):
-    id: str
-    team_id: str | None = None
-    actor_id: str | None = None
-    actor_display_name: str | None = None
-    actor_email: str | None = None
-    action: str
-    resource_type: str | None = None
-    resource_id: str | None = None
-    detail: dict[str, Any] | None = None
-    created_at: datetime
-
-
-class AuditLogsResponse(BaseModel):
-    team_id: str
-    items: list[AuditLogRecord]

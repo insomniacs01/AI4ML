@@ -13,10 +13,8 @@ class BackendInstanceLockTests(TestCase):
     def test_default_runtime_paths_are_outside_repo(self) -> None:
         settings = Settings(_env_file=None)
 
-        self.assertNotEqual(settings.run_output_dir, REPO_ROOT / "storage" / "mlzero_runs")
-        self.assertNotEqual(settings.mlzero_runtime_dir, REPO_ROOT / "storage" / "mlzero_runtime")
+        self.assertNotEqual(settings.run_output_dir, REPO_ROOT / "storage" / "runs")
         self.assertNotIn(REPO_ROOT, settings.run_output_dir.parents)
-        self.assertNotIn(REPO_ROOT, settings.mlzero_runtime_dir.parents)
 
     def test_second_backend_instance_lock_fails_until_first_is_released(self) -> None:
         with TemporaryDirectory() as tmpdir:

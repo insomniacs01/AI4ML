@@ -14,23 +14,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--base-url",
-        default=os.getenv("AI4ML_MLZERO_PROVIDER_BASE_URL_OVERRIDE") or os.getenv("AI4ML_PROVIDER_BASE_URL"),
+        default=os.getenv("AI4ML_AI_PROVIDER_BASE_URL") or os.getenv("AI4ML_PROVIDER_BASE_URL"),
         help="OpenAI-compatible provider base URL, e.g. https://api.siliconflow.cn/v1",
     )
     parser.add_argument(
         "--api-key",
-        default=os.getenv("AI4ML_MLZERO_OPENAI_API_KEY") or os.getenv("AI4ML_PROVIDER_API_KEY"),
+        default=os.getenv("AI4ML_AI_PROVIDER_API_KEY") or os.getenv("AI4ML_PROVIDER_API_KEY"),
         help="Provider API key. Prefer passing it through env vars instead of shell history.",
     )
     parser.add_argument(
         "--model",
-        default=os.getenv("AI4ML_MLZERO_MODEL_ALIAS") or os.getenv("AI4ML_PROVIDER_MODEL"),
+        default=os.getenv("AI4ML_AI_PROVIDER_MODEL_NAME") or os.getenv("AI4ML_PROVIDER_MODEL"),
         help="Model id to test.",
     )
     parser.add_argument(
         "--wire-api",
         choices=["chat_completions", "responses"],
-        default=os.getenv("AI4ML_MLZERO_PROVIDER_WIRE_API")
+        default=os.getenv("AI4ML_AI_PROVIDER_WIRE_API")
         or os.getenv("AI4ML_PROVIDER_WIRE_API")
         or "chat_completions",
         help="Which inference endpoint to test.",

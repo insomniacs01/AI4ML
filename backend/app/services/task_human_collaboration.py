@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -10,7 +9,6 @@ from backend.app.models.task import (
     HumanInteractionDecisionAction,
     HumanInteractionRequestStatus,
     InteractionAssigneeType,
-    PRIMARY_WORKFLOW_STAGES,
     TaskHumanCollaborationResponse,
     TaskHumanRequestCreateRequest,
     TaskHumanRequestDecisionRequest,
@@ -20,7 +18,6 @@ from backend.app.models.task import (
     TaskStatus,
     WorkflowStage,
     WorkflowStageRecord,
-    WorkflowStageStatus,
     normalize_workflow_stage,
 )
 from backend.app.services.task_human_context import (
@@ -30,30 +27,27 @@ from backend.app.services.task_human_context import (
     get_task_human_decision_history,
     get_task_human_loop,
 )
+from backend.app.services.task_human_parameters import apply_human_decision_parameters
+from backend.app.services.task_human_stages import (
+    HumanStageSnapshotBuilder,
+    get_previous_status,
+    is_active_request,
+    sort_stages,
+    stage_key,
+)
 from backend.app.services.task_store import TaskStore
 
 
-STAGE_ORDER = list(PRIMARY_WORKFLOW_STAGES)
-ACTIVE_REQUEST_STATUSES = {
-    HumanInteractionRequestStatus.pending,
-    HumanInteractionRequestStatus.open,
-}
 RERUN_DECISION_ACTIONS = {
     HumanInteractionDecisionAction.revise,
     HumanInteractionDecisionAction.reject,
 }
 
 
-@dataclass(frozen=True)
-class _StageBlueprint:
-    stage: WorkflowStage
-    status: WorkflowStageStatus
-    summary: str
-
-
 class TaskHumanCollaborationService:
     def __init__(self, task_store: TaskStore) -> None:
         self.task_store = task_store
+        self._stage_builder = HumanStageSnapshotBuilder()
 
     def get_snapshot(
         self,
@@ -68,7 +62,11 @@ class TaskHumanCollaborationService:
             self._stage_key(record.stage): record
             for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
         }
-        stages = self._build_stage_snapshot(task, existing_records=existing_records, requests=requests)
+        stages = self._stage_builder.build_stage_snapshot(
+            task,
+            existing_records=existing_records,
+            requests=requests,
+        )
         open_request_count = self._count_open_requests(requests)
         my_requests = self._filter_actor_requests(requests, actor_id=actor_id, actor_role=actor_role)
         my_open_request_count = self._count_open_requests(my_requests)
@@ -103,105 +101,28 @@ class TaskHumanCollaborationService:
         }
 
         synced_records: list[WorkflowStageRecord] = []
-        for blueprint, stage_key, open_request, selection, existing, summary, artifact_refs in self._iter_stage_snapshot_inputs(
+        for item in self._stage_builder.iter_stage_snapshot_inputs(
             task,
             existing_records=existing_records,
             requests=requests,
             selection_map=normalized_selection_map,
         ):
-            stage_key = self._stage_key(blueprint.stage)
             synced_records.append(
                 self.task_store.upsert_stage_record(
                     team_id=task.team_id,
                     task_id=task.id,
-                    stage=blueprint.stage,
-                    status=WorkflowStageStatus.waiting_human if open_request else blueprint.status,
+                    stage=item.stage,
+                    status=item.status,
                     access_token=access_token,
-                    selected_connector_id=(
-                        selection.connector_id
-                        if selection is not None and selection.connector_id is not None
-                        else existing.selected_connector_id if existing else None
-                    ),
-                    model_name=(
-                        selection.model_name
-                        if selection is not None and selection.model_name is not None
-                        else existing.model_name if existing else None
-                    ),
-                    selection_source=(
-                        selection.selection_source
-                        if selection is not None and selection.selection_source is not None
-                        else existing.selection_source if existing else None
-                    ),
-                    summary=summary,
-                    artifact_refs=artifact_refs,
+                    selected_connector_id=item.selected_connector_id,
+                    model_name=item.model_name,
+                    selection_source=item.selection_source,
+                    summary=item.summary,
+                    artifact_refs=item.artifact_refs,
                 )
             )
 
         return self._sort_stages(synced_records)
-
-    def _build_stage_snapshot(
-        self,
-        task: TaskRecord,
-        *,
-        existing_records: dict[str, WorkflowStageRecord],
-        requests: list[TaskHumanRequestRecord],
-    ) -> list[WorkflowStageRecord]:
-        now = datetime.now(timezone.utc)
-        records: list[WorkflowStageRecord] = []
-        for blueprint, stage_key, open_request, selection, existing, summary, artifact_refs in self._iter_stage_snapshot_inputs(
-            task,
-            existing_records=existing_records,
-            requests=requests,
-            selection_map={self._stage_key(item.stage): item for item in task.stage_routing},
-        ):
-            status = WorkflowStageStatus.waiting_human if open_request else blueprint.status
-            records.append(
-                WorkflowStageRecord(
-                    id=existing.id if existing else f"virtual-{task.id}-{stage_key}",
-                    team_id=task.team_id,
-                    task_id=task.id,
-                    stage=blueprint.stage,
-                    status=status,
-                    selected_connector_id=(selection.connector_id if selection and selection.connector_id else existing.selected_connector_id if existing else None),
-                    model_name=(selection.model_name if selection and selection.model_name else existing.model_name if existing else None),
-                    selection_source=(
-                        selection.selection_source
-                        if selection and selection.selection_source
-                        else existing.selection_source if existing else None
-                    ),
-                    summary=summary,
-                    artifact_refs=artifact_refs,
-                    started_at=existing.started_at if existing else None,
-                    finished_at=existing.finished_at if existing else None,
-                    duration_seconds=existing.duration_seconds if existing else None,
-                    log_excerpt=existing.log_excerpt if existing else None,
-                    created_at=existing.created_at if existing else task.created_at,
-                    updated_at=existing.updated_at if existing else (task.updated_at or now),
-                )
-            )
-        return self._sort_stages(records)
-
-    def _iter_stage_snapshot_inputs(
-        self,
-        task: TaskRecord,
-        *,
-        existing_records: dict[str, WorkflowStageRecord],
-        requests: list[TaskHumanRequestRecord],
-        selection_map: dict[str, TaskStageRoutingRecord],
-    ):
-        open_requests_by_stage = {
-            self._stage_key(request.stage): request
-            for request in requests
-            if self._is_active_request(request)
-        }
-        for blueprint in self._build_stage_blueprints(task):
-            stage_key = self._stage_key(blueprint.stage)
-            existing = existing_records.get(stage_key)
-            open_request = open_requests_by_stage.get(stage_key)
-            selection = selection_map.get(stage_key)
-            summary = self._build_waiting_summary(open_request) if open_request else blueprint.summary
-            artifact_refs = self._collect_stage_artifacts(task, blueprint.stage)
-            yield blueprint, stage_key, open_request, selection, existing, summary, artifact_refs
 
     def create_request(
         self,
@@ -304,6 +225,7 @@ class TaskHumanCollaborationService:
             "requires_rerun": requires_rerun,
             "rerun_from_stage": rerun_from_stage,
         }
+        apply_human_decision_parameters(task, request, payload, decided_by=decided_by)
         self.task_store.update_human_request(request, access_token=access_token)
 
         task = self._record_latest_decision(task, request=request, payload=payload)
@@ -346,10 +268,10 @@ class TaskHumanCollaborationService:
     def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
         self._expire_overdue_requests(task, access_token=access_token)
         if task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-            raise RuntimeError("Task is waiting for human collaboration. Resolve or resume it before running MLZero.")
+            raise RuntimeError("Task is waiting for human collaboration. Resolve or resume it before running Codex.")
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         if self._count_open_requests(requests):
-            raise RuntimeError("Task has open human collaboration requests. Resolve them before running MLZero.")
+            raise RuntimeError("Task has open human collaboration requests. Resolve them before running Codex.")
 
     def resolve_assignee(
         self,
@@ -480,193 +402,9 @@ class TaskHumanCollaborationService:
             return requests
         return self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
 
-    def _build_stage_blueprints(self, task: TaskRecord) -> list[_StageBlueprint]:
-        effective_status = self._get_progress_status(task)
-
-        requirement_status = WorkflowStageStatus.completed if task.dataset_filename else WorkflowStageStatus.pending
-        requirement_summary = (
-            "Task description and dataset are available for the next steps."
-            if task.dataset_filename
-            else "Waiting for task creation details and CSV upload."
-        )
-
-        if task.label_column and task.problem_type:
-            data_status = WorkflowStageStatus.completed
-            data_summary = f"Detected label column '{task.label_column}' and task type '{task.problem_type}'."
-        elif task.dataset_filename:
-            data_status = WorkflowStageStatus.running if effective_status in {TaskStatus.planning, TaskStatus.uploaded} else WorkflowStageStatus.pending
-            data_summary = "Dataset is uploaded. Waiting for AI analysis to infer label column, problem type, and metric."
-        else:
-            data_status = WorkflowStageStatus.pending
-            data_summary = "No dataset is available for AI data analysis yet."
-
-        feature_status = self._build_generation_stage_status(task, effective_status)
-        feature_summary = self._build_generation_stage_summary(
-            task,
-            effective_status,
-            pending_summary="Feature engineering has not started yet.",
-            completed_summary="A recent MLZero attempt already produced code and intermediate artifacts.",
-        )
-
-        model_status = self._build_generation_stage_status(task, effective_status)
-        model_summary = self._build_generation_stage_summary(
-            task,
-            effective_status,
-            pending_summary="Model selection has not started yet.",
-            completed_summary="A recent MLZero attempt already explored at least one model candidate.",
-        )
-
-        if effective_status == TaskStatus.running:
-            training_status = WorkflowStageStatus.running
-            training_summary = "MLZero is training and validating candidate models."
-        elif effective_status == TaskStatus.failed and task.last_run_attempt:
-            training_status = WorkflowStageStatus.failed
-            training_summary = task.notes or "The latest training or validation attempt failed."
-        elif task.last_run:
-            training_status = WorkflowStageStatus.completed
-            metric_label = task.last_run.metric_name or "validation_score"
-            training_summary = f"The latest run completed with {metric_label} = {task.last_run.metric_value}."
-        else:
-            training_status = WorkflowStageStatus.pending
-            training_summary = "Training and validation have not started yet."
-
-        if task.status == TaskStatus.published:
-            report_status = WorkflowStageStatus.completed
-            report_summary = "The latest report has already been published."
-        elif task.last_run:
-            report_status = WorkflowStageStatus.completed if effective_status == TaskStatus.completed else WorkflowStageStatus.pending
-            report_summary = f"The latest report is ready for review. Best model: {task.last_run.best_model}."
-        elif task.last_run_attempt:
-            report_status = WorkflowStageStatus.pending
-            report_summary = "Artifacts exist from the latest attempt, but a final report is not ready yet."
-        else:
-            report_status = WorkflowStageStatus.pending
-            report_summary = "Report generation has not started yet."
-
-        blueprints = [
-            _StageBlueprint(
-                stage=WorkflowStage.requirement_analysis,
-                status=requirement_status,
-                summary=requirement_summary,
-            ),
-            _StageBlueprint(
-                stage=WorkflowStage.data_analysis,
-                status=data_status,
-                summary=data_summary,
-            ),
-            _StageBlueprint(
-                stage=WorkflowStage.feature_engineering,
-                status=feature_status,
-                summary=feature_summary,
-            ),
-            _StageBlueprint(
-                stage=WorkflowStage.model_selection,
-                status=model_status,
-                summary=model_summary,
-            ),
-            _StageBlueprint(
-                stage=WorkflowStage.training_validation,
-                status=training_status,
-                summary=training_summary,
-            ),
-            _StageBlueprint(
-                stage=WorkflowStage.report_generation,
-                status=report_status,
-                summary=report_summary,
-            ),
-        ]
-        return self._apply_rerun_stage_hint(task, blueprints)
-
-    def _apply_rerun_stage_hint(self, task: TaskRecord, blueprints: list[_StageBlueprint]) -> list[_StageBlueprint]:
-        human_loop = self._read_human_loop(task)
-        if not human_loop.get("rerun_requested"):
-            return blueprints
-        raw_stage = human_loop.get("rerun_from_stage")
-        if not isinstance(raw_stage, str) or not raw_stage:
-            return blueprints
-        try:
-            rerun_stage = normalize_workflow_stage(raw_stage)
-        except ValueError:
-            return blueprints
-        order_index = {stage.value: index for index, stage in enumerate(STAGE_ORDER)}
-        rerun_index = order_index.get(rerun_stage.value)
-        if rerun_index is None:
-            return blueprints
-        reason = human_loop.get("rerun_reason")
-        next_blueprints: list[_StageBlueprint] = []
-        for blueprint in blueprints:
-            current_index = order_index.get(blueprint.stage.value, len(order_index))
-            if current_index >= rerun_index:
-                next_blueprints.append(
-                    _StageBlueprint(
-                        stage=blueprint.stage,
-                        status=WorkflowStageStatus.pending,
-                        summary=(
-                            f"人工协同要求从“{blueprint.stage.value}”所在链路重新运行。"
-                            + (f"原因：{reason}" if isinstance(reason, str) and reason else "")
-                        ),
-                    )
-                )
-            else:
-                next_blueprints.append(blueprint)
-        return next_blueprints
-
-    @staticmethod
-    def _build_generation_stage_status(task: TaskRecord, effective_status: TaskStatus) -> WorkflowStageStatus:
-        if effective_status == TaskStatus.running:
-            return WorkflowStageStatus.running
-        if task.last_run or task.last_run_attempt:
-            return WorkflowStageStatus.completed
-        return WorkflowStageStatus.pending
-
-    @staticmethod
-    def _build_generation_stage_summary(
-        task: TaskRecord,
-        effective_status: TaskStatus,
-        *,
-        pending_summary: str,
-        completed_summary: str,
-    ) -> str:
-        if effective_status == TaskStatus.running:
-            return "MLZero is actively generating or refining training logic."
-        if task.last_run or task.last_run_attempt:
-            return completed_summary
-        return pending_summary
-
-    def _collect_stage_artifacts(self, task: TaskRecord, stage: WorkflowStage) -> list[str]:
-        artifacts: list[str] = []
-        if stage in {WorkflowStage.requirement_analysis, WorkflowStage.data_analysis} and task.dataset_path:
-            artifacts.append(task.dataset_path)
-        if stage in {
-            WorkflowStage.feature_engineering,
-            WorkflowStage.model_selection,
-            WorkflowStage.training_validation,
-            WorkflowStage.report_generation,
-        }:
-            if task.last_run_attempt and task.last_run_attempt.output_dir:
-                artifacts.append(task.last_run_attempt.output_dir)
-            elif task.last_run and task.last_run.output_dir:
-                artifacts.append(task.last_run.output_dir)
-        return artifacts
-
-    @staticmethod
-    def _build_waiting_summary(request: TaskHumanRequestRecord | None) -> str:
-        if request is None or not isinstance(request.payload, dict):
-            return "Waiting for human review."
-        title = request.payload.get("title")
-        summary = request.payload.get("summary")
-        if isinstance(title, str) and isinstance(summary, str) and summary.strip():
-            return f"{title.strip()}: {summary.strip()}"
-        if isinstance(title, str) and title.strip():
-            return title.strip()
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
-        return "Waiting for human review."
-
     @staticmethod
     def _sort_stages(stages: list[WorkflowStageRecord]) -> list[WorkflowStageRecord]:
-        order_index = {stage.value: index for index, stage in enumerate(STAGE_ORDER)}
-        return sorted(stages, key=lambda item: order_index.get(TaskHumanCollaborationService._stage_key(item.stage), len(order_index)))
+        return sort_stages(stages)
 
     @staticmethod
     def _count_open_requests(requests: list[TaskHumanRequestRecord]) -> int:
@@ -711,7 +449,7 @@ class TaskHumanCollaborationService:
 
     @staticmethod
     def _is_active_request(request: TaskHumanRequestRecord) -> bool:
-        return request.status in ACTIVE_REQUEST_STATUSES
+        return is_active_request(request)
 
     @staticmethod
     def _is_overdue(request: TaskHumanRequestRecord) -> bool:
@@ -762,11 +500,6 @@ class TaskHumanCollaborationService:
             return HumanInteractionRequestStatus.skipped
         raise RuntimeError(f"unsupported human decision action: {action}")
 
-    def _get_progress_status(self, task: TaskRecord) -> TaskStatus:
-        if task.status not in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-            return task.status
-        return self._get_previous_status(task)
-
     def _mark_task_waiting(
         self,
         task: TaskRecord,
@@ -813,28 +546,7 @@ class TaskHumanCollaborationService:
         return self.task_store.save_task(task, access_token=access_token)
 
     def _get_previous_status(self, task: TaskRecord) -> TaskStatus:
-        human_loop = self._read_human_loop(task)
-        if human_loop.get("rerun_requested"):
-            if task.dataset_filename:
-                return TaskStatus.uploaded
-            return TaskStatus.draft
-        raw_status = human_loop.get("previous_status") if human_loop else None
-        if isinstance(raw_status, str):
-            try:
-                parsed = TaskStatus(raw_status)
-            except ValueError:
-                parsed = None
-            if parsed is not None and parsed not in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-                return parsed
-        if task.last_run:
-            return TaskStatus.completed
-        if task.last_run_attempt:
-            return TaskStatus.failed
-        if task.label_column and task.problem_type:
-            return TaskStatus.planning
-        if task.dataset_filename:
-            return TaskStatus.uploaded
-        return TaskStatus.draft
+        return get_previous_status(task)
 
     def _record_latest_decision(
         self,
@@ -872,7 +584,7 @@ class TaskHumanCollaborationService:
 
     @staticmethod
     def _stage_key(stage: WorkflowStage | str) -> str:
-        return normalize_workflow_stage(stage).value
+        return stage_key(stage)
 
     @staticmethod
     def _read_human_loop(task: TaskRecord) -> dict[str, Any]:

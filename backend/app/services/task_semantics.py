@@ -69,7 +69,7 @@ def apply_human_semantic_update(
     task.status = TaskStatus.planning
     task.notes = (
         f"任务语义已人工修正：目标列 {label_column}，"
-        f"任务类型 {payload.problem_type}，指标 {metric_name}。请重新运行 MLZero。"
+        f"任务类型 {payload.problem_type}，指标 {metric_name}。请重新运行 Codex。"
     )
 
     human_loop = ensure_task_human_loop(task)

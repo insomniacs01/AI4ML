@@ -1,0 +1,467 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from threading import Lock
+from typing import Any
+
+from backend.app.models.task import TaskRecord, WorkflowStageRecord
+
+
+@dataclass(frozen=True)
+class _CachedTaskState:
+    payload: str
+    updated_at: datetime | None
+    is_detail: bool
+
+
+class TaskCache:
+    def __init__(self, path: Path, *, ttl_seconds: int = 30) -> None:
+        self.path = path
+        self.ttl_seconds = ttl_seconds
+        self._lock = Lock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_schema()
+
+    def list_tasks(self, team_id: str) -> list[TaskRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload
+                FROM task_cache
+                WHERE team_id = ?
+                ORDER BY updated_at DESC
+                """,
+                (team_id,),
+            ).fetchall()
+        tasks: list[TaskRecord] = []
+        for row in rows:
+            task = self._task_from_payload(row["payload"])
+            if task is not None:
+                tasks.append(task)
+        return tasks
+
+    def get_task(self, team_id: str, task_id: str, *, require_detail: bool = False) -> TaskRecord | None:
+        detail_clause = " AND is_detail = 1" if require_detail else ""
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT payload
+                FROM task_cache
+                WHERE team_id = ? AND task_id = ?
+                {detail_clause}
+                LIMIT 1
+                """,
+                (team_id, task_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._task_from_payload(row["payload"])
+
+    def upsert_tasks(self, tasks: list[TaskRecord], *, detail: bool = False) -> int:
+        if not tasks:
+            return 0
+        synced_at = self._now_iso()
+        with self._lock, self._connect() as conn:
+            changed = 0
+            for task in tasks:
+                task, incoming_is_detail, should_write = self._task_upsert_plan(conn, task, detail=detail)
+                if not should_write:
+                    self._mark_synced(conn, task.team_id, task.id, synced_at=synced_at)
+                    continue
+                self._write_task_cache(conn, task, synced_at=synced_at, is_detail=incoming_is_detail)
+                changed += 1
+        return changed
+
+    def upsert_task(self, task: TaskRecord, *, detail: bool = True) -> bool:
+        return self.upsert_tasks([task], detail=detail) > 0
+
+    def delete_task(self, team_id: str, task_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM task_cache WHERE team_id = ? AND task_id = ?",
+                (team_id, task_id),
+            )
+            conn.execute(
+                "DELETE FROM stage_cache WHERE team_id = ? AND task_id = ?",
+                (team_id, task_id),
+            )
+
+    def prune_team_tasks(self, team_id: str, live_task_ids: set[str]) -> int:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT task_id FROM task_cache WHERE team_id = ?",
+                (team_id,),
+            ).fetchall()
+            stale_ids = [str(row["task_id"]) for row in rows if str(row["task_id"]) not in live_task_ids]
+            if not stale_ids:
+                return 0
+            conn.executemany(
+                "DELETE FROM task_cache WHERE team_id = ? AND task_id = ?",
+                [(team_id, task_id) for task_id in stale_ids],
+            )
+            conn.executemany(
+                "DELETE FROM stage_cache WHERE team_id = ? AND task_id = ?",
+                [(team_id, task_id) for task_id in stale_ids],
+            )
+            return len(stale_ids)
+
+    def list_stage_records(self, team_id: str, task_id: str) -> list[WorkflowStageRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload
+                FROM stage_cache
+                WHERE team_id = ? AND task_id = ?
+                ORDER BY updated_at DESC
+                """,
+                (team_id, task_id),
+            ).fetchall()
+        records: list[WorkflowStageRecord] = []
+        for row in rows:
+            record = self._stage_from_payload(row["payload"])
+            if record is not None:
+                records.append(record)
+        return records
+
+    def upsert_stage_records(self, records: list[WorkflowStageRecord]) -> int:
+        if not records:
+            return 0
+        synced_at = self._now_iso()
+        with self._lock, self._connect() as conn:
+            changed = 0
+            for record in records:
+                stage_key = self._stage_key(record.stage)
+                existing = conn.execute(
+                    """
+                    SELECT updated_at
+                    FROM stage_cache
+                    WHERE team_id = ? AND task_id = ? AND stage = ?
+                    LIMIT 1
+                    """,
+                    (record.team_id, record.task_id, stage_key),
+                ).fetchone()
+                if existing is not None:
+                    existing_updated_at = self._parse_datetime(str(existing["updated_at"]))
+                    incoming_updated_at = self._parse_datetime(record.updated_at.isoformat())
+                    if (
+                        existing_updated_at is not None
+                        and incoming_updated_at is not None
+                        and existing_updated_at >= incoming_updated_at
+                    ):
+                        self._mark_stage_synced(
+                            conn,
+                            record.team_id,
+                            record.task_id,
+                            stage_key,
+                            synced_at=synced_at,
+                        )
+                        continue
+
+                conn.execute(
+                    """
+                    INSERT INTO stage_cache (
+                        team_id,
+                        task_id,
+                        stage,
+                        payload,
+                        updated_at,
+                        synced_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(team_id, task_id, stage) DO UPDATE SET
+                        payload = excluded.payload,
+                        updated_at = excluded.updated_at,
+                        synced_at = excluded.synced_at
+                    """,
+                    (
+                        record.team_id,
+                        record.task_id,
+                        stage_key,
+                        json.dumps(record.model_dump(mode="json"), ensure_ascii=False),
+                        record.updated_at.isoformat(),
+                        synced_at,
+                    ),
+                )
+                changed += 1
+        return changed
+
+    def has_fresh_team_cache(self, team_id: str) -> bool:
+        synced_at = self._latest_sync(team_id=team_id)
+        return self._is_fresh(synced_at)
+
+    def has_fresh_task_cache(self, team_id: str, task_id: str, *, require_detail: bool = False) -> bool:
+        synced_at = self._latest_sync(team_id=team_id, task_id=task_id, require_detail=require_detail)
+        return self._is_fresh(synced_at)
+
+    def has_fresh_stage_cache(self, team_id: str, task_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(synced_at) AS synced_at
+                FROM stage_cache
+                WHERE team_id = ? AND task_id = ?
+                """,
+                (team_id, task_id),
+            ).fetchone()
+        if row is None or not row["synced_at"]:
+            return False
+        return self._is_fresh(self._parse_datetime(str(row["synced_at"])))
+
+    def _ensure_schema(self) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS task_cache (
+                    team_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    synced_at TEXT NOT NULL,
+                    is_detail INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (team_id, task_id)
+                )
+                """
+            )
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(task_cache)").fetchall()
+            }
+            if "is_detail" not in columns:
+                conn.execute("ALTER TABLE task_cache ADD COLUMN is_detail INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_task_cache_team_updated
+                ON task_cache(team_id, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stage_cache (
+                    team_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    synced_at TEXT NOT NULL,
+                    PRIMARY KEY (team_id, task_id, stage)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_stage_cache_task_updated
+                ON stage_cache(team_id, task_id, updated_at DESC)
+                """
+            )
+
+    def _latest_sync(
+        self,
+        *,
+        team_id: str,
+        task_id: str | None = None,
+        require_detail: bool = False,
+    ) -> datetime | None:
+        if task_id:
+            detail_clause = " AND is_detail = 1" if require_detail else ""
+            query = f"SELECT synced_at FROM task_cache WHERE team_id = ? AND task_id = ?{detail_clause} LIMIT 1"
+            params: tuple[str, ...] = (team_id, task_id)
+        else:
+            query = "SELECT MAX(synced_at) AS synced_at FROM task_cache WHERE team_id = ?"
+            params = (team_id,)
+        with self._connect() as conn:
+            row = conn.execute(query, params).fetchone()
+        if row is None or not row["synced_at"]:
+            return None
+        return self._parse_datetime(str(row["synced_at"]))
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    @staticmethod
+    def _mark_synced(conn: sqlite3.Connection, team_id: str, task_id: str, *, synced_at: str) -> None:
+        conn.execute(
+            """
+            UPDATE task_cache
+            SET synced_at = ?
+            WHERE team_id = ? AND task_id = ?
+            """,
+            (synced_at, team_id, task_id),
+        )
+
+    def _task_upsert_plan(
+        self,
+        conn: sqlite3.Connection,
+        task: TaskRecord,
+        *,
+        detail: bool,
+    ) -> tuple[TaskRecord, bool, bool]:
+        existing = self._cached_task_state(conn, task)
+        if existing is None:
+            return task, detail, True
+
+        incoming_updated_at = self._parse_datetime(task.updated_at.isoformat())
+        if existing.is_detail and not detail:
+            if self._existing_is_newer_or_equal(existing.updated_at, incoming_updated_at):
+                return task, detail, False
+            existing_task = self._task_from_payload(existing.payload)
+            if existing_task is not None:
+                task = self._merge_summary_into_detail(existing_task, task)
+
+        incoming_is_detail = detail or existing.is_detail
+        if (
+            self._existing_is_newer_or_equal(existing.updated_at, incoming_updated_at)
+            and existing.is_detail == incoming_is_detail
+        ):
+            return task, incoming_is_detail, False
+        return task, incoming_is_detail, True
+
+    def _cached_task_state(self, conn: sqlite3.Connection, task: TaskRecord) -> _CachedTaskState | None:
+        row = conn.execute(
+            """
+            SELECT payload, updated_at, is_detail
+            FROM task_cache
+            WHERE team_id = ? AND task_id = ?
+            LIMIT 1
+            """,
+            (task.team_id, task.id),
+        ).fetchone()
+        if row is None:
+            return None
+        return _CachedTaskState(
+            payload=str(row["payload"]),
+            updated_at=self._parse_datetime(str(row["updated_at"])),
+            is_detail=int(row["is_detail"] or 0) == 1,
+        )
+
+    @staticmethod
+    def _existing_is_newer_or_equal(
+        existing_updated_at: datetime | None,
+        incoming_updated_at: datetime | None,
+    ) -> bool:
+        return (
+            existing_updated_at is not None
+            and incoming_updated_at is not None
+            and existing_updated_at >= incoming_updated_at
+        )
+
+    @staticmethod
+    def _write_task_cache(
+        conn: sqlite3.Connection,
+        task: TaskRecord,
+        *,
+        synced_at: str,
+        is_detail: bool,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO task_cache (
+                team_id,
+                task_id,
+                payload,
+                updated_at,
+                synced_at,
+                is_detail
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(team_id, task_id) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at,
+                synced_at = excluded.synced_at,
+                is_detail = CASE
+                    WHEN task_cache.is_detail = 1 THEN 1
+                    ELSE excluded.is_detail
+                END
+            """,
+            (
+                task.team_id,
+                task.id,
+                json.dumps(task.model_dump(mode="json"), ensure_ascii=False),
+                task.updated_at.isoformat(),
+                synced_at,
+                1 if is_detail else 0,
+            ),
+        )
+
+    @staticmethod
+    def _mark_stage_synced(
+        conn: sqlite3.Connection,
+        team_id: str,
+        task_id: str,
+        stage: str,
+        *,
+        synced_at: str,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE stage_cache
+            SET synced_at = ?
+            WHERE team_id = ? AND task_id = ? AND stage = ?
+            """,
+            (synced_at, team_id, task_id, stage),
+        )
+
+    @staticmethod
+    def _task_from_payload(payload: str) -> TaskRecord | None:
+        try:
+            return TaskRecord.model_validate(json.loads(payload))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _merge_summary_into_detail(detail_task: TaskRecord, summary_task: TaskRecord) -> TaskRecord:
+        payload = detail_task.model_dump(mode="json")
+        for key in (
+            "created_by",
+            "creator_user_id",
+            "name",
+            "description",
+            "workflow_id",
+            "label_column",
+            "problem_type",
+            "status",
+            "dataset_filename",
+            "dataset_path",
+            "notes",
+            "routing_policy_id",
+            "routing_source",
+            "created_at",
+            "updated_at",
+        ):
+            payload[key] = summary_task.model_dump(mode="json").get(key)
+        return TaskRecord.model_validate(payload)
+
+    @staticmethod
+    def _stage_from_payload(payload: str) -> WorkflowStageRecord | None:
+        try:
+            return WorkflowStageRecord.model_validate(json.loads(payload))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _stage_key(value: Any) -> str:
+        return value.value if hasattr(value, "value") else str(value)
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _parse_datetime(value: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _is_fresh(self, synced_at: datetime | None) -> bool:
+        if synced_at is None:
+            return False
+        return datetime.now(timezone.utc) - synced_at <= timedelta(seconds=self.ttl_seconds)

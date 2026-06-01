@@ -1,5 +1,4 @@
 fastapi==0.115.12
-autogluon.tabular[skex]>=1.4,<1.5
 pydantic-settings==2.8.1
 PyJWT==2.9.0
 python-multipart==0.0.20

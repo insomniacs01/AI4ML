@@ -1,118 +1,191 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
 from backend.app.models.task import (
-    InteractionTriggerMode,
-    RunAttempt,
     TaskInteractiveChatRequest,
     TaskInteractiveChatResponse,
     TaskRecord,
     TaskRunProgressResponse,
     TaskRunRequest,
     TaskStatus,
-    TokenUsageResponse,
     WorkflowStage,
     WorkflowStageStatus,
 )
-from backend.app.services.executors.mlzero_executor import MLZeroExecutor
-from backend.app.services.task_agent_loop import refresh_agent_loop_after_run, refresh_agent_loop_after_run_failure
+from backend.app.services.codex_backend import (
+    CodexBackendError,
+    approve_codex_plan,
+    build_codex_run_progress,
+    codex_plan_text,
+    interrupt_codex_task,
+    regenerate_codex_plan,
+    resume_codex_task,
+    start_codex_task,
+)
+from backend.app.services.task_codex_sync import sync_codex_task_state
 from backend.app.services.task_ai_conversations import build_task_ai_conversations
 from backend.app.services.task_chat import send_task_chat_message
-from backend.app.services.task_incremental_rerun import (
-    IncrementalRerunPlan,
-    IncrementalRerunPreconditionError,
-    IncrementalRerunResult,
-    build_incremental_rerun_plan,
-    is_strict_incremental_stage,
-    run_task_incrementally,
+from backend.app.services.task_human_parameter_guidance import resolve_task_run_time_limit
+from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
+from backend.app.services.platform_limits import (
+    PlatformLimitError,
+    assert_time_budget_within_limit,
+    assert_user_can_start_task,
 )
-from backend.app.services.task_run_progress import build_task_run_progress
-from backend.app.services.token_usage import read_token_usage
-from backend.app.api.routes.task_route_common import (
-    _apply_interaction_policies,
+from backend.app.services.quota_runtime_guard import clear_quota_guard, quota_token_budget
+from backend.app.services.task_routing import (
     _assert_quota_allows_action,
     _build_runtime_context,
     _build_runtime_settings_for_selection,
-    _build_stage_selection_map,
-    _collect_stage_artifacts_by_stage,
-    _diagnose_run_failure,
-    _generation_stage_statuses_for_incremental_running,
-    _is_recoverable_run_exception,
-    _mark_rerun_completed,
-    _next_policy_cycle,
-    _read_run_log_excerpt,
-    _record_stage_selection_map,
-    _repair_stale_running_task,
     _resolve_preferred_selection,
-    _resolve_requested_rerun_stage,
-    _run_failure_log_excerpt,
-    _run_ai_analysis,
-    _run_exception_output_dir,
-    _run_exception_retry_stage,
-    _run_exception_token_usage,
-    _stage_records_for_incremental_failure,
-    _stage_records_for_incremental_success,
-    _stage_records_for_recoverable_run_block,
-    _sync_task_human_collaboration,
-    _write_task_audit,
-    get_task_human_collaboration_service,
-    get_task_store,
 )
+from backend.app.services.task_runtime_activity import (
+    ActiveCodexTaskConflict,
+    ensure_task_controls_current_codex_activity,
+)
+from backend.app.services.task_runtime_progress import (
+    ensure_codex_plan_request,
+    record_codex_running_stages,
+    record_codex_status_stages,
+    record_user_paused_stages,
+    update_codex_structured_metadata,
+    write_codex_plan_approved_progress,
+    write_codex_resume_progress,
+)
+from backend.app.services.task_workflow_tracking import _record_stage_selection_map
 
 router = APIRouter(tags=["task-runtime"])
+
+
+def _task_requested_time_limit(task: TaskRecord, payload: TaskRunRequest) -> int | None:
+    if payload.time_limit is not None:
+        return payload.time_limit
+    return resolve_task_run_time_limit(task, None)
+
+
+def _assert_codex_task_can_control_current_activity(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+) -> TaskRecord:
+    try:
+        return ensure_task_controls_current_codex_activity(task, team_access)
+    except ActiveCodexTaskConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 @router.get("/{task_id}/run-progress", response_model=TaskRunProgressResponse)
 def get_task_run_progress(
     task_id: str,
-    repair_stale: bool = Query(default=True),
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> TaskRunProgressResponse:
-    task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    task_store = get_task_store()
+    task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    progress = build_task_run_progress(task, get_settings())
-    if repair_stale:
-        progress = _repair_stale_running_task(task, team_access, progress)
-    return progress
-
-
-@router.get("/{task_id}/token-usage", response_model=TokenUsageResponse)
-def get_task_token_usage(
-    task_id: str,
-    team_access: TeamAccessContext = Depends(require_team_access),
-) -> TokenUsageResponse:
-    task = get_task_store().get_task(
-        team_access.team_id,
-        task_id,
+    task, _artifacts = sync_codex_task_state(
+        task,
+        get_settings(),
+        task_store=task_store,
         access_token=team_access.access_token,
     )
+    return build_codex_run_progress(task, get_settings())
+
+@router.post("/{task_id}/cancel", response_model=TaskRecord)
+def cancel_task(
+    task_id: str,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskRecord:
+    task_store = get_task_store()
+    task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    if task.last_run_attempt is not None:
-        output_dir = Path(task.last_run_attempt.output_dir)
-    elif task.last_run is not None:
-        output_dir = Path(task.last_run.output_dir)
-    else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="task has not been run")
-    if not output_dir.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run output directory not found")
+    if task.status == TaskStatus.failed and "用户已取消任务" in (task.notes or ""):
+        return task
+    if task.status in {TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled, TaskStatus.published}:
+        return task
 
-    stats = read_token_usage(output_dir)
-    return TokenUsageResponse(
-        task_id=task.id,
-        run_output_dir=str(output_dir),
-        input_tokens=stats.input_tokens,
-        output_tokens=stats.output_tokens,
-        total_tokens=stats.total_tokens,
-        source=stats.source,
-        updated_at=datetime.now(timezone.utc),
+    try:
+        response = interrupt_codex_task(task, get_settings(), reason="用户已取消任务。")
+        task.codex_session_id = response.get("sessionId") or task.codex_session_id
+        task.codex_thread_id = response.get("threadId") or task.codex_thread_id
+    except CodexBackendError:
+        pass
+    task.notes = "用户已取消任务。"
+    task.status = TaskStatus.cancelled
+    try:
+        saved_task = task_store.save_task(task, access_token=team_access.access_token)
+    except ConnectionError as exc:
+        if "violates check constraint" not in str(exc).lower() and "ai_tasks_status_check" not in str(exc).lower():
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        task.status = TaskStatus.failed
+        saved_task = task_store.save_task(task, access_token=team_access.access_token)
+    _record_stage_selection_map(
+        saved_task,
+        team_access,
+        stage_selection_map={},
+        status_by_stage={
+            WorkflowStage.feature_engineering: WorkflowStageStatus.failed,
+            WorkflowStage.model_selection: WorkflowStageStatus.failed,
+            WorkflowStage.training_validation: WorkflowStageStatus.failed,
+            WorkflowStage.report_generation: WorkflowStageStatus.failed,
+        },
+        summary_by_stage={
+            WorkflowStage.feature_engineering: "用户已取消任务，后续特征工程不再继续。",
+            WorkflowStage.model_selection: "用户已取消任务，后续模型选择不再继续。",
+            WorkflowStage.training_validation: "用户已取消任务，后续训练验证不再继续。",
+            WorkflowStage.report_generation: "用户已取消任务，报告不再生成。",
+        },
     )
+    return saved_task
+
+
+@router.post("/{task_id}/pause", response_model=TaskRecord)
+def pause_task(
+    task_id: str,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskRecord:
+    task_store = get_task_store()
+    task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    if task.status in {TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled, TaskStatus.published}:
+        return task
+
+    task = _assert_codex_task_can_control_current_activity(task, team_access)
+    try:
+        response = interrupt_codex_task(task, get_settings(), reason="用户已暂停当前 Codex 运行，可继续执行。")
+    except CodexBackendError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    now = datetime.now(timezone.utc)
+    task.executor_type = "codex"
+    task.status = TaskStatus.paused_for_review
+    task.codex_session_id = response.get("sessionId") or task.codex_session_id
+    task.codex_thread_id = response.get("threadId") or task.codex_thread_id
+    task.codex_status = "interrupted"
+    task.codex_finished_at = None
+    task.notes = "用户已暂停当前 Codex 运行，可继续执行。"
+    structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
+    codex = structured.get("codex") if isinstance(structured.get("codex"), dict) else {}
+    structured["executor_type"] = "codex"
+    structured["codex"] = {
+        **codex,
+        "workspace_path": task.codex_workspace_path,
+        "session_id": task.codex_session_id,
+        "thread_id": task.codex_thread_id,
+        "status": "interrupted",
+        "pause_reason": "user_paused",
+        "paused_at": now.isoformat(),
+        "started_at": task.codex_started_at.isoformat() if task.codex_started_at else None,
+        "finished_at": None,
+    }
+    task.structured_requirements = structured
+    saved_task = task_store.save_task(task, access_token=team_access.access_token)
+    record_user_paused_stages(saved_task, team_access)
+    return saved_task
 
 @router.post("/{task_id}/chat", response_model=TaskInteractiveChatResponse)
 def send_task_chat(
@@ -165,449 +238,154 @@ def run_task(
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> TaskRecord:
     task_store = get_task_store()
-    human_service = get_task_human_collaboration_service()
     task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     if not task.dataset_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="dataset has not been uploaded")
+    try:
+        all_tasks = task_store.list_tasks(
+            team_access.team_id,
+            access_token=team_access.access_token,
+            lightweight=True,
+            prefer_cache=False,
+        )
+        assert_user_can_start_task(
+            get_settings(),
+            tasks=all_tasks,
+            user_id=team_access.user.id,
+            task_id=task.id,
+        )
+        assert_time_budget_within_limit(get_settings(), _task_requested_time_limit(task, payload))
+    except PlatformLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    task.executor_type = "codex"
+    return _run_codex_task(task, payload, team_access)
+
+
+def _run_codex_task(
+    task: TaskRecord,
+    payload: TaskRunRequest,
+    team_access: TeamAccessContext,
+) -> TaskRecord:
+    task_store = get_task_store()
+    human_service = get_task_human_collaboration_service()
+    settings = get_settings()
+    task = _assert_codex_task_can_control_current_activity(task, team_access)
+
+    if payload.regenerate_plan:
+        quota = _assert_quota_allows_action(team_access, action_name="Codex 重新生成方案")
+        try:
+            response = regenerate_codex_plan(task, settings, token_budget=quota_token_budget(quota))
+        except CodexBackendError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        task = clear_quota_guard(task)
+        task.executor_type = "codex"
+        task.codex_session_id = response.get("sessionId") or task.codex_session_id
+        task.codex_thread_id = response.get("threadId") or task.codex_thread_id
+        task.codex_status = "running"
+        task.status = TaskStatus.running
+        task.notes = "Codex 正在根据人工反馈重新生成建模计划。"
+        task = update_codex_structured_metadata(task)
+        saved_task = task_store.save_task(task, access_token=team_access.access_token)
+        record_codex_running_stages(saved_task, team_access)
+        return saved_task
+
+    if payload.resume_interrupted:
+        quota = _assert_quota_allows_action(team_access, action_name="Codex 继续运行")
+        if not task.codex_workspace_path:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex workspace is not available.")
+        task, artifacts = sync_codex_task_state(task, settings)
+        progress = artifacts.get("progress") if isinstance(artifacts.get("progress"), dict) else {}
+        if task.codex_status != "interrupted" and progress.get("status") != "interrupted":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前任务不是已暂停状态，不能按中断恢复。")
+        try:
+            response = resume_codex_task(task, settings, token_budget=quota_token_budget(quota))
+        except CodexBackendError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        write_codex_resume_progress(task)
+        task = clear_quota_guard(task)
+        task.codex_session_id = response.get("sessionId") or task.codex_session_id
+        task.codex_thread_id = response.get("threadId") or task.codex_thread_id
+        task.executor_type = "codex"
+        task.codex_status = "running"
+        task.codex_finished_at = None
+        task.status = TaskStatus.running
+        task.notes = "Codex 已从暂停位置继续执行。"
+        task = update_codex_structured_metadata(task)
+        saved_task = task_store.save_task(task, access_token=team_access.access_token)
+        record_codex_running_stages(saved_task, team_access)
+        return saved_task
+
+    if payload.resume_after_human:
+        quota = _assert_quota_allows_action(team_access, action_name="Codex 继续运行")
+        requests = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
+        if any(str(item.status.value if hasattr(item.status, "value") else item.status) in {"pending", "open"} for item in requests):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="There are open human confirmation requests.")
+        plan_text = payload.plan_text or codex_plan_text(task, settings)
+        if not plan_text.strip():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex plan is not ready for approval")
+        try:
+            response = approve_codex_plan(task, settings, plan_text=plan_text, token_budget=quota_token_budget(quota))
+        except CodexBackendError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        task = clear_quota_guard(task)
+        task.codex_session_id = response.get("sessionId") or task.codex_session_id
+        task.codex_thread_id = response.get("threadId") or task.codex_thread_id
+        task.executor_type = "codex"
+        task.codex_status = "running"
+        task.status = TaskStatus.running
+        task.notes = "Codex 已收到计划确认，正在继续执行建模流程。"
+        task = update_codex_structured_metadata(task)
+        write_codex_plan_approved_progress(task)
+        saved_task = task_store.save_task(task, access_token=team_access.access_token)
+        record_codex_running_stages(saved_task, team_access)
+        return saved_task
 
     try:
         human_service.assert_task_can_run(task, access_token=team_access.access_token)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    quota = _assert_quota_allows_action(team_access, action_name="Codex 运行")
+    task = clear_quota_guard(task)
 
-    requested_rerun_stage_before_analysis = _resolve_requested_rerun_stage(task, payload)
-    if requested_rerun_stage_before_analysis in {WorkflowStage.requirement_analysis, WorkflowStage.data_analysis}:
-        task = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
-    elif not task.label_column or not task.problem_type:
-        task = _run_ai_analysis(task, task_store, team_access, fail_on_error=True)
-
-    runtime_context = _build_runtime_context(team_access)
-    stage_selection_map = _build_stage_selection_map(task, team_access, runtime_context)
-
-    cycle_id = _next_policy_cycle(task)
-    task, created_policy_requests = _apply_interaction_policies(
-        task,
-        team_access,
-        trigger_mode=InteractionTriggerMode.before_run,
-        cycle_id=cycle_id,
-        stage_selection_map=stage_selection_map,
-    )
-    if created_policy_requests:
-        _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
-        _write_task_audit(
-            team_access,
-            action="task.run",
-            task_id=task.id,
-            detail={
-                "status": "waiting_human",
-                "created_human_requests": created_policy_requests,
-                "cycle_id": cycle_id,
-            },
-        )
+    if task.status == TaskStatus.running and task.codex_workspace_path:
+        task, artifacts = sync_codex_task_state(task, settings)
+        task = update_codex_structured_metadata(task)
+        saved_task = task_store.save_task(task, access_token=team_access.access_token)
+        record_codex_status_stages(saved_task, team_access, artifacts)
+        return saved_task
+    if task.status == TaskStatus.running:
         return task
 
-    selection = _resolve_preferred_selection(
-        task,
-        team_access,
-        runtime_context,
-        [WorkflowStage.model_selection, WorkflowStage.training_validation, WorkflowStage.feature_engineering],
-    )
-    _assert_quota_allows_action(
-        team_access,
-        action_name="MLZero 运行",
-        block_at_warning_threshold=True,
-    )
-    runtime_settings = _build_runtime_settings_for_selection(get_settings(), selection)
-    requested_rerun_stage = requested_rerun_stage_before_analysis or _resolve_requested_rerun_stage(task, payload)
-    incremental_plan: IncrementalRerunPlan | None = None
-    if requested_rerun_stage is not None and is_strict_incremental_stage(requested_rerun_stage):
-        try:
-            incremental_plan = build_incremental_rerun_plan(
-                task,
-                settings=runtime_settings,
-                start_stage=requested_rerun_stage,
-            )
-        except IncrementalRerunPreconditionError as exc:
-            _write_task_audit(
-                team_access,
-                action="task.run",
-                task_id=task.id,
-                detail={
-                    "status": "blocked",
-                    "detail": str(exc),
-                    "rerun_from_stage": requested_rerun_stage.value,
-                    "cycle_id": cycle_id,
-                },
-            )
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-    task.status = TaskStatus.running
-    task.notes = "MLZero 正在运行。"
-    if incremental_plan is not None:
-        task.notes = f"Strict incremental rerun from {incremental_plan.start_stage.value} is running."
-    task = task_store.save_task(task, access_token=team_access.access_token)
-
-    stage_selection_map.update(
-        {
-            WorkflowStage.feature_engineering.value: selection.stage_record,
-            WorkflowStage.model_selection.value: selection.stage_record,
-            WorkflowStage.training_validation.value: selection.stage_record,
-            WorkflowStage.report_generation.value: selection.stage_record,
-        }
-    )
-    _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
-    _record_stage_selection_map(
-        task,
-        team_access,
-        stage_selection_map=stage_selection_map,
-        status_by_stage={
-            WorkflowStage.feature_engineering: WorkflowStageStatus.running,
-            WorkflowStage.model_selection: WorkflowStageStatus.running,
-            WorkflowStage.training_validation: WorkflowStageStatus.running,
-            WorkflowStage.report_generation: WorkflowStageStatus.pending,
-        },
-        summary_by_stage={
-            WorkflowStage.feature_engineering: "MLZero 已开始生成和修正特征处理 / 训练代码。",
-            WorkflowStage.model_selection: "MLZero 已开始选择并比较候选模型。",
-            WorkflowStage.training_validation: "MLZero 正在训练和验证候选模型。",
-            WorkflowStage.report_generation: "等待训练验证结束后生成报告摘要。",
-        },
-        artifact_refs=[task.dataset_path] if task.dataset_path else None,
-    )
-
-    if incremental_plan is not None:
-        running_statuses, running_summaries, running_artifacts = _generation_stage_statuses_for_incremental_running(
-            incremental_plan
-        )
-        _record_stage_selection_map(
-            task,
-            team_access,
-            stage_selection_map=stage_selection_map,
-            status_by_stage=running_statuses,
-            summary_by_stage=running_summaries,
-            artifact_refs_by_stage=running_artifacts,
-        )
-
-    incremental_result: IncrementalRerunResult | None = None
-    try:
-        if incremental_plan is not None and requested_rerun_stage is not None:
-            incremental_result = run_task_incrementally(
-                task,
-                Path(task.dataset_path),
-                settings=runtime_settings,
-                start_stage=requested_rerun_stage,
-                time_limit=payload.time_limit,
-                plan=incremental_plan,
-            )
-            summary = incremental_result.summary
-        else:
-            summary = MLZeroExecutor(runtime_settings).run(task, Path(task.dataset_path), payload.time_limit)
-    except Exception as exc:  # noqa: BLE001
-        run_error_output_dir = _run_exception_output_dir(exc)
-        run_error_token_usage = _run_exception_token_usage(exc)
-        run_error_recoverable = _is_recoverable_run_exception(exc)
-        if run_error_recoverable:
-            retry_stage = _run_exception_retry_stage(exc)
-            if retry_stage is None:
-                retry_stage = requested_rerun_stage or WorkflowStage.feature_engineering
-            diagnosis = _diagnose_run_failure(
-                exc,
-                retry_stage=retry_stage,
-                output_dir=run_error_output_dir,
-                recoverable=True,
-            )
-            run_log_excerpt = _run_failure_log_excerpt(diagnosis)
-            task.status = TaskStatus.running
-            task.notes = run_log_excerpt
-            if run_error_output_dir:
-                task.last_run_attempt = RunAttempt(
-                    output_dir=run_error_output_dir,
-                    token_usage=run_error_token_usage,
-                    diagnosis=diagnosis.get("diagnosis"),
-                    diagnosis_detail=diagnosis.get("detail"),
-                    error_artifact_path=diagnosis.get("error_artifact_path"),
-                )
-                task_store.upsert_run_attempt(
-                    task,
-                    output_dir=run_error_output_dir,
-                    status="running",
-                    token_usage=run_error_token_usage,
-                    notes=task.notes,
-                    access_token=team_access.access_token,
-                )
-                task_store.upsert_token_ledger(
-                    team_id=task.team_id,
-                    task_id=task.id,
-                    phase="mlzero",
-                    stage_key=requested_rerun_stage.value if requested_rerun_stage else selection.stage.value,
-                    source_key=run_error_output_dir,
-                    usage=run_error_token_usage,
-                    access_token=team_access.access_token,
-                    user_id=team_access.user.id,
-                    connector_id=selection.connector.id,
-                    connector_display_name=selection.connector.display_name,
-                    model_name=selection.model_name,
-                    calculation_method="strict_incremental_token_usage_json" if incremental_plan else "mlzero_token_usage_json",
-                )
-            refresh_agent_loop_after_run_failure(
-                task,
-                error_summary=run_log_excerpt,
-                output_dir=run_error_output_dir,
-            )
+    if task.codex_workspace_path:
+        task, artifacts = sync_codex_task_state(task, settings)
+        if task.status in {TaskStatus.paused_for_review, TaskStatus.completed, TaskStatus.failed}:
+            task = update_codex_structured_metadata(task)
             saved_task = task_store.save_task(task, access_token=team_access.access_token)
-            saved_task, _ = _apply_interaction_policies(
-                saved_task,
-                team_access,
-                trigger_mode=InteractionTriggerMode.in_run,
-                cycle_id=cycle_id,
-                stage_selection_map=stage_selection_map,
-            )
-            _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
-            recoverable_statuses, recoverable_summaries = _stage_records_for_recoverable_run_block(
-                retry_stage,
-                exc,
-            )
-            for stage, stage_status in recoverable_statuses.items():
-                if stage_status == WorkflowStageStatus.running:
-                    recoverable_summaries[stage] = run_log_excerpt
-            _record_stage_selection_map(
-                saved_task,
-                team_access,
-                stage_selection_map=stage_selection_map,
-                status_by_stage=recoverable_statuses,
-                summary_by_stage=recoverable_summaries,
-                artifact_refs=[run_error_output_dir] if run_error_output_dir else None,
-                artifact_refs_by_stage=_collect_stage_artifacts_by_stage(run_error_output_dir),
-                log_excerpt_by_stage={stage: run_log_excerpt for stage in recoverable_statuses},
-            )
-            _write_task_audit(
-                team_access,
-                action="task.run",
-                task_id=saved_task.id,
-                detail={
-                    "status": "repair_blocked",
-                    "diagnosis": diagnosis.get("diagnosis"),
-                    "diagnosis_detail": diagnosis.get("detail"),
-                    "error_artifact_path": diagnosis.get("error_artifact_path"),
-                    "retry_stage": retry_stage.value if retry_stage else None,
-                    "output_dir": run_error_output_dir,
-                    "model_name": selection.model_name,
-                    "connector_id": selection.connector.id,
-                    "rerun_from_stage": requested_rerun_stage.value if requested_rerun_stage else None,
-                    "rerun_mode": incremental_plan.mode if incremental_plan else "full_mlzero",
-                    "cycle_id": cycle_id,
-                },
-            )
+            record_codex_status_stages(saved_task, team_access, artifacts)
             return saved_task
 
-        diagnosis = _diagnose_run_failure(
-            exc,
-            retry_stage=requested_rerun_stage or WorkflowStage.training_validation,
-            output_dir=run_error_output_dir,
-            recoverable=False,
-        )
-        run_log_excerpt = _run_failure_log_excerpt(diagnosis)
-        task.status = TaskStatus.failed
-        task.notes = run_log_excerpt
-        if run_error_output_dir:
-            task.last_run_attempt = RunAttempt(
-                output_dir=run_error_output_dir,
-                token_usage=run_error_token_usage,
-                diagnosis=diagnosis.get("diagnosis"),
-                diagnosis_detail=diagnosis.get("detail"),
-                error_artifact_path=diagnosis.get("error_artifact_path"),
-            )
-            task_store.upsert_run_attempt(
-                task,
-                output_dir=run_error_output_dir,
-                status="failed",
-                token_usage=run_error_token_usage,
-                notes=task.notes,
-                access_token=team_access.access_token,
-            )
-            task_store.upsert_token_ledger(
-                team_id=task.team_id,
-                task_id=task.id,
-                phase="mlzero",
-                stage_key=requested_rerun_stage.value if requested_rerun_stage else selection.stage.value,
-                source_key=run_error_output_dir,
-                usage=run_error_token_usage,
-                access_token=team_access.access_token,
-                user_id=team_access.user.id,
-                connector_id=selection.connector.id,
-                connector_display_name=selection.connector.display_name,
-                model_name=selection.model_name,
-                    calculation_method="strict_incremental_token_usage_json" if incremental_plan else "mlzero_token_usage_json",
-                )
-        refresh_agent_loop_after_run_failure(
-            task,
-            error_summary=run_log_excerpt,
-            output_dir=run_error_output_dir,
-        )
-        saved_task = task_store.save_task(task, access_token=team_access.access_token)
-        saved_task, _ = _apply_interaction_policies(
-            saved_task,
-            team_access,
-            trigger_mode=InteractionTriggerMode.in_run,
-            cycle_id=cycle_id,
-            stage_selection_map=stage_selection_map,
-        )
-        _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
-        _record_stage_selection_map(
-            saved_task,
-            team_access,
-            stage_selection_map=stage_selection_map,
-            status_by_stage={
-                WorkflowStage.feature_engineering: WorkflowStageStatus.failed,
-                WorkflowStage.model_selection: WorkflowStageStatus.failed,
-                WorkflowStage.training_validation: WorkflowStageStatus.failed,
-                WorkflowStage.report_generation: WorkflowStageStatus.pending,
-            },
-            summary_by_stage={
-                WorkflowStage.feature_engineering: run_log_excerpt,
-                WorkflowStage.model_selection: run_log_excerpt,
-                WorkflowStage.training_validation: run_log_excerpt,
-                WorkflowStage.report_generation: "训练验证失败，报告暂未生成。",
-            },
-            artifact_refs=[run_error_output_dir] if run_error_output_dir else None,
-            artifact_refs_by_stage=_collect_stage_artifacts_by_stage(run_error_output_dir),
-            log_excerpt_by_stage={
-                WorkflowStage.feature_engineering: run_log_excerpt,
-                WorkflowStage.model_selection: run_log_excerpt,
-                WorkflowStage.training_validation: run_log_excerpt,
-                WorkflowStage.report_generation: run_log_excerpt,
-            },
-        )
-        if incremental_plan is not None:
-            failed_statuses, failed_summaries, failed_artifacts = _stage_records_for_incremental_failure(
-                incremental_plan,
-                exc,
-            )
-            failed_summaries = {stage: run_log_excerpt for stage in failed_summaries}
-            _record_stage_selection_map(
-                saved_task,
-                team_access,
-                stage_selection_map=stage_selection_map,
-                status_by_stage=failed_statuses,
-                summary_by_stage=failed_summaries,
-                artifact_refs_by_stage=failed_artifacts,
-                log_excerpt_by_stage={stage: run_log_excerpt for stage in failed_statuses},
-            )
-        _write_task_audit(
-            team_access,
-            action="task.run",
-            task_id=saved_task.id,
-            detail={
-                "status": "failed",
-                "diagnosis": diagnosis.get("diagnosis"),
-                "diagnosis_detail": diagnosis.get("detail"),
-                "error_artifact_path": diagnosis.get("error_artifact_path"),
-                "output_dir": run_error_output_dir,
-                "model_name": selection.model_name,
-                "connector_id": selection.connector.id,
-                "rerun_from_stage": requested_rerun_stage.value if requested_rerun_stage else None,
-                "rerun_mode": incremental_plan.mode if incremental_plan else "full_mlzero",
-                "cycle_id": cycle_id,
-            },
-        )
-        return saved_task
+    try:
+        response = start_codex_task(task, settings, token_budget=quota_token_budget(quota))
+    except CodexBackendError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    task.status = TaskStatus.completed
-    task.notes = "MLZero 运行完成。"
-    task.last_run = summary
-    task.last_run_attempt = RunAttempt(
-        output_dir=summary.output_dir,
-        token_usage=summary.token_usage,
-    )
-    _mark_rerun_completed(
-        task,
-        start_stage=requested_rerun_stage,
-        mode=incremental_plan.mode if incremental_plan else "full_mlzero",
-        output_dir=summary.output_dir,
-    )
-    if incremental_plan is not None:
-        task.notes = f"Strict incremental rerun from {incremental_plan.start_stage.value} completed."
-    refresh_agent_loop_after_run(task)
+    task.executor_type = "codex"
+    task.codex_session_id = response.get("sessionId") or task.codex_session_id
+    task.codex_thread_id = response.get("threadId") or task.codex_thread_id
+    task.codex_workspace_path = response.get("workspacePath") or task.codex_workspace_path
+    task.codex_status = "running"
+    task.codex_started_at = task.codex_started_at or datetime.now(timezone.utc)
+    task.codex_finished_at = None
+    task.status = TaskStatus.running
+    task.notes = "Codex 正在创建任务工作区并生成建模计划。"
+    task.last_run = None
+    task.last_run_attempt = None
+    task = update_codex_structured_metadata(task)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
-    task_store.upsert_run_summary(saved_task, summary, access_token=team_access.access_token)
-    task_store.upsert_token_ledger(
-        team_id=saved_task.team_id,
-        task_id=saved_task.id,
-        phase="mlzero",
-        stage_key=requested_rerun_stage.value if requested_rerun_stage else selection.stage.value,
-        source_key=summary.output_dir,
-        usage=summary.token_usage,
-        access_token=team_access.access_token,
-        user_id=team_access.user.id,
-        connector_id=selection.connector.id,
-        connector_display_name=selection.connector.display_name,
-        model_name=selection.model_name,
-        calculation_method="strict_incremental_token_usage_json" if incremental_plan else "mlzero_token_usage_json",
-    )
-    saved_task, _ = _apply_interaction_policies(
-        saved_task,
-        team_access,
-        trigger_mode=InteractionTriggerMode.in_run,
-        cycle_id=cycle_id,
-        stage_selection_map=stage_selection_map,
-    )
-    run_log_excerpt = _read_run_log_excerpt(summary.output_dir)
-    _sync_task_human_collaboration(saved_task, team_access, stage_selection_map=stage_selection_map)
-    _record_stage_selection_map(
-        saved_task,
-        team_access,
-        stage_selection_map=stage_selection_map,
-        status_by_stage={
-            WorkflowStage.feature_engineering: WorkflowStageStatus.completed,
-            WorkflowStage.model_selection: WorkflowStageStatus.completed,
-            WorkflowStage.training_validation: WorkflowStageStatus.completed,
-            WorkflowStage.report_generation: WorkflowStageStatus.completed,
-        },
-        summary_by_stage={
-            WorkflowStage.feature_engineering: "MLZero 已产出可查看的代码和中间工件。",
-            WorkflowStage.model_selection: f"已解析 {len(summary.leaderboard)} 个候选模型结果，最佳模型为 {summary.best_model}。",
-            WorkflowStage.training_validation: f"训练验证完成：{summary.metric_name} = {summary.metric_value:.6g}。",
-            WorkflowStage.report_generation: "模型报告摘要已可基于真实任务、数据集画像和运行结果生成。",
-        },
-        artifact_refs=[summary.output_dir],
-        artifact_refs_by_stage=_collect_stage_artifacts_by_stage(summary.output_dir),
-        log_excerpt_by_stage={
-            WorkflowStage.feature_engineering: run_log_excerpt,
-            WorkflowStage.model_selection: run_log_excerpt,
-            WorkflowStage.training_validation: run_log_excerpt,
-            WorkflowStage.report_generation: run_log_excerpt,
-        },
-    )
-    if incremental_result is not None:
-        completed_statuses, completed_summaries, completed_artifacts = _stage_records_for_incremental_success(
-            incremental_result
-        )
-        _record_stage_selection_map(
-            saved_task,
-            team_access,
-            stage_selection_map=stage_selection_map,
-            status_by_stage=completed_statuses,
-            summary_by_stage=completed_summaries,
-            artifact_refs_by_stage=completed_artifacts,
-            log_excerpt_by_stage={stage: run_log_excerpt for stage in completed_statuses},
-        )
-    _write_task_audit(
-        team_access,
-        action="task.run",
-        task_id=saved_task.id,
-        detail={
-            "status": "completed",
-            "output_dir": summary.output_dir,
-            "best_model": summary.best_model,
-            "metric_name": summary.metric_name,
-            "metric_value": summary.metric_value,
-            "model_name": selection.model_name,
-            "connector_id": selection.connector.id,
-            "rerun_from_stage": requested_rerun_stage.value if requested_rerun_stage else None,
-            "rerun_mode": incremental_plan.mode if incremental_plan else "full_mlzero",
-            "cycle_id": cycle_id,
-        },
-    )
+    record_codex_running_stages(saved_task, team_access)
     return saved_task

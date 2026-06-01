@@ -80,18 +80,17 @@ def probe_provider(*, base_url: str, api_key: str, model_name: str, wire_api: Co
         notes.append(f"{inference_path} 请求失败: {exc}")
 
     ok = model_listed and inference_ok
-    notes.append("这个连接器满足当前 MLZero 运行时的基本要求。" if ok else "这个连接器已经保存，但目前还不能确认它可以直接驱动当前 MLZero 运行时。")
+    notes.append("这个连接器满足当前 AI Provider 的基本要求。" if ok else "这个连接器已经保存，但目前还不能确认它可以直接驱动当前 AI Provider。")
     return ProviderProbeResult(ok=ok, detail=" ".join(notes), model_listed=model_listed, inference_ok=inference_ok)
 
 
 def build_runtime_settings(settings: Settings, connector: StoredConnectorRecord) -> Settings:
     return settings.model_copy(
         update={
-            "mlzero_provider_mode": "cloud",
-            "mlzero_provider_base_url_override": connector.base_url.rstrip("/"),
-            "mlzero_model_alias": connector.model_name,
-            "mlzero_provider_wire_api": connector.wire_api.value,
-            "mlzero_openai_api_key": connector.api_key,
+            "ai_provider_base_url": connector.base_url.rstrip("/"),
+            "ai_provider_model_name": connector.model_name,
+            "ai_provider_wire_api": connector.wire_api.value,
+            "ai_provider_api_key": connector.api_key,
         }
     )
 

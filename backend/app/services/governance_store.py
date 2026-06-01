@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -12,7 +10,6 @@ from backend.app.core.config import Settings
 from backend.app.models.governance import (
     AIRoutingPoliciesUpdateRequest,
     AIRoutingPolicyRecord,
-    AuditLogRecord,
     PlatformAssetCreateRequest,
     PlatformAssetForkRequest,
     PlatformAssetRecord,
@@ -25,11 +22,22 @@ from backend.app.models.governance import (
     TeamSettingsUpdateRequest,
     TokenLedgerRecord,
 )
+from backend.app.services.governance_assets import PlatformAssetRepository
+from backend.app.services.governance_usage import GovernanceUsageRepository
 
 
 class GovernanceStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._asset_repository = PlatformAssetRepository(
+            request_json=self._request_json,
+            list_profiles=self._list_profiles,
+        )
+        self._usage_repository = GovernanceUsageRepository(
+            request_json=self._request_json,
+            list_members=self.list_members,
+            list_profiles=self._list_profiles,
+        )
 
     def list_members(self, team_id: str, *, access_token: str) -> list[TeamMemberRecord]:
         member_payload = self._request_json(
@@ -214,65 +222,28 @@ class GovernanceStore:
             profile=profile,
         )
 
+    def update_profile(
+        self,
+        user_id: str,
+        *,
+        display_name: str | None,
+        access_token: str,
+    ) -> TeamProfileRecord:
+        payload = self._request_json(
+            path=f"profiles?user_id=eq.{quote(user_id, safe='')}",
+            access_token=access_token,
+            method="PATCH",
+            body={"display_name": display_name.strip() if display_name else None},
+        )
+        row = self._unwrap_single_record(payload, "profile update")
+        return TeamProfileRecord(
+            user_id=str(row.get("user_id")),
+            email=str(row.get("email")) if row.get("email") else None,
+            display_name=str(row.get("display_name")) if row.get("display_name") else None,
+        )
+
     def list_quotas(self, team_id: str, *, access_token: str) -> list[TeamQuotaRecord]:
-        members = self.list_members(team_id, access_token=access_token)
-        quota_payload = self._request_json(
-            path=(
-                "quota_accounts"
-                f"?select=team_id,user_id,connector_id,scope_type,scope_key,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
-            ),
-            access_token=access_token,
-        )
-        if not isinstance(quota_payload, list):
-            raise ConnectionError("Unexpected quota response from Supabase.")
-
-        connector_payload = self._request_json(
-            path=(
-                "ai_connectors"
-                f"?select=id,display_name&team_id=eq.{quote(team_id, safe='')}"
-            ),
-            access_token=access_token,
-        )
-        connector_map = {
-            str(item.get("id")): str(item.get("display_name"))
-            for item in connector_payload
-            if isinstance(item, dict) and item.get("id")
-        } if isinstance(connector_payload, list) else {}
-
-        quota_map: dict[tuple[str, str], dict[str, Any]] = {}
-        for item in quota_payload:
-            if isinstance(item, dict):
-                scope_type = str(item.get("scope_type") or "member")
-                scope_key = str(item.get("scope_key") or item.get("user_id") or item.get("connector_id") or "")
-                quota_map[(scope_type, scope_key)] = item
-
-        items: list[TeamQuotaRecord] = []
-        handled_keys: set[tuple[str, str]] = set()
-        for member in members:
-            quota_row = quota_map.get(("member", member.user_id), {})
-            items.append(self._quota_record_from_payload(team_id, quota_row, member=member))
-            handled_keys.add(("member", member.user_id))
-
-        for connector_id, connector_name in connector_map.items():
-            quota_row = quota_map.get(("connector", connector_id), {})
-            items.append(
-                self._quota_record_from_payload(
-                    team_id,
-                    quota_row,
-                    connector=SimpleNamespace(id=connector_id, display_name=connector_name),
-                )
-            )
-            handled_keys.add(("connector", connector_id))
-
-        quota_row = quota_map.get(("team", team_id), {})
-        items.append(self._quota_record_from_payload(team_id, quota_row))
-        handled_keys.add(("team", team_id))
-
-        for key, quota_row in quota_map.items():
-            if key in handled_keys:
-                continue
-            items.append(self._quota_record_from_payload(team_id, quota_row))
-        return items
+        return self._usage_repository.list_quotas(team_id, access_token=access_token)
 
     def adjust_quota(
         self,
@@ -284,47 +255,14 @@ class GovernanceStore:
         warning_threshold: int | None = None,
         access_token: str,
     ) -> TeamQuotaRecord:
-        existing = self._request_json(
-            path=(
-                "quota_accounts"
-                f"?select=team_id,user_id,connector_id,scope_type,scope_key,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
-                f"&user_id=eq.{quote(user_id, safe='')}&limit=1"
-            ),
+        return self._usage_repository.adjust_quota(
+            team_id,
+            user_id,
+            token_quota,
+            status=status,
+            warning_threshold=warning_threshold,
             access_token=access_token,
         )
-        existing_row = existing[0] if isinstance(existing, list) and existing else {}
-        payload = {
-            "team_id": team_id,
-            "user_id": user_id,
-            "scope_type": "member",
-            "scope_key": user_id,
-            "token_quota": token_quota if token_quota is not None else _coerce_non_negative_int(existing_row.get("token_quota")),
-            "status": status or str(existing_row.get("status") or "active"),
-            "warning_threshold": warning_threshold if warning_threshold is not None else _coerce_non_negative_int(existing_row.get("warning_threshold")),
-        }
-        if isinstance(existing, list) and existing:
-            updated = self._request_json(
-                path=(
-                    "quota_accounts"
-                    f"?team_id=eq.{quote(team_id, safe='')}&user_id=eq.{quote(user_id, safe='')}"
-                ),
-                access_token=access_token,
-                method="PATCH",
-                body=payload,
-            )
-        else:
-            updated = self._request_json(
-                path="quota_accounts",
-                access_token=access_token,
-                method="POST",
-                body=payload,
-            )
-        row = self._unwrap_single_record(updated, "quota adjust")
-        member = next(
-            (item for item in self.list_members(team_id, access_token=access_token) if item.user_id == user_id),
-            None,
-        )
-        return self._quota_record_from_payload(team_id, row, member=member)
 
     def adjust_quota_scope(
         self,
@@ -337,52 +275,15 @@ class GovernanceStore:
         warning_threshold: int | None = None,
         access_token: str,
     ) -> TeamQuotaRecord:
-        existing = self._request_json(
-            path=(
-                "quota_accounts"
-                f"?select=team_id,user_id,connector_id,scope_type,scope_key,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.{quote(team_id, safe='')}"
-                f"&scope_type=eq.{quote(scope_type, safe='')}&scope_key=eq.{quote(scope_key, safe='')}&limit=1"
-            ),
+        return self._usage_repository.adjust_quota_scope(
+            team_id,
+            scope_type=scope_type,
+            scope_key=scope_key,
+            token_quota=token_quota,
+            status=status,
+            warning_threshold=warning_threshold,
             access_token=access_token,
         )
-        existing_row = existing[0] if isinstance(existing, list) and existing else {}
-        payload: dict[str, Any] = {
-            "team_id": team_id,
-            "scope_type": scope_type,
-            "scope_key": scope_key,
-            "token_quota": token_quota if token_quota is not None else _coerce_non_negative_int(existing_row.get("token_quota")),
-            "status": status or str(existing_row.get("status") or "active"),
-            "warning_threshold": warning_threshold if warning_threshold is not None else _coerce_non_negative_int(existing_row.get("warning_threshold")),
-        }
-        if scope_type == "member":
-            payload["user_id"] = scope_key
-            payload["connector_id"] = None
-        elif scope_type == "connector":
-            payload["connector_id"] = scope_key
-            payload["user_id"] = None
-        else:
-            payload["user_id"] = None
-            payload["connector_id"] = None
-
-        if isinstance(existing, list) and existing:
-            updated = self._request_json(
-                path=(
-                    "quota_accounts"
-                    f"?team_id=eq.{quote(team_id, safe='')}&scope_type=eq.{quote(scope_type, safe='')}&scope_key=eq.{quote(scope_key, safe='')}"
-                ),
-                access_token=access_token,
-                method="PATCH",
-                body=payload,
-            )
-        else:
-            updated = self._request_json(
-                path="quota_accounts",
-                access_token=access_token,
-                method="POST",
-                body=payload,
-            )
-        row = self._unwrap_single_record(updated, "quota scope adjust")
-        return self._quota_record_from_payload(team_id, row)
 
     def list_routing_policies(self, team_id: str, *, access_token: str) -> list[AIRoutingPolicyRecord]:
         payload = self._request_json(
@@ -468,8 +369,7 @@ class GovernanceStore:
         return self.list_routing_policies(team_id, access_token=access_token)
 
     def get_member_quota(self, team_id: str, user_id: str, *, access_token: str) -> TeamQuotaRecord | None:
-        items = self.list_quotas(team_id, access_token=access_token)
-        return next((item for item in items if item.user_id == user_id), None)
+        return self._usage_repository.get_member_quota(team_id, user_id, access_token=access_token)
 
     def list_assets(
         self,
@@ -481,47 +381,17 @@ class GovernanceStore:
         visibility: str | None = None,
         category: str | None = None,
     ) -> list[PlatformAssetRecord]:
-        path = (
-            "platform_assets"
-            f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-            "&order=updated_at.desc"
-        )
-        if asset_type:
-            path += f"&asset_type=eq.{quote(asset_type, safe='')}"
-        if review_status:
-            path += f"&review_status=eq.{quote(review_status, safe='')}"
-        if visibility:
-            path += f"&visibility=eq.{quote(visibility, safe='')}"
-        if category:
-            path += f"&category=eq.{quote(category, safe='')}"
-        payload = self._request_json(path=path, access_token=access_token)
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected platform-assets response from Supabase.")
-        profiles = self._list_profiles(
-            [str(item.get('created_by')) for item in payload if isinstance(item, dict) and item.get("created_by")],
+        return self._asset_repository.list_assets(
+            team_id,
             access_token=access_token,
+            asset_type=asset_type,
+            review_status=review_status,
+            visibility=visibility,
+            category=category,
         )
-        profile_map = {item.user_id: item for item in profiles}
-        return [self._asset_from_payload(item, profile_map=profile_map) for item in payload if isinstance(item, dict)]
 
     def get_asset(self, team_id: str, asset_id: str, *, access_token: str) -> PlatformAssetRecord | None:
-        payload = self._request_json(
-            path=(
-                "platform_assets"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                f"&id=eq.{quote(asset_id, safe='')}"
-                "&limit=1"
-            ),
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected platform-asset detail response from Supabase.")
-        if not payload:
-            return None
-        creator_id = str(payload[0].get("created_by")) if payload[0].get("created_by") else None
-        profiles = self._list_profiles([creator_id] if creator_id else [], access_token=access_token)
-        profile_map = {item.user_id: item for item in profiles}
-        return self._asset_from_payload(payload[0], profile_map=profile_map)
+        return self._asset_repository.get_asset(team_id, asset_id, access_token=access_token)
 
     def create_asset(
         self,
@@ -531,31 +401,12 @@ class GovernanceStore:
         *,
         access_token: str,
     ) -> PlatformAssetRecord:
-        created = self._request_json(
-            path="platform_assets",
+        return self._asset_repository.create_asset(
+            team_id,
+            created_by,
+            payload,
             access_token=access_token,
-            method="POST",
-            body={
-                "team_id": team_id,
-                "created_by": created_by,
-                "asset_type": payload.asset_type,
-                "title": payload.title,
-                "description": payload.description,
-                "storage_path": payload.storage_path,
-                "category": payload.category,
-                "tags": _normalize_tags(payload.tags),
-                "visibility": payload.visibility,
-                "version": payload.version,
-                "source_task_id": payload.source_task_id,
-                "model_card": payload.model_card,
-                "metadata": payload.metadata,
-                "review_status": payload.review_status,
-            },
         )
-        record = self._unwrap_single_record(created, "asset create")
-        profiles = self._list_profiles([created_by], access_token=access_token)
-        profile_map = {item.user_id: item for item in profiles}
-        return self._asset_from_payload(record, profile_map=profile_map)
 
     def review_asset(
         self,
@@ -565,27 +416,12 @@ class GovernanceStore:
         *,
         access_token: str,
     ) -> PlatformAssetRecord:
-        body: dict[str, Any] = {"review_status": payload.review_status}
-        if payload.category is not None:
-            body["category"] = payload.category
-        if payload.tags is not None:
-            body["tags"] = _normalize_tags(payload.tags)
-        if payload.visibility is not None:
-            body["visibility"] = payload.visibility
-        updated = self._request_json(
-            path=(
-                "platform_assets"
-                f"?team_id=eq.{quote(team_id, safe='')}&id=eq.{quote(asset_id, safe='')}"
-            ),
+        return self._asset_repository.review_asset(
+            team_id,
+            asset_id,
+            payload,
             access_token=access_token,
-            method="PATCH",
-            body=body,
         )
-        record = self._unwrap_single_record(updated, "asset review")
-        creator_id = str(record.get("created_by")) if record.get("created_by") else None
-        profiles = self._list_profiles([creator_id] if creator_id else [], access_token=access_token)
-        profile_map = {item.user_id: item for item in profiles}
-        return self._asset_from_payload(record, profile_map=profile_map)
 
     def publish_asset(
         self,
@@ -596,37 +432,7 @@ class GovernanceStore:
         *,
         access_token: str,
     ) -> PlatformAssetRecord:
-        existing = self.get_asset(team_id, asset_id, access_token=access_token)
-        if existing is None:
-            raise ValueError("asset not found")
-        metadata = dict(existing.metadata or {})
-        metadata.update(payload.metadata or {})
-        metadata["marketplace"] = {
-            **(metadata.get("marketplace") if isinstance(metadata.get("marketplace"), dict) else {}),
-            "published": True,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "published_by": actor_id,
-            "note": payload.note,
-        }
-        updated = self._request_json(
-            path=(
-                "platform_assets"
-                f"?team_id=eq.{quote(team_id, safe='')}&id=eq.{quote(asset_id, safe='')}"
-            ),
-            access_token=access_token,
-            method="PATCH",
-            body={
-                "review_status": "published",
-                "visibility": payload.visibility,
-                "published_at": datetime.now(timezone.utc).isoformat(),
-                "metadata": metadata,
-            },
-        )
-        record = self._unwrap_single_record(updated, "asset publish")
-        creator_id = str(record.get("created_by")) if record.get("created_by") else None
-        profiles = self._list_profiles([creator_id] if creator_id else [], access_token=access_token)
-        profile_map = {item.user_id: item for item in profiles}
-        return self._asset_from_payload(record, profile_map=profile_map)
+        return self._asset_repository.publish_asset(team_id, asset_id, actor_id, payload, access_token=access_token)
 
     def fork_asset(
         self,
@@ -637,51 +443,16 @@ class GovernanceStore:
         *,
         access_token: str,
     ) -> PlatformAssetRecord:
-        source = self.get_asset(team_id, source_asset_id, access_token=access_token)
-        if source is None:
-            raise ValueError("asset not found")
-        now = datetime.now(timezone.utc).isoformat()
-        source_metadata = source.metadata if isinstance(source.metadata, dict) else {}
-        fork_metadata = {
-            **(payload.metadata or {}),
-            "fork": {
-                "forked_from_asset_id": source.id,
-                "forked_from_team_id": source.team_id,
-                "forked_from_title": source.title,
-                "forked_from_type": source.asset_type,
-                "forked_by": created_by,
-                "forked_at": now,
-                "source_storage_path": source.storage_path,
-                "source_review_status": source.review_status,
-            },
-            "source_metadata": source_metadata,
-        }
-        created = self._request_json(
-            path="platform_assets",
+        return self._asset_repository.fork_asset(
+            team_id,
+            created_by,
+            source_asset_id,
+            payload,
             access_token=access_token,
-            method="POST",
-            body={
-                "team_id": team_id,
-                "created_by": created_by,
-                "asset_type": source.asset_type,
-                "title": payload.title or f"Fork of {source.title}",
-                "description": payload.description if payload.description is not None else source.description,
-                "storage_path": source.storage_path,
-                "category": source.category,
-                "tags": _normalize_tags(source.tags),
-                "visibility": "private",
-                "version": payload.version or source.version,
-                "source_task_id": source.source_task_id,
-                "source_asset_id": source.id,
-                "model_card": source.model_card,
-                "metadata": fork_metadata,
-                "review_status": payload.review_status,
-            },
         )
-        record = self._unwrap_single_record(created, "asset fork")
-        profiles = self._list_profiles([created_by], access_token=access_token)
-        profile_map = {item.user_id: item for item in profiles}
-        return self._asset_from_payload(record, profile_map=profile_map)
+
+    def delete_asset(self, team_id: str, asset_id: str, *, access_token: str) -> bool:
+        return self._asset_repository.delete_asset(team_id, asset_id, access_token=access_token)
 
     def list_token_ledgers(
         self,
@@ -692,136 +463,12 @@ class GovernanceStore:
         user_id: str | None = None,
         task_id: str | None = None,
     ) -> list[TokenLedgerRecord]:
-        capped_limit = min(max(limit, 1), 1000)
-        path = (
-            "token_ledgers"
-            f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-            f"&order=created_at.desc&limit={capped_limit}"
-        )
-        if user_id:
-            path += f"&user_id=eq.{quote(user_id, safe='')}"
-        if task_id:
-            path += f"&task_id=eq.{quote(task_id, safe='')}"
-        payload = self._request_json(path=path, access_token=access_token)
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected token-ledgers response from Supabase.")
-
-        profiles = self._list_profiles(
-            [str(item.get("user_id")) for item in payload if isinstance(item, dict) and item.get("user_id")],
-            access_token=access_token,
-        )
-        profile_map = {item.user_id: item for item in profiles}
-        task_map = self._list_task_names(
+        return self._usage_repository.list_token_ledgers(
             team_id,
-            [str(item.get("task_id")) for item in payload if isinstance(item, dict) and item.get("task_id")],
             access_token=access_token,
-        )
-        connector_map = self._list_connector_names(
-            team_id,
-            [str(item.get("connector_id")) for item in payload if isinstance(item, dict) and item.get("connector_id")],
-            access_token=access_token,
-        )
-
-        items: list[TokenLedgerRecord] = []
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            ledger_user_id = str(item.get("user_id")) if item.get("user_id") else None
-            profile = profile_map.get(ledger_user_id or "")
-            ledger_task_id = str(item.get("task_id")) if item.get("task_id") else None
-            ledger_connector_id = str(item.get("connector_id")) if item.get("connector_id") else None
-            connector_display_name = (
-                str(item.get("connector_display_name"))
-                if item.get("connector_display_name")
-                else connector_map.get(ledger_connector_id or "")
-            )
-            items.append(
-                TokenLedgerRecord(
-                    id=str(item.get("id")),
-                    team_id=str(item.get("team_id")),
-                    user_id=ledger_user_id,
-                    user_display_name=profile.display_name if profile else None,
-                    user_email=profile.email if profile else None,
-                    task_id=ledger_task_id,
-                    task_name=task_map.get(ledger_task_id or ""),
-                    connector_id=ledger_connector_id,
-                    connector_display_name=connector_display_name,
-                    phase=str(item.get("phase")),
-                    stage_key=str(item.get("stage_key")) if item.get("stage_key") else None,
-                    source_key=str(item.get("source_key")),
-                    model_name=str(item.get("model_name")) if item.get("model_name") else None,
-                    input_tokens=_coerce_non_negative_int(item.get("input_tokens")),
-                    output_tokens=_coerce_non_negative_int(item.get("output_tokens")),
-                    total_tokens=_coerce_non_negative_int(item.get("total_tokens")),
-                    calculation_method=str(item.get("calculation_method")) if item.get("calculation_method") else None,
-                    raw_usage=item.get("raw_usage") if isinstance(item.get("raw_usage"), dict) else None,
-                    created_at=item.get("created_at"),
-                    updated_at=item.get("updated_at"),
-                )
-            )
-        return items
-
-    def list_audit_logs(self, team_id: str, *, access_token: str, limit: int = 200) -> list[AuditLogRecord]:
-        payload = self._request_json(
-            path=(
-                "audit_logs"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                f"&order=created_at.desc&limit={limit}"
-            ),
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected audit-log response from Supabase.")
-        profiles = self._list_profiles(
-            [str(item.get("actor_id")) for item in payload if isinstance(item, dict) and item.get("actor_id")],
-            access_token=access_token,
-        )
-        profile_map = {item.user_id: item for item in profiles}
-        items: list[AuditLogRecord] = []
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            actor_id = str(item.get("actor_id")) if item.get("actor_id") else None
-            profile = profile_map.get(actor_id or "")
-            items.append(
-                AuditLogRecord(
-                    id=str(item.get("id")),
-                    team_id=str(item.get("team_id")) if item.get("team_id") else None,
-                    actor_id=actor_id,
-                    actor_display_name=profile.display_name if profile else None,
-                    actor_email=profile.email if profile else None,
-                    action=str(item.get("action")),
-                    resource_type=str(item.get("resource_type")) if item.get("resource_type") else None,
-                    resource_id=str(item.get("resource_id")) if item.get("resource_id") else None,
-                    detail=item.get("detail") if isinstance(item.get("detail"), dict) else None,
-                    created_at=item.get("created_at"),
-                )
-            )
-        return items
-
-    def create_audit_log(
-        self,
-        team_id: str,
-        actor_id: str,
-        *,
-        action: str,
-        access_token: str,
-        resource_type: str | None = None,
-        resource_id: str | None = None,
-        detail: dict[str, Any] | None = None,
-    ) -> None:
-        self._request_json(
-            path="audit_logs",
-            access_token=access_token,
-            method="POST",
-            body={
-                "team_id": team_id,
-                "actor_id": actor_id,
-                "action": action,
-                "resource_type": resource_type,
-                "resource_id": resource_id,
-                "detail": detail,
-            },
+            limit=limit,
+            user_id=user_id,
+            task_id=task_id,
         )
 
     @staticmethod
@@ -842,100 +489,6 @@ class GovernanceStore:
             owner_email=owner_profile.email if owner_profile else None,
             description=str(payload.get("description")) if payload.get("description") else None,
             status=str(payload.get("status") or "active"),
-            created_at=payload.get("created_at"),
-            updated_at=payload.get("updated_at"),
-        )
-
-    def _quota_record_from_payload(
-        self,
-        team_id: str,
-        payload: dict[str, Any],
-        *,
-        member: TeamMemberRecord | None = None,
-        connector: Any | None = None,
-    ) -> TeamQuotaRecord:
-        scope_type = str(payload.get("scope_type") or ("connector" if connector is not None else "member" if member is not None else "team"))
-        scope_key = str(
-            payload.get("scope_key")
-            or (member.user_id if member is not None else None)
-            or (connector.id if connector is not None else None)
-            or payload.get("user_id")
-            or payload.get("connector_id")
-            or team_id
-        )
-        used = _coerce_non_negative_int(payload.get("token_used"))
-        resolved_quota = _coerce_non_negative_int(payload.get("token_quota"))
-        remaining = max(resolved_quota - used, 0)
-        resolved_status = str(payload.get("status") or ("exhausted" if resolved_quota and remaining == 0 else "active"))
-        display_name = None
-        email = None
-        role = None
-        member_status = None
-        connector_display_name = None
-        user_id = None
-        connector_id = None
-
-        if member is not None:
-            user_id = member.user_id
-            display_name = member.profile.display_name if member.profile else None
-            email = member.profile.email if member.profile else None
-            role = member.role
-            member_status = member.member_status
-        elif connector is not None:
-            connector_id = connector.id
-            connector_display_name = connector.display_name
-        else:
-            user_id = str(payload.get("user_id")) if payload.get("user_id") else None
-            connector_id = str(payload.get("connector_id")) if payload.get("connector_id") else None
-            connector_display_name = str(payload.get("connector_display_name")) if payload.get("connector_display_name") else None
-
-        return TeamQuotaRecord(
-            team_id=team_id,
-            scope_type=scope_type,
-            scope_key=scope_key,
-            user_id=user_id,
-            connector_id=connector_id,
-            role=role,
-            member_status=member_status,
-            display_name=display_name,
-            email=email,
-            connector_display_name=connector_display_name,
-            token_quota=resolved_quota,
-            token_used=used,
-            token_remaining=remaining,
-            status=resolved_status,
-            warning_threshold=_coerce_non_negative_int(payload.get("warning_threshold")),
-            updated_at=payload.get("updated_at"),
-        )
-
-    def _asset_from_payload(
-        self,
-        payload: dict[str, Any],
-        *,
-        profile_map: dict[str, TeamProfileRecord],
-    ) -> PlatformAssetRecord:
-        creator_id = str(payload.get("created_by")) if payload.get("created_by") else None
-        profile = profile_map.get(creator_id or "")
-        return PlatformAssetRecord(
-            id=str(payload.get("id")),
-            team_id=str(payload.get("team_id")),
-            created_by=creator_id,
-            asset_type=str(payload.get("asset_type")),
-            title=str(payload.get("title")),
-            description=str(payload.get("description")) if payload.get("description") else None,
-            storage_path=str(payload.get("storage_path")) if payload.get("storage_path") else None,
-            category=str(payload.get("category")) if payload.get("category") else None,
-            tags=_normalize_tags(payload.get("tags")),
-            visibility=str(payload.get("visibility") or "private"),
-            version=str(payload.get("version")) if payload.get("version") else None,
-            source_task_id=str(payload.get("source_task_id")) if payload.get("source_task_id") else None,
-            source_asset_id=str(payload.get("source_asset_id")) if payload.get("source_asset_id") else None,
-            model_card=payload.get("model_card") if isinstance(payload.get("model_card"), dict) else None,
-            metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None,
-            review_status=str(payload.get("review_status", "private")),
-            published_at=payload.get("published_at"),
-            creator_display_name=profile.display_name if profile else None,
-            creator_email=profile.email if profile else None,
             created_at=payload.get("created_at"),
             updated_at=payload.get("updated_at"),
         )
@@ -961,50 +514,6 @@ class GovernanceStore:
             for item in payload
             if isinstance(item, dict) and item.get("user_id")
         ]
-
-    def _list_task_names(self, team_id: str, task_ids: list[str], *, access_token: str) -> dict[str, str]:
-        normalized_ids = sorted({item for item in task_ids if item})
-        if not normalized_ids:
-            return {}
-        in_list = ",".join(f'"{item}"' for item in normalized_ids)
-        quoted_in_list = quote(in_list, safe='(),"')
-        payload = self._request_json(
-            path=(
-                "ai_tasks"
-                f"?select=id,name&team_id=eq.{quote(team_id, safe='')}"
-                f"&id=in.({quoted_in_list})"
-            ),
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected task-name response from Supabase.")
-        return {
-            str(item.get("id")): str(item.get("name") or item.get("id"))
-            for item in payload
-            if isinstance(item, dict) and item.get("id")
-        }
-
-    def _list_connector_names(self, team_id: str, connector_ids: list[str], *, access_token: str) -> dict[str, str]:
-        normalized_ids = sorted({item for item in connector_ids if item})
-        if not normalized_ids:
-            return {}
-        in_list = ",".join(f'"{item}"' for item in normalized_ids)
-        quoted_in_list = quote(in_list, safe='(),"')
-        payload = self._request_json(
-            path=(
-                "ai_connectors"
-                f"?select=id,display_name&team_id=eq.{quote(team_id, safe='')}"
-                f"&id=in.({quoted_in_list})"
-            ),
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected connector-name response from Supabase.")
-        return {
-            str(item.get("id")): str(item.get("display_name") or item.get("id"))
-            for item in payload
-            if isinstance(item, dict) and item.get("id")
-        }
 
     def _request_json(
         self,
@@ -1069,32 +578,3 @@ class GovernanceStore:
         if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
             return payload[0]
         raise ConnectionError(f"Unexpected Supabase response shape during {action}.")
-
-
-def _coerce_non_negative_int(value: Any) -> int:
-    try:
-        result = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return max(result, 0)
-
-
-def _normalize_tags(value: Any) -> list[str]:
-    if value is None:
-        return []
-    raw_items: list[Any]
-    if isinstance(value, str):
-        raw_items = [item.strip() for item in value.split(",")]
-    elif isinstance(value, list):
-        raw_items = value
-    elif isinstance(value, tuple):
-        raw_items = list(value)
-    else:
-        return []
-
-    tags: list[str] = []
-    for item in raw_items:
-        tag = str(item).strip()
-        if tag and tag not in tags:
-            tags.append(tag[:80])
-    return tags[:20]

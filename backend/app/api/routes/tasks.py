@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from backend.app.api.routes.task_human import router as task_human_router
 from backend.app.api.routes.task_lifecycle import router as task_lifecycle_router
-from backend.app.api.routes.task_route_common import (
+from backend.app.services.task_routing import (
     _RoutingRuntimeContext,
     _resolve_preferred_selection,
     _validate_task_stage_routing_overrides,

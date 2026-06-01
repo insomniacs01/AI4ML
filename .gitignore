@@ -73,6 +73,10 @@ data/*
 local/models/
 storage/*
 !storage/run_force_llm_full.py
+codex_use/workspaces/
+codex_use/work/
+codex_use/output/
+codex_use/.state/
 tmp/
 tmp_*/
 tmp-*/

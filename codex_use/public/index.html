@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI4ML Codex Console</title>
+    <link rel="stylesheet" href="/styles.css?v=20260524-resume-task" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar" aria-label="Session overview">
+        <div class="brand">
+          <div class="brand-mark">C</div>
+          <div>
+            <h1>AI4ML Console</h1>
+            <p>Codex-native workflow</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title">Session</div>
+          <dl class="meta-list">
+            <div>
+              <dt>Status</dt>
+              <dd><span class="pill" id="connectionStatus">Connecting</span></dd>
+            </div>
+            <div>
+              <dt>Command</dt>
+              <dd id="commandValue">codex</dd>
+            </div>
+            <div>
+              <dt>Started</dt>
+              <dd id="startedValue">--</dd>
+            </div>
+            <div>
+              <dt>Latency</dt>
+              <dd id="latencyValue">--</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">Workspace</div>
+          <div class="path-value" id="cwdValue">D:\333\AI4ML\codex_use</div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">Controls</div>
+          <div class="control-grid">
+            <button class="icon-button" id="interruptButton" type="button" title="Stop current Codex task">
+              <i data-lucide="square"></i>
+              <span>Stop</span>
+            </button>
+            <button class="icon-button" id="restartButton" type="button" title="Restart Codex session">
+              <i data-lucide="refresh-cw"></i>
+              <span>Restart</span>
+            </button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Agent session</p>
+            <h2>AI4ML 任务工作台</h2>
+          </div>
+          <div class="live-indicator" id="activityIndicator">
+            <span></span>
+            <strong>Starting</strong>
+          </div>
+        </header>
+
+        <section class="task-card" id="taskCard" aria-label="Create AI4ML task">
+          <div class="task-grid">
+            <label class="field-group">
+              <span>选择数据</span>
+              <input id="dataPathInput" type="text" readonly placeholder="点击右侧按钮选择数据文件或文件夹" />
+            </label>
+            <div class="picker-actions">
+              <button class="icon-button picker-button" id="selectFileButton" type="button" title="选择数据文件">
+                <i data-lucide="file"></i>
+                <span>文件</span>
+              </button>
+              <button class="icon-button picker-button" id="selectFolderButton" type="button" title="选择数据文件夹">
+                <i data-lucide="folder-open"></i>
+                <span>文件夹</span>
+              </button>
+            </div>
+          </div>
+          <label class="field-group">
+            <span>任务描述</span>
+            <textarea id="taskDescriptionInput" rows="4" placeholder="描述你希望 Codex 完成的预测、分析、建模或报告任务。目标可以是单个或多个，也可以不是字段名。"></textarea>
+          </label>
+          <div class="task-actions">
+            <button class="primary-button" id="startTaskButton" type="button">
+              <i data-lucide="plus"></i>
+              <span>创建新任务</span>
+            </button>
+            <button class="secondary-button" id="resumeTaskButton" type="button" hidden>
+              <i data-lucide="play"></i>
+              <span>继续执行</span>
+            </button>
+            <p id="taskHint">点击开始后会创建新的任务工作区，并进入需求解析与方案生成。</p>
+          </div>
+        </section>
+
+        <section class="phase-panel" id="phasePanel" aria-label="AI4ML task progress">
+          <div class="phase-step" data-phase="workspace">
+            <span>1</span>
+            <strong>建立环境</strong>
+            <small>等待开始</small>
+          </div>
+          <div class="phase-step" data-phase="requirements">
+            <span>2</span>
+            <strong>解析需求</strong>
+            <small>等待开始</small>
+          </div>
+          <div class="phase-step" data-phase="plan">
+            <span>3</span>
+            <strong>生成计划</strong>
+            <small>等待开始</small>
+          </div>
+          <div class="phase-step" data-phase="approval">
+            <span>4</span>
+            <strong>确认计划</strong>
+            <small>等待开始</small>
+          </div>
+          <div class="phase-step" data-phase="modeling">
+            <span>5</span>
+            <strong>建模执行</strong>
+            <small>等待开始</small>
+          </div>
+          <div class="phase-step" data-phase="report">
+            <span>6</span>
+            <strong>最终报告</strong>
+            <small>等待开始</small>
+          </div>
+        </section>
+
+        <section class="plan-panel" id="planPanel" hidden aria-label="Review and edit plan">
+          <div class="plan-header">
+            <button class="plan-summary-button" id="togglePlanButton" type="button" aria-expanded="false">
+              <i data-lucide="chevron-right"></i>
+            </button>
+            <div class="plan-summary">
+              <div class="panel-title">Plan Review</div>
+              <h3>确认执行方案</h3>
+              <p id="workspacePathValue">--</p>
+            </div>
+            <div class="plan-actions">
+              <button class="icon-button" id="collapsePlanButton" type="button" title="收起计划" hidden>
+                <i data-lucide="chevron-up"></i>
+                <span>收起</span>
+              </button>
+              <button class="icon-button" id="regeneratePlanButton" type="button" title="重新生成计划">
+                <i data-lucide="rotate-ccw"></i>
+                <span>重新生成</span>
+              </button>
+              <button class="primary-button" id="confirmPlanButton" type="button">
+                <i data-lucide="check"></i>
+                <span>确定并执行</span>
+              </button>
+            </div>
+          </div>
+          <div class="plan-editor-wrap" id="planEditorWrap" hidden>
+            <textarea id="planEditor" spellcheck="false"></textarea>
+          </div>
+        </section>
+
+        <section class="conversation" id="conversation" aria-live="polite">
+          <article class="message message-system">
+            <div class="message-avatar">
+              <i data-lucide="sparkles"></i>
+            </div>
+            <div class="message-body">
+              <div class="message-meta">Codex Console</div>
+              <p>正在连接本地 Codex 会话。连接后请选择数据并填写任务描述。</p>
+            </div>
+          </article>
+        </section>
+
+        <details class="raw-log">
+          <summary>
+            <span>Raw Codex stream</span>
+            <small>Diagnostics</small>
+          </summary>
+          <pre id="rawLog"></pre>
+        </details>
+      </section>
+    </main>
+
+    <script src="/vendor/lucide/lucide.js"></script>
+    <script type="module" src="/app.js?v=20260524-resume-task"></script>
+  </body>
+</html>

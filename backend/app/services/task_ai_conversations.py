@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,6 +10,8 @@ from backend.app.models.task import (
     TaskRecord,
     TokenUsageReport,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def build_task_ai_conversations(task: TaskRecord) -> TaskAIConversationResponse:
@@ -82,7 +85,8 @@ def _coerce_token_usage(value: object) -> TokenUsageReport | None:
         return None
     try:
         return TokenUsageReport.model_validate(value)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Could not parse interactive chat token usage: %s", exc)
         return None
 
 

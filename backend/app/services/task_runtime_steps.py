@@ -1,0 +1,330 @@
+from __future__ import annotations
+
+from typing import Any
+
+from backend.app.models.task import (
+    PRIMARY_WORKFLOW_STAGES,
+    TaskRecord,
+    TaskStepSummaryRecord,
+    TaskStatus,
+    WorkflowStage,
+    WorkflowStageStatus,
+    normalize_workflow_stage,
+)
+
+
+STAGE_LABELS = {
+    WorkflowStage.requirement_analysis: "需求解析",
+    WorkflowStage.data_analysis: "数据分析",
+    WorkflowStage.feature_engineering: "特征工程",
+    WorkflowStage.model_selection: "模型选择",
+    WorkflowStage.training_validation: "训练验证",
+    WorkflowStage.report_generation: "报告生成",
+}
+
+CODEX_STEP_STATUS_MAP = {
+    "completed": WorkflowStageStatus.completed.value,
+    "done": WorkflowStageStatus.completed.value,
+    "success": WorkflowStageStatus.completed.value,
+    "running": WorkflowStageStatus.running.value,
+    "in_progress": WorkflowStageStatus.running.value,
+    "executing": WorkflowStageStatus.running.value,
+    "waiting": WorkflowStageStatus.waiting_human.value,
+    "waiting_plan_approval": WorkflowStageStatus.waiting_human.value,
+    "interrupted": WorkflowStageStatus.failed.value,
+    "failed": WorkflowStageStatus.failed.value,
+    "error": WorkflowStageStatus.failed.value,
+}
+WORKFLOW_STAGE_STATUS_VALUES = {item.value for item in WorkflowStageStatus}
+
+
+def build_runtime_steps(
+    task: TaskRecord,
+    stage_records: list[object],
+    progress: object | None,
+) -> list[TaskStepSummaryRecord]:
+    codex_steps = _codex_steps_from_progress(progress)
+    if codex_steps:
+        return codex_steps
+
+    steps = _workflow_steps_from_stage_records(task, stage_records)
+    if progress is not None:
+        _apply_progress_activity(steps, progress)
+        _apply_training_metric_summary(steps, progress)
+    return steps
+
+
+def progress_from_steps(task: TaskRecord, steps: list[TaskStepSummaryRecord]) -> dict[str, object]:
+    if task.status == TaskStatus.completed:
+        return _progress_from_cached_task(task)
+    if task.status in {TaskStatus.failed, TaskStatus.cancelled}:
+        return _non_completion_terminal_progress(task, steps)
+    if _is_human_waiting_status(task.status):
+        return _blocked_progress_from_steps(steps)
+    if task.status in {TaskStatus.uploaded, TaskStatus.planning, TaskStatus.draft}:
+        return _progress_from_cached_task(task)
+    if not steps:
+        return _progress_from_cached_task(task)
+
+    current = _current_progress_step(steps)
+    return {
+        "status": "running" if task.status == TaskStatus.running else _enum_value(task.status),
+        "progress_percent": _steps_progress_percent(steps),
+        "current_stage": current.name if current is not None else None,
+        "current_activity": current.message if current is not None else "",
+    }
+
+
+def _is_terminal_status(status: TaskStatus | str) -> bool:
+    return status in {TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled}
+
+
+def _is_human_waiting_status(status: TaskStatus | str) -> bool:
+    return status in {TaskStatus.waiting_human, TaskStatus.paused_for_review}
+
+
+def _blocked_progress_from_steps(steps: list[TaskStepSummaryRecord]) -> dict[str, object]:
+    waiting = _step_with_status(steps, WorkflowStageStatus.waiting_human)
+    return {
+        "status": "blocked",
+        "progress_percent": 25,
+        "current_stage": waiting.name if waiting else WorkflowStage.training_validation.value,
+        "current_activity": waiting.message if waiting else "等待人工确认",
+    }
+
+
+def _non_completion_terminal_progress(task: TaskRecord, steps: list[TaskStepSummaryRecord]) -> dict[str, object]:
+    current = _terminal_progress_step(steps)
+    return {
+        "status": _enum_value(task.status),
+        "progress_percent": min(99, _steps_progress_percent(steps)) if steps else 0,
+        "current_stage": current.name if current is not None else None,
+        "current_activity": current.message if current is not None else "",
+    }
+
+
+def _current_progress_step(steps: list[TaskStepSummaryRecord]) -> TaskStepSummaryRecord | None:
+    for status in (
+        WorkflowStageStatus.running,
+        WorkflowStageStatus.waiting_human,
+        WorkflowStageStatus.pending,
+    ):
+        step = _step_with_status(steps, status)
+        if step is not None:
+            return step
+    return None
+
+
+def _terminal_progress_step(steps: list[TaskStepSummaryRecord]) -> TaskStepSummaryRecord | None:
+    for status in (
+        WorkflowStageStatus.failed,
+        WorkflowStageStatus.running,
+        WorkflowStageStatus.waiting_human,
+        WorkflowStageStatus.pending,
+    ):
+        step = _step_with_status(steps, status)
+        if step is not None:
+            return step
+    return None
+
+
+def _step_with_status(
+    steps: list[TaskStepSummaryRecord],
+    status: WorkflowStageStatus,
+) -> TaskStepSummaryRecord | None:
+    return next((step for step in steps if _enum_value(step.status) == status.value), None)
+
+
+def _steps_progress_percent(steps: list[TaskStepSummaryRecord]) -> int:
+    completed = sum(1 for step in steps if _enum_value(step.status) == WorkflowStageStatus.completed.value)
+    running = 1 if _step_with_status(steps, WorkflowStageStatus.running) else 0
+    waiting = 1 if _step_with_status(steps, WorkflowStageStatus.waiting_human) else 0
+    ratio = (completed + running * 0.45 + waiting * 0.75) / max(len(steps), 1)
+    return min(94, max(8, round(8 + ratio * 84)))
+
+
+def _codex_steps_from_progress(progress: object | None) -> list[TaskStepSummaryRecord]:
+    if progress is None:
+        return []
+    raw_steps = _raw_codex_steps(progress)
+    if not isinstance(raw_steps, list):
+        return []
+
+    progress_status = str(getattr(progress, "status", "") or "")
+    task_status = getattr(progress, "task_status", None)
+    paused_task = _enum_value(task_status) in {TaskStatus.paused_for_review.value, TaskStatus.waiting_human.value}
+    steps: list[TaskStepSummaryRecord] = []
+    for index, raw_step in enumerate(raw_steps, start=1):
+        if not isinstance(raw_step, dict):
+            continue
+        steps.append(_codex_step_from_raw(raw_step, index, progress_status=progress_status, paused_task=paused_task))
+    return steps
+
+
+def _workflow_steps_from_stage_records(
+    task: TaskRecord,
+    stage_records: list[object],
+) -> list[TaskStepSummaryRecord]:
+    latest_by_stage: dict[str, TaskStepSummaryRecord] = {}
+    for record in stage_records:
+        step = _step_from_stage_record(record)
+        latest_by_stage.setdefault(step.name, step)
+    return [latest_by_stage.get(stage.value) or _fallback_step(task, stage) for stage in PRIMARY_WORKFLOW_STAGES]
+
+
+def _apply_progress_activity(steps: list[TaskStepSummaryRecord], progress: object) -> None:
+    current_stage = getattr(progress, "current_stage", None)
+    current_stage_key = _enum_value(current_stage) if current_stage is not None else ""
+    progress_status = str(getattr(progress, "status", "") or "")
+    if progress_status not in {"running", "repairing", "blocked", "stale"}:
+        return
+
+    current_activity = str(getattr(progress, "current_activity", "") or getattr(progress, "observer_detail", "") or "")
+    status = WorkflowStageStatus.waiting_human if progress_status == "blocked" else WorkflowStageStatus.running
+    for step in steps:
+        if step.name != current_stage_key:
+            continue
+        step.status = _enum_value(status)
+        if current_activity:
+            step.message = current_activity
+
+
+def _apply_training_metric_summary(steps: list[TaskStepSummaryRecord], progress: object) -> None:
+    artifacts = getattr(progress, "artifacts", None)
+    metric_name = getattr(artifacts, "metric_name", None) if artifacts is not None else None
+    if not metric_name:
+        return
+
+    for step in steps:
+        if step.name != WorkflowStage.training_validation.value or step.summary:
+            continue
+        metric_value = getattr(artifacts, "metric_value", None)
+        best_model = getattr(artifacts, "best_model", None)
+        parts = [f"{metric_name}: {metric_value if metric_value is not None else '-'}"]
+        if best_model:
+            parts.append(f"最佳模型: {best_model}")
+        step.summary = "；".join(parts)
+
+
+def _raw_codex_steps(progress: object) -> object:
+    raw_steps = getattr(progress, "codex_raw_steps", None)
+    if raw_steps is None:
+        return getattr(progress, "raw_steps", None)
+    return raw_steps
+
+
+def _codex_step_from_raw(
+    raw_step: dict[str, Any],
+    index: int,
+    *,
+    progress_status: str,
+    paused_task: bool,
+) -> TaskStepSummaryRecord:
+    step_id = str(raw_step.get("id") or f"codex_step_{index}")
+    detail = str(raw_step.get("detail") or raw_step.get("summary") or "")
+    return TaskStepSummaryRecord(
+        id=step_id,
+        name=step_id,
+        node=step_id,
+        title=str(raw_step.get("title") or raw_step.get("id") or f"Codex step {index}"),
+        agent_role="Codex",
+        status=_codex_step_status(str(raw_step.get("status") or "pending"), progress_status=progress_status, paused_task=paused_task),
+        message=detail,
+        summary=detail,
+        artifacts=_codex_step_artifacts(raw_step),
+    )
+
+
+def _codex_step_status(raw_status: str, *, progress_status: str, paused_task: bool) -> str:
+    if raw_status == "interrupted" and (paused_task or progress_status == "blocked"):
+        return WorkflowStageStatus.waiting_human.value
+    return CODEX_STEP_STATUS_MAP.get(raw_status, raw_status if raw_status in WORKFLOW_STAGE_STATUS_VALUES else "pending")
+
+
+def _codex_step_artifacts(raw_step: dict[str, Any]) -> list[str]:
+    artifacts = raw_step.get("artifacts", [])
+    return [str(item) for item in artifacts] if isinstance(artifacts, list) else []
+
+
+def _step_from_stage_record(record: object) -> TaskStepSummaryRecord:
+    stage = normalize_workflow_stage(getattr(record, "stage", WorkflowStage.requirement_analysis))
+    return TaskStepSummaryRecord(
+        id=str(getattr(record, "id", "") or stage.value),
+        name=stage.value,
+        node=stage.value,
+        title=STAGE_LABELS.get(stage, stage.value),
+        agent_role=STAGE_LABELS.get(stage, stage.value),
+        status=_enum_value(getattr(record, "status", WorkflowStageStatus.pending)),
+        message=str(getattr(record, "summary", None) or getattr(record, "log_excerpt", None) or ""),
+        summary=str(getattr(record, "summary", None) or ""),
+        duration_s=getattr(record, "duration_seconds", None),
+        artifacts=_flatten_artifact_refs(getattr(record, "artifact_refs", None)),
+        updated_at=getattr(record, "updated_at", None),
+    )
+
+
+def _fallback_step(task: TaskRecord, stage: WorkflowStage) -> TaskStepSummaryRecord:
+    return TaskStepSummaryRecord(
+        id=stage.value,
+        name=stage.value,
+        node=stage.value,
+        title=STAGE_LABELS.get(stage, stage.value),
+        agent_role=STAGE_LABELS.get(stage, stage.value),
+        status=_enum_value(_stage_status_from_task(task, stage)),
+    )
+
+
+def _stage_status_from_task(task: TaskRecord, stage: WorkflowStage) -> WorkflowStageStatus:
+    task_status = task.status
+    if task_status == TaskStatus.completed:
+        return WorkflowStageStatus.completed
+    if task_status == TaskStatus.failed:
+        if stage in {
+            WorkflowStage.feature_engineering,
+            WorkflowStage.model_selection,
+            WorkflowStage.training_validation,
+            WorkflowStage.report_generation,
+        }:
+            return WorkflowStageStatus.failed
+        return WorkflowStageStatus.completed
+    if task_status in {TaskStatus.waiting_human, TaskStatus.paused_for_review}:
+        return WorkflowStageStatus.waiting_human if stage == WorkflowStage.training_validation else WorkflowStageStatus.pending
+    if task_status == TaskStatus.running:
+        if stage in {
+            WorkflowStage.feature_engineering,
+            WorkflowStage.model_selection,
+            WorkflowStage.training_validation,
+        }:
+            return WorkflowStageStatus.running
+        if stage in {WorkflowStage.requirement_analysis, WorkflowStage.data_analysis}:
+            return WorkflowStageStatus.completed
+        return WorkflowStageStatus.pending
+    if task_status in {TaskStatus.uploaded, TaskStatus.planning}:
+        return WorkflowStageStatus.completed if stage in {WorkflowStage.requirement_analysis, WorkflowStage.data_analysis} else WorkflowStageStatus.pending
+    return WorkflowStageStatus.completed if stage == WorkflowStage.requirement_analysis else WorkflowStageStatus.pending
+
+
+def _progress_from_cached_task(task: TaskRecord) -> dict[str, object]:
+    if task.status == TaskStatus.completed:
+        return {"status": "completed", "progress_percent": 100, "current_stage": WorkflowStage.report_generation.value}
+    if task.status in {TaskStatus.failed, TaskStatus.cancelled}:
+        return {"status": _enum_value(task.status), "progress_percent": 0, "current_stage": None}
+    if task.status in {TaskStatus.waiting_human, TaskStatus.paused_for_review}:
+        return {"status": "blocked", "progress_percent": 25, "current_stage": WorkflowStage.training_validation.value}
+    if task.status == TaskStatus.running:
+        return {"status": "running", "progress_percent": 33, "current_stage": WorkflowStage.training_validation.value}
+    if task.status in {TaskStatus.uploaded, TaskStatus.planning}:
+        return {"status": "not_started", "progress_percent": 0, "current_stage": WorkflowStage.data_analysis.value}
+    return {"status": "not_started", "progress_percent": 0, "current_stage": None}
+
+
+def _flatten_artifact_refs(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    return [str(value)] if str(value or "").strip() else []
+
+
+def _enum_value(value: Any) -> str:
+    return value.value if hasattr(value, "value") else str(value)
