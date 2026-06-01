@@ -22,6 +22,7 @@ import {
 } from '@/utils/codexRealtime'
 import { modelDisplayName } from '@/utils/modelProfile'
 import { taskProgressPercent } from '@/utils/progress'
+import { continueRunOptions } from '@/utils/taskRunControl'
 import { isFinishedTaskStatus, pickActiveTask, stepStatusLabel, taskIdOf } from '@/utils/taskRecords'
 import {
   isWorkspaceRuntimeCacheFresh,
@@ -373,10 +374,7 @@ async function continueRun() {
   loading.value = true
   error.value = ''
   try {
-    const data = await rerunTask(activeTaskId.value, {}, {
-      resume_after_human: isWaitingHuman.value,
-      resume_interrupted: isPausedRun.value,
-    })
+    const data = await rerunTask(activeTaskId.value, {}, continueRunOptions(activeTask.value, taskRun.value))
     if (task.value) task.value = { ...task.value, ...(data || {}) }
     persistWorkspaceCache()
     await loadTask(activeTaskId.value)

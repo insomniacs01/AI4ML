@@ -15,6 +15,7 @@ import { displayTaskTitle } from '@/utils/labels'
 import { createCodexRealtimeState, seedCodexRealtimeFromSnapshot } from '@/utils/codexRealtime'
 import { modelDisplayName } from '@/utils/modelProfile'
 import { taskProgressPercent } from '@/utils/progress'
+import { continueRunOptions } from '@/utils/taskRunControl'
 import { isFinishedTaskStatus, stepStatusLabel } from '@/utils/taskRecords'
 
 const props = defineProps({ taskId: { type: String, required: true } })
@@ -168,7 +169,7 @@ async function continueRun() {
   loading.value = true
   error.value = ''
   try {
-    const data = await rerunTask(props.taskId, {}, { resume_interrupted: task.value?.status === 'paused_for_review' })
+    const data = await rerunTask(props.taskId, {}, continueRunOptions(task.value, taskRun.value))
     if (task.value) task.value = { ...task.value, ...(data || {}) }
     await load()
   } catch (err) {

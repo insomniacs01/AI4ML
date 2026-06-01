@@ -37,6 +37,7 @@ import { createCodexRealtimeStream } from '@/composables/useCodexRealtimeStream'
 import { optionalLoad } from '@/utils/async'
 import { createCodexRealtimeState, seedCodexRealtimeFromSnapshot } from '@/utils/codexRealtime'
 import { modelDisplayName } from '@/utils/modelProfile'
+import { continueRunOptions } from '@/utils/taskRunControl'
 import { isFinishedTaskStatus, taskIdOf } from '@/utils/taskRecords'
 
 const props = defineProps({ taskId: { type: String, required: true } })
@@ -431,10 +432,7 @@ async function continueRun() {
   error.value = ''
   message.value = ''
   try {
-    const data = await rerunTask(props.taskId, {}, {
-      resume_after_human: task.value?.status === 'waiting_human',
-      resume_interrupted: task.value?.status === 'paused_for_review',
-    })
+    const data = await rerunTask(props.taskId, {}, continueRunOptions(task.value, taskRun.value, { planText: planText.value }))
     task.value = { ...(task.value || {}), ...(data || {}) }
     message.value = '任务已继续运行'
     await load()
