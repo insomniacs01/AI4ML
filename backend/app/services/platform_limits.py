@@ -11,7 +11,7 @@ from backend.app.models.task import TaskRecord
 PLATFORM_LIMITS_FILENAME = "platform_limits.json"
 DEFAULT_PLATFORM_LIMITS = PlatformLimitsRecord()
 ACTIVE_TASK_STATUSES = {"running"}
-QUEUED_TASK_STATUSES = {"uploaded", "planning"}
+WAITING_START_TASK_STATUSES = {"uploaded", "planning"}
 
 
 class PlatformLimitError(RuntimeError):
@@ -42,10 +42,10 @@ def assert_user_can_create_task(settings: Settings, *, tasks: list[TaskRecord], 
     limits = read_platform_limits(settings)
     if limits.max_queued_tasks_per_user <= 0:
         return
-    queued_count = _count_tasks_for_user(tasks, user_id, statuses=QUEUED_TASK_STATUSES)
-    if queued_count >= limits.max_queued_tasks_per_user:
+    waiting_start_count = _count_tasks_for_user(tasks, user_id, statuses=WAITING_START_TASK_STATUSES)
+    if waiting_start_count >= limits.max_queued_tasks_per_user:
         raise PlatformLimitError(
-            f"当前用户排队任务数已达到上限 {limits.max_queued_tasks_per_user}，请先处理或删除已有任务。"
+            f"当前用户待启动任务数已达到上限 {limits.max_queued_tasks_per_user}，请先处理或删除已有任务。"
         )
 
 

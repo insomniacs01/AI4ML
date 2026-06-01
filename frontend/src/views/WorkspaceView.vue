@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { ArrowRight, Boxes, Compass, FileText, FilePlus2, RefreshCw, Settings2, Workflow, XCircle } from 'lucide-vue-next'
+import { ArrowRight, Compass, FileText, FilePlus2, RefreshCw, Settings2, Workflow, XCircle } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import CodexRealtimePanel from '@/components/CodexRealtimePanel.vue'
@@ -46,8 +46,8 @@ const taskRun = ref(null)
 const codexRealtime = ref(createCodexRealtimeState())
 let pollTimer = null
 let disposed = false
-const pausableStatuses = new Set(['pending', 'queued', 'running'])
-const runtimeActiveStatuses = new Set(['pending', 'queued', 'running'])
+const pausableStatuses = new Set(['running'])
+const runtimeActiveStatuses = new Set(['running'])
 const startableStatuses = new Set(['uploaded', 'planning'])
 const SNAPSHOT_POLL_MS = 30000
 
@@ -158,6 +158,7 @@ function persistWorkspaceCache() {
 function hydrateWorkspaceFromCache() {
   const cached = readWorkspaceCache(workspaceCacheContext())
   if (!cached) return false
+  if (!runtimeActiveStatuses.has(cached.task?.status)) return false
   tasks.value = Array.isArray(cached.tasks) ? cached.tasks : []
   task.value = cached.task || null
   taskRun.value = cached.taskRun || null
@@ -260,13 +261,6 @@ async function loadTask(taskId, options = {}) {
   const detail = await getTaskRuntimeSnapshot(taskId, { sync: options.sync !== false })
   if (disposed) return
   const freshTask = detail.task || detail
-  task.value = {
-    ...(task.value || {}),
-    ...freshTask,
-  }
-  taskRun.value = detail.task_run || null
-  if (Array.isArray(detail.task_run?.steps)) steps.value = detail.task_run.steps
-  seedCodexRealtimeFromSnapshot(codexRealtime.value, taskRun.value?.codex)
   tasks.value = tasks.value.map((item) => (
     taskIdOf(item) === taskId
       ? {
@@ -275,6 +269,18 @@ async function loadTask(taskId, options = {}) {
         }
       : item
   ))
+  if (!runtimeActiveStatuses.has(freshTask?.status)) {
+    clearActiveWorkspace()
+    persistWorkspaceCache()
+    return
+  }
+  task.value = {
+    ...(task.value || {}),
+    ...freshTask,
+  }
+  taskRun.value = detail.task_run || null
+  if (Array.isArray(detail.task_run?.steps)) steps.value = detail.task_run.steps
+  seedCodexRealtimeFromSnapshot(codexRealtime.value, taskRun.value?.codex)
   connectStream()
   hydratedFromCache.value = false
   persistWorkspaceCache()
@@ -420,12 +426,6 @@ async function handleHitlSubmitted(data) {
   } catch (err) {
     error.value = err.message
   }
-}
-
-async function selectTask(item) {
-  const taskId = taskIdOf(item)
-  if (!taskId) return
-  await router.push(`/tasks/${taskId}`)
 }
 
 onMounted(() => {
@@ -576,27 +576,6 @@ onUnmounted(() => {
       </div>
     </aside>
   </div>
-
-  <section v-if="tasks.length > 1" class="panel workspace-task-switcher">
-    <div class="panel-title"><span><Boxes :size="18" /> 历史实验</span></div>
-    <p class="muted">工作台只显示当前进行中的任务；历史任务可进入详情页只读查看。</p>
-    <div class="task-list compact">
-      <button
-        v-for="item in tasks.slice(0, 5)"
-        :key="taskIdOf(item)"
-        class="task-row workspace-task-choice"
-        type="button"
-        :class="{ active: taskIdOf(item) === activeTaskId }"
-        @click="selectTask(item)"
-      >
-        <div>
-          <strong>{{ displayTaskTitle(item) }}</strong>
-          <span>{{ item.target_column || '目标列未设置' }}</span>
-        </div>
-        <StatusBadge :status="item.status" />
-      </button>
-    </div>
-  </section>
 
   <HitlApprovalModal
     :open="hitlModalOpen"

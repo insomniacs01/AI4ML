@@ -28,8 +28,8 @@ const pausing = ref(false)
 const hitl = ref(null)
 const hitlModalOpen = ref(false)
 let pollTimer = null
-const pausableStatuses = new Set(['pending', 'queued', 'running'])
-const runtimeActiveStatuses = new Set(['pending', 'queued', 'running'])
+const pausableStatuses = new Set(['running'])
+const runtimeActiveStatuses = new Set(['running'])
 const startableStatuses = new Set(['uploaded', 'planning'])
 
 const finished = computed(() => isFinishedTaskStatus(task.value?.status))

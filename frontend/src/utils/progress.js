@@ -10,7 +10,7 @@ export function taskProgressPercent({ status, steps = [], isBootstrapping = fals
   if (Number.isFinite(backendPercent) && backendPercent > 0) {
     return Math.min(99, Math.max(0, Math.round(backendPercent)))
   }
-  if (isBootstrapping) return status === 'queued' ? 8 : 10
+  if (isBootstrapping) return 10
 
   const visibleSteps = Array.isArray(steps) ? steps : []
   if (!visibleSteps.length) return status === 'running' ? 14 : 0

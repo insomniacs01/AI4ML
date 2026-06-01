@@ -225,7 +225,7 @@ describe('api client compatibility helpers', () => {
       if (text.endsWith('/api/teams/team-1/tasks') && options?.method === 'POST') {
         const body = JSON.parse(String(options.body || '{}'))
         expect(body.description).toBe('Train a compact classifier')
-        return jsonResponse(baseTask({ id: 'task-upload', status: 'pending', name: body.name }), 201)
+        return jsonResponse(baseTask({ id: 'task-upload', status: 'draft', name: body.name }), 201)
       }
       if (text.includes('/api/teams/team-1/tasks/task-upload/dataset?') && options?.method === 'POST') {
         expect(options.body).toBeInstanceOf(FormData)

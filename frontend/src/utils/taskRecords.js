@@ -1,14 +1,8 @@
-export const ACTIVE_TASK_STATUSES = new Set(['uploaded', 'planning', 'pending', 'queued', 'running', 'waiting_human', 'paused_for_review'])
-export const BLOCKING_RUNTIME_TASK_STATUSES = new Set(['pending', 'queued', 'running'])
+export const WORKSPACE_TASK_STATUSES = new Set(['running'])
+export const BLOCKING_RUNTIME_TASK_STATUSES = new Set(['running'])
 
-const ACTIVE_TASK_PRIORITY = {
+const WORKSPACE_TASK_PRIORITY = {
   running: 0,
-  pending: 1,
-  queued: 2,
-  waiting_human: 3,
-  paused_for_review: 4,
-  planning: 5,
-  uploaded: 6,
 }
 
 export function taskIdOf(task) {
@@ -31,7 +25,7 @@ export function compareActiveTasks(leftTask, rightTask) {
 
 export function pickActiveTask(tasks = []) {
   return [...tasks]
-    .filter((task) => ACTIVE_TASK_STATUSES.has(task?.status))
+    .filter((task) => WORKSPACE_TASK_STATUSES.has(task?.status))
     .sort(compareActiveTasks)[0] || null
 }
 
@@ -62,7 +56,7 @@ export function stepStatusLabel(status) {
 
 function activeTaskSortKey(task) {
   return [
-    ACTIVE_TASK_PRIORITY[task?.status] ?? 9,
+    WORKSPACE_TASK_PRIORITY[task?.status] ?? 9,
     -taskTimestamp(task, 'created_at'),
     -taskTimestamp(task, 'updated_at'),
   ]

@@ -20,13 +20,13 @@ describe('task record selection', () => {
     expect(pickBlockingRuntimeTask(tasks)).toBeNull()
   })
 
-  it('keeps paused tasks visible to the workspace when nothing is running', () => {
+  it('does not show paused tasks in the workspace when nothing is running', () => {
     const selected = pickActiveTask([
       task('completed-task', 'completed'),
       task('paused-task', 'paused_for_review'),
     ])
 
-    expect(selected.task_id).toBe('paused-task')
+    expect(selected).toBeNull()
   })
 
   it('prefers a running task over a paused task for workspace display', () => {
@@ -36,5 +36,14 @@ describe('task record selection', () => {
     ])
 
     expect(selected.task_id).toBe('running-task')
+  })
+
+  it('does not treat legacy pending or queued values as current workspace tasks', () => {
+    const selected = pickActiveTask([
+      task('pending-task', 'pending'),
+      task('queued-task', 'queued'),
+    ])
+
+    expect(selected).toBeNull()
   })
 })

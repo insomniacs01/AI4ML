@@ -240,7 +240,7 @@ const {
       <div class="panel-title"><span>任务资源限制</span></div>
       <div class="resource-limit-grid">
         <label class="field"><span>同时运行任务数</span><input v-model.number="platformLimits.max_concurrent_tasks_per_user" type="number" min="0" /></label>
-        <label class="field"><span>排队任务数</span><input v-model.number="platformLimits.max_queued_tasks_per_user" type="number" min="0" /></label>
+        <label class="field"><span>待启动任务数</span><input v-model.number="platformLimits.max_queued_tasks_per_user" type="number" min="0" /></label>
         <label class="field"><span>最大训练预算（秒）</span><input v-model.number="platformLimits.max_task_time_budget_s" type="number" min="0" /></label>
         <button class="secondary-action" type="button" @click="savePlatformLimits">保存限制</button>
       </div>

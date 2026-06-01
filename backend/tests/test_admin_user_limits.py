@@ -22,7 +22,7 @@ def test_platform_limits_block_excess_queued_tasks(tmp_path: Path) -> None:
     save_platform_limits(settings, PlatformLimitsRecord(max_queued_tasks_per_user=1))
     tasks = [_task("task-1", status=TaskStatus.uploaded)]
 
-    with pytest.raises(PlatformLimitError, match="排队任务数已达到上限"):
+    with pytest.raises(PlatformLimitError, match="待启动任务数已达到上限"):
         assert_user_can_create_task(settings, tasks=tasks, user_id="user-1")
 
 

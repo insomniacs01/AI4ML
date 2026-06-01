@@ -48,7 +48,7 @@ const filteredTasks = computed(() => {
 })
 
 function canPause(task) {
-  return ['pending', 'queued', 'running'].includes(task.status)
+  return task.status === 'running'
 }
 
 function isBusy(task) {
@@ -130,8 +130,6 @@ function statusMeta(task) {
     paused_for_review: { label: '已暂停', next: '下一步：进入详情继续运行', tone: 'warning', mark: 'Ⅱ' },
     uploaded: { label: '待启动', next: '下一步：进入详情启动运行', tone: 'warning', mark: '▷' },
     planning: { label: '待启动', next: '下一步：进入详情启动运行', tone: 'warning', mark: '▷' },
-    pending: { label: '排队中', next: '下一步：等待任务启动', tone: 'running', mark: '•' },
-    queued: { label: '排队中', next: '下一步：等待任务启动', tone: 'running', mark: '•' },
     completed: { label: '已完成', next: '下一步：查看结果报告', tone: 'success', mark: '✓' },
     failed: { label: '遇到问题', next: '下一步：查看错误诊断', tone: 'danger', mark: '!' },
     cancelled: { label: '已取消', next: '下一步：查看任务详情', tone: 'muted', mark: '×' },
@@ -144,7 +142,6 @@ function taskProgress(task) {
   if (['failed', 'cancelled'].includes(task.status)) return 0
   if (['waiting_human', 'paused_for_review'].includes(task.status)) return 25
   if (task.status === 'running') return 30
-  if (['pending', 'queued'].includes(task.status)) return 12
   return 0
 }
 

@@ -85,7 +85,7 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     if (task.value.status === 'failed') return '运行遇到问题'
     if (task.value.status === 'paused_for_review') return '运行已暂停'
     if (task.value.status === 'waiting_human') return '等待人工确认'
-    if (['running', 'pending', 'queued'].includes(task.value.status)) return '等待生成可读报告'
+    if (task.value.status === 'running') return '等待生成可读报告'
     return '等待开始运行'
   })
   const overviewRecommendation = computed(() => {
