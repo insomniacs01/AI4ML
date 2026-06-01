@@ -5,13 +5,44 @@ import { renderMarkdown } from '@/utils/markdown'
 import { modelDisplayName } from '@/utils/modelProfile'
 import { chartPolylinePoints } from '@/utils/taskDetail'
 
+function addMetricValues(target, source, prefix = '') {
+  Object.entries(source || {}).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === '') return
+    const label = prefix ? `${prefix}.${key}` : key
+    if (typeof value === 'number' || typeof value === 'string') {
+      target[label] = value
+      return
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      addMetricValues(target, value, label)
+    }
+  })
+}
+
+function targetSummariesFromOverview(value) {
+  const summary = value?.task_summary || {}
+  const rawTargets = summary.target_columns || summary.targets || value?.target_columns || value?.targets || []
+  const targetMetrics = value?.target_metrics || value?.metrics_by_target || summary.target_metrics || {}
+  const names = Array.isArray(rawTargets)
+    ? rawTargets.map((item) => (typeof item === 'string' ? item : item?.name || item?.target || item?.column)).filter(Boolean)
+    : Object.keys(targetMetrics)
+  return names.map((name) => {
+    const metrics = targetMetrics?.[name] || {}
+    const firstMetric = Object.entries(metrics).find(([, item]) => item !== null && item !== undefined && item !== '')
+    return {
+      name,
+      metric: firstMetric?.[0] || '',
+      value: firstMetric ? formatMetricValue(firstMetric[1]) : '',
+    }
+  })
+}
+
 export function useTaskDetailOverview({ task, taskRun, metrics, importance, overview, report, planText }) {
   const effectiveMetrics = computed(() => {
-    const values = {
-      ...(metrics.value?.values || {}),
-      ...(taskRun.value?.metrics || {}),
-      ...(task.value?.metrics || {}),
-    }
+    const values = {}
+    addMetricValues(values, metrics.value?.values || {})
+    addMetricValues(values, taskRun.value?.metrics || {})
+    addMetricValues(values, task.value?.metrics || {})
     const artifacts = taskRun.value?.artifacts || {}
     if (artifacts.metric_name && artifacts.metric_value != null) values[artifacts.metric_name] = artifacts.metric_value
     if (task.value?.metric && task.value?.last_run?.metric_value != null) values[task.value.metric] = task.value.last_run.metric_value
@@ -59,6 +90,12 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     }))
   })
   const overviewPredictionError = computed(() => effectiveOverview.value?.prediction_error || {})
+  const targetSummaries = computed(() => {
+    const overviewTargets = targetSummariesFromOverview(effectiveOverview.value)
+    if (overviewTargets.length) return overviewTargets
+    const taskTargets = task.value?.target_columns || []
+    return Array.isArray(taskTargets) ? taskTargets.map((name) => ({ name, metric: '', value: '' })) : []
+  })
   const overviewConfidenceData = computed(() => effectiveOverview.value?.confidence || {})
   const renderedReport = computed(() => renderMarkdown(report.value || '报告尚未生成。'))
   const planPreview = computed(() => {
@@ -175,6 +212,7 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     effectiveOverview,
     metricEntries,
     topFeatures,
+    targetSummaries,
     overviewPredictionError,
     overviewConfidenceData,
     renderedReport,

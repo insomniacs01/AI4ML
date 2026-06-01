@@ -8,6 +8,11 @@ export function formatPredictionValue(value) {
     if (!Number.isFinite(value)) return String(value)
     return Number.isInteger(value) ? String(value) : value.toLocaleString(undefined, { maximumFractionDigits: 6 })
   }
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, item]) => `${key}: ${formatPredictionValue(item)}`)
+      .join('；')
+  }
   if (value === null || value === undefined || value === '') return '-'
   return String(value)
 }

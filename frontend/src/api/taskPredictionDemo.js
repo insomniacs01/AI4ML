@@ -5,7 +5,8 @@ export async function getDelivery(taskId) {
   const task = await request(`/tasks/${taskId}`)
   const detail = detailFromTask(task)
   const profile = detail.task.dataset_profile || {}
-  const columns = (profile.columns || []).map((item) => item.name).filter((name) => name && name !== detail.task.target_column)
+  const targets = new Set(detail.task.target_columns || (detail.task.target_column ? [detail.task.target_column] : []))
+  const columns = (profile.columns || []).map((item) => item.name).filter((name) => name && !targets.has(name))
   const dtypes = Object.fromEntries((profile.columns || []).map((item) => [item.name, item.inferred_type]))
   const sample = profile.preview_rows?.[0] || {}
   return {

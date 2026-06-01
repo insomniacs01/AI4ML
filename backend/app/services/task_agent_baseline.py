@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import TaskRecord
+from backend.app.services.task_targets import target_columns_from_task
 
 
 MAX_BASELINE_ROWS = 50_000
@@ -28,21 +29,27 @@ REGRESSION_METRICS = {"rmse", "root_mean_squared_error", "mse", "mean_squared_er
 
 
 def compute_baseline(task: TaskRecord) -> dict[str, Any]:
-    if not task.dataset_path or not task.label_column or task.problem_type not in {"classification", "regression"}:
+    target_columns = target_columns_from_task(task)
+    if not task.dataset_path or not target_columns or task.problem_type not in {"classification", "regression"}:
         return pending_baseline("等待数据集、目标列和问题类型齐备后计算简单对照。")
+    if len(target_columns) > 1:
+        return pending_baseline("多目标任务由 Codex 在任务工作区内生成基线和评估结果。")
     dataset_path = Path(task.dataset_path)
     if not dataset_path.exists() or not dataset_path.is_file():
+        if dataset_path.exists():
+            return pending_baseline("当前数据路径是目录，简单对照由 Codex 根据目录内容生成。")
         return _baseline_blocked(f"数据集文件不存在，无法计算简单对照：{dataset_path}")
+    target_column = target_columns[0]
     try:
-        rows = _read_target_rows(dataset_path, task.label_column)
+        rows = _read_target_rows(dataset_path, target_column)
     except (OSError, csv.Error, UnicodeError) as exc:
         return _baseline_blocked(f"读取 CSV 失败，无法计算简单对照：{exc}")
     if len(rows) < 5:
         return _baseline_blocked("可用于基线验证的目标值少于 5 行。")
     metric_name = _baseline_metric_name(task)
     if task.problem_type == "regression":
-        return _compute_regression_baseline(task, rows, metric_name)
-    return _compute_classification_baseline(task, rows, metric_name)
+        return _compute_regression_baseline(task, rows, metric_name, target_column)
+    return _compute_classification_baseline(task, rows, metric_name, target_column)
 
 
 def pending_baseline(detail: str) -> dict[str, Any]:
@@ -121,7 +128,12 @@ def _read_target_rows(dataset_path: Path, target_column: str) -> list[str]:
     return rows
 
 
-def _compute_regression_baseline(task: TaskRecord, raw_values: list[str], metric_name: str) -> dict[str, Any]:
+def _compute_regression_baseline(
+    task: TaskRecord,
+    raw_values: list[str],
+    metric_name: str,
+    target_column: str,
+) -> dict[str, Any]:
     numeric_values = _finite_numeric_values(raw_values)
     if len(numeric_values) < 5:
         return _baseline_blocked("目标列无法稳定转换为数值，不能计算回归简单对照。")
@@ -136,7 +148,7 @@ def _compute_regression_baseline(task: TaskRecord, raw_values: list[str], metric
         "method": "mean_target_baseline",
         "label": "均值预测基线",
         "problem_type": "regression",
-        "target_column": task.label_column,
+        "target_column": target_column,
         "requested_metric_name": metric_name,
         "metric_name": resolved_metric,
         "metric_value": metric_value,
@@ -191,7 +203,12 @@ def _resolve_regression_metric(metric_name: str, scores: dict[str, float]) -> tu
     return "rmse", scores["rmse"]
 
 
-def _compute_classification_baseline(task: TaskRecord, raw_values: list[str], metric_name: str) -> dict[str, Any]:
+def _compute_classification_baseline(
+    task: TaskRecord,
+    raw_values: list[str],
+    metric_name: str,
+    target_column: str,
+) -> dict[str, Any]:
     train, validation = _deterministic_split(raw_values)
     if not train or not validation:
         return _baseline_blocked("样本划分后训练集或验证集为空。")
@@ -205,7 +222,7 @@ def _compute_classification_baseline(task: TaskRecord, raw_values: list[str], me
         "method": "majority_class_baseline",
         "label": "多数类预测基线",
         "problem_type": "classification",
-        "target_column": task.label_column,
+        "target_column": target_column,
         "requested_metric_name": metric_name,
         "metric_name": resolved_metric,
         "metric_value": metric_value,

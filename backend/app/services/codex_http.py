@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 from backend.app.core.config import Settings
 from backend.app.models.task import TaskRecord
 from backend.app.services.codex_common import CodexBackendError
+from backend.app.services.task_targets import target_columns_display, target_columns_from_task
 
 
 class CodexBackendClient:
@@ -133,8 +134,11 @@ class CodexBackendClient:
 
 def task_description(task: TaskRecord) -> str:
     parts = [task.description.strip()]
-    if task.label_column:
-        parts.append(f"目标列：{task.label_column}")
+    target_columns = target_columns_from_task(task)
+    if target_columns:
+        parts.append(f"目标列：{target_columns_display(target_columns)}")
+        if len(target_columns) > 1:
+            parts.append("目标模式：multi-target / multi-output")
     if task.problem_type:
         parts.append(f"任务类型：{task.problem_type}")
     return "\n".join(part for part in parts if part)

@@ -41,11 +41,13 @@ from backend.app.services.task_runtime_snapshot import (
 )
 from backend.app.services.task_uploads import (
     CSV_UPLOAD_CHUNK_BYTES,
-    MAX_CSV_UPLOAD_BYTES,
+    MAX_DATASET_UPLOAD_BYTES,
+    is_csv_upload_filename as _is_csv_upload_filename,
     validate_csv_sample as _validate_csv_sample,
     validate_upload_content_type as _validate_upload_content_type,
     validate_upload_filename as _validate_upload_filename,
 )
+from backend.app.services.task_targets import split_target_columns, target_columns_from_requirements
 from backend.app.services.task_workflow_tracking import (
     _record_stage_selection_map,
     _record_workflow_stage,
@@ -301,43 +303,54 @@ async def upload_dataset(
     filename = _validate_upload_filename(file.filename or "")
     _validate_upload_content_type(file.content_type)
 
-    dataset_path = task_store.dataset_upload_path(team_access.team_id, task_id, filename)
+    dataset_dir = task_store.clear_dataset_upload_dir(team_access.team_id, task_id)
+    uploaded_file_path = task_store.dataset_upload_path(team_access.team_id, task_id, filename)
     size_bytes = 0
     sample = bytearray()
+    dataset_profile = None
+    profile_error = ""
     try:
-        with dataset_path.open("wb") as handle:
+        with uploaded_file_path.open("wb") as handle:
             while True:
                 chunk = await file.read(CSV_UPLOAD_CHUNK_BYTES)
                 if not chunk:
                     break
                 size_bytes += len(chunk)
-                if size_bytes > MAX_CSV_UPLOAD_BYTES:
+                if size_bytes > MAX_DATASET_UPLOAD_BYTES:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"CSV upload exceeds {MAX_CSV_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+                        detail=f"dataset upload exceeds {MAX_DATASET_UPLOAD_BYTES // (1024 * 1024)} MB limit",
                     )
                 if len(sample) < CSV_UPLOAD_CHUNK_BYTES:
                     sample.extend(chunk[: CSV_UPLOAD_CHUNK_BYTES - len(sample)])
                 handle.write(chunk)
-        _validate_csv_sample(bytes(sample))
-        dataset_profile = build_dataset_profile(
-            dataset_path,
-            filename=filename,
-            target_column=None,
-        )
-        if dataset_profile.column_count == 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded CSV does not contain a header row")
+        if size_bytes == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded dataset file is empty")
+        if _is_csv_upload_filename(filename):
+            try:
+                _validate_csv_sample(bytes(sample))
+                csv_profile = build_dataset_profile(
+                    uploaded_file_path,
+                    filename=filename,
+                    target_column=None,
+                )
+                if csv_profile.column_count > 0:
+                    dataset_profile = csv_profile
+                else:
+                    profile_error = "uploaded CSV does not contain a header row"
+            except HTTPException as exc:
+                profile_error = str(exc.detail)
     except HTTPException:
-        if dataset_path.exists():
-            dataset_path.unlink()
+        if uploaded_file_path.exists():
+            uploaded_file_path.unlink()
         raise
     except OSError as exc:
-        if dataset_path.exists():
-            dataset_path.unlink()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"failed to save uploaded CSV: {exc}") from exc
+        if uploaded_file_path.exists():
+            uploaded_file_path.unlink()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"failed to save uploaded dataset: {exc}") from exc
 
     task.dataset_filename = filename
-    task.dataset_path = str(dataset_path)
+    task.dataset_path = str(dataset_dir)
     task.dataset_profile = dataset_profile
     task.status = TaskStatus.uploaded
     task.executor_type = "codex"
@@ -349,18 +362,44 @@ async def upload_dataset(
     task.codex_finished_at = None
     task.last_run = None
     task.last_run_attempt = None
-    task.label_column = None
-    task.problem_type = None
     task.analysis_token_usage = None
     structured_requirements = (
         dict(task.structured_requirements)
         if isinstance(task.structured_requirements, dict)
         else {}
     )
-    structured_requirements["dataset_profile"] = dataset_profile_to_plain(dataset_profile)
+    structured_requirements["dataset_input"] = {
+        "path": str(dataset_dir),
+        "path_type": "directory",
+        "files": [
+            {
+                "filename": filename,
+                "path": str(uploaded_file_path),
+                "size_bytes": size_bytes,
+                "content_type": file.content_type,
+            }
+        ],
+    }
+    structured_requirements["dataset_files"] = structured_requirements["dataset_input"]["files"]
+    if dataset_profile is not None:
+        structured_requirements["dataset_profile"] = dataset_profile_to_plain(dataset_profile)
+        structured_requirements.pop("dataset_profile_error", None)
+    else:
+        structured_requirements.pop("dataset_profile", None)
+        if profile_error:
+            structured_requirements["dataset_profile_error"] = profile_error
+    target_columns = target_columns_from_requirements(structured_requirements) or split_target_columns(task.label_column)
+    if target_columns:
+        structured_requirements["target_hint"] = structured_requirements.get("target_hint") or task.label_column
+        structured_requirements["target_columns_hint"] = target_columns
+        structured_requirements["target_definition"] = {
+            "target_mode": "multi_target" if len(target_columns) > 1 else "single_target",
+            "target_columns": target_columns,
+            "source": "user_input",
+        }
     task.structured_requirements = structured_requirements
     initialize_agent_loop_for_upload(task)
-    task.notes = "CSV 已上传并完成基础画像，Codex 将创建任务工作区并生成建模计划。"
+    task.notes = "数据文件已上传到任务数据目录，Codex 将读取目录内容并生成建模计划。"
     task = task_store.save_task(task, access_token=team_access.access_token)
     _record_workflow_stage(
         task,
@@ -368,13 +407,21 @@ async def upload_dataset(
         stage=WorkflowStage.data_analysis,
         stage_status=WorkflowStageStatus.completed,
         summary=(
-            f"CSV 已上传并完成基础画像：{dataset_profile.row_count} 行、"
-            f"{dataset_profile.column_count} 列。"
+            f"数据文件已上传：{filename}，大小 {size_bytes} 字节。"
+            + (
+                f" CSV 画像：{dataset_profile.row_count} 行、{dataset_profile.column_count} 列。"
+                if dataset_profile is not None
+                else " 数据结构将由 Codex 在任务工作区内解析。"
+            )
         ),
-        artifact_refs=[str(dataset_path)],
+        artifact_refs=[str(uploaded_file_path), str(dataset_dir)],
         log_excerpt=(
             f"filename={filename}; size_bytes={size_bytes}; "
-            f"columns={', '.join(column.name for column in dataset_profile.columns[:12])}"
+            + (
+                f"columns={', '.join(column.name for column in dataset_profile.columns[:12])}"
+                if dataset_profile is not None
+                else f"dataset_dir={dataset_dir}"
+            )
         ),
     )
 

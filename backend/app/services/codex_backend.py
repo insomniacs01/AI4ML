@@ -260,7 +260,18 @@ def _set_human_loop_previous_status(task: TaskRecord, *, previous_status: TaskSt
 
 
 def _sync_dataset_path_from_local_storage(task: TaskRecord, settings: Settings) -> None:
-    if task.dataset_path and Path(task.dataset_path).is_file():
+    if task.dataset_path and Path(task.dataset_path).exists():
+        return
+    dataset_dir = settings.storage_dir / task.id / "dataset"
+    if dataset_dir.is_dir():
+        task.dataset_path = str(dataset_dir)
+        if not task.dataset_filename:
+            try:
+                first_file = next(path for path in dataset_dir.iterdir() if path.is_file())
+            except (OSError, StopIteration):
+                first_file = None
+            if first_file is not None:
+                task.dataset_filename = first_file.name
         return
     candidate = settings.storage_dir / task.id / "dataset.csv"
     if not candidate.is_file():

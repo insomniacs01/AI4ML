@@ -16,10 +16,7 @@ class TaskLocalStorage:
         self.run_output_dir.mkdir(parents=True, exist_ok=True)
 
     def save_dataset(self, team_id: str, task_id: str, filename: str, content: bytes) -> Path:
-        task_dir = self.task_dir(team_id, task_id)
-        task_dir.mkdir(parents=True, exist_ok=True)
-        self._validate_csv_filename(filename)
-        dataset_path = task_dir / "dataset.csv"
+        dataset_path = self.dataset_upload_path(team_id, task_id, filename)
         dataset_path.write_bytes(content)
         return dataset_path
 
@@ -32,10 +29,18 @@ class TaskLocalStorage:
         return dataset_path
 
     def dataset_upload_path(self, team_id: str, task_id: str, filename: str) -> Path:
-        task_dir = self.task_dir(team_id, task_id)
-        task_dir.mkdir(parents=True, exist_ok=True)
-        self._validate_csv_filename(filename)
-        return task_dir / "dataset.csv"
+        upload_dir = self.dataset_upload_dir(team_id, task_id)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        return upload_dir / Path(filename).name
+
+    def dataset_upload_dir(self, team_id: str, task_id: str) -> Path:
+        return self.task_dir(team_id, task_id) / "dataset"
+
+    def clear_dataset_upload_dir(self, team_id: str, task_id: str) -> Path:
+        upload_dir = self.dataset_upload_dir(team_id, task_id)
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        return upload_dir
 
     def delete_task_files(self, team_id: str, task_id: str) -> None:
         shutil.rmtree(self.task_dir(team_id, task_id), ignore_errors=True)
@@ -60,9 +65,3 @@ class TaskLocalStorage:
     @staticmethod
     def run_storage_uri(task_id: str, run_id: str) -> str:
         return f"storage/runs/{task_id}/{run_id}"
-
-    @staticmethod
-    def _validate_csv_filename(filename: str) -> None:
-        suffix = Path(filename).suffix.lower()
-        if suffix != ".csv":
-            raise ValueError(f"dataset filename must end with .csv: {filename}")

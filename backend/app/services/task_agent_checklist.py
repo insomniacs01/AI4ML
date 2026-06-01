@@ -4,6 +4,7 @@ from typing import Any
 
 from backend.app.models.task import DatasetProfile, TaskRecord
 from backend.app.services.task_agent_baseline import resolve_metric_name
+from backend.app.services.task_targets import target_columns_display, target_columns_from_task
 
 
 def build_checklist(task: TaskRecord) -> list[dict[str, Any]]:
@@ -22,10 +23,11 @@ def _base_checklist_items(
     profile: DatasetProfile | None,
     metric_name: str,
 ) -> list[dict[str, Any]]:
+    target_columns = target_columns_from_task(task)
     return [
         _check_item(
             "dataset_uploaded",
-            "CSV 数据已上传",
+            "数据已上传",
             "passed" if task.dataset_path else "blocked",
             f"数据文件：{task.dataset_filename or '未上传'}",
             task.dataset_path,
@@ -40,9 +42,9 @@ def _base_checklist_items(
         _check_item(
             "target_column",
             "预测目标已确认",
-            "passed" if task.label_column else "pending",
-            f"目标列：{task.label_column or '等待 AI 或人工确认'}",
-            task.label_column,
+            "passed" if target_columns else "pending",
+            f"目标列：{target_columns_display(target_columns) or '等待 AI 或人工确认'}",
+            target_columns or task.label_column,
         ),
         _check_item(
             "problem_type",
@@ -62,22 +64,34 @@ def _base_checklist_items(
 
 
 def _target_column_check(task: TaskRecord, profile: DatasetProfile | None) -> dict[str, Any] | None:
-    if not task.label_column:
+    target_columns = target_columns_from_task(task)
+    if not target_columns:
         return None
-    if profile and task.label_column not in _profile_column_names(profile):
+    target_text = target_columns_display(target_columns)
+    if profile and profile.columns:
+        missing = [column for column in target_columns if column not in _profile_column_names(profile)]
+        if missing:
+            return _check_item(
+                "target_in_columns",
+                "目标列存在于数据表头",
+                "blocked",
+                f"目标列 {target_columns_display(missing)} 不在当前数据表头中。",
+                target_columns if len(target_columns) > 1 else target_columns[0],
+            )
+    if len(target_columns) > 1:
         return _check_item(
             "target_in_columns",
-            "目标列存在于 CSV 表头",
-            "blocked",
-            f"目标列 {task.label_column} 不在当前 CSV 表头中。",
-            task.label_column,
+            "多目标列已记录",
+            "passed",
+            f"已记录多目标列：{target_text}。",
+            target_columns,
         )
     return _check_item(
         "target_in_columns",
-        "目标列存在于 CSV 表头",
+        "目标列存在于数据表头",
         "passed",
-        f"已在 CSV 中找到目标列 {task.label_column}。",
-        task.label_column,
+        f"已记录目标列 {target_text}。",
+        target_columns[0],
     )
 
 

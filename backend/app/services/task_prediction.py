@@ -15,6 +15,7 @@ from backend.app.core.config import get_settings
 from backend.app.models.task import TaskPredictionDemoRequest, TaskPredictionDemoResponse, TaskRecord
 from backend.app.services.codex_backend import resolve_codex_workspace
 from backend.app.services.task_artifacts import build_run_artifact_index
+from backend.app.services.task_targets import target_columns_from_task
 
 logger = logging.getLogger(__name__)
 
@@ -304,10 +305,11 @@ def _generated_code_prediction_error(
 
 
 def _clean_prediction_features(task: TaskRecord, payload: TaskPredictionDemoRequest) -> dict[str, Any]:
+    target_columns = set(target_columns_from_task(task))
     return {
         key: value
         for key, value in payload.features.items()
-        if key and key != task.label_column
+        if key and key not in target_columns
     }
 
 

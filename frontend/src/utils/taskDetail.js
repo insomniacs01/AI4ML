@@ -4,11 +4,19 @@ export function predictionValueFromPayload(payload, { targetName = '', requiredF
 
   const prediction = payload.prediction
   if (prediction && typeof prediction === 'object') {
+    const outputMap = prediction.predictions || prediction.outputs || prediction.target_predictions
+    if (outputMap && typeof outputMap === 'object' && !Array.isArray(outputMap)) {
+      return { label: '多目标预测', value: outputMap }
+    }
     if (Object.prototype.hasOwnProperty.call(prediction, 'label')) return { value: prediction.label }
     if (Object.prototype.hasOwnProperty.call(prediction, 'value')) return { value: prediction.value }
     if (Object.prototype.hasOwnProperty.call(prediction, 'prediction')) return { value: prediction.prediction }
     if (prediction.result && typeof prediction.result === 'object') {
       const result = prediction.result
+      const targetMap = result.predictions || result.outputs || result.target_predictions
+      if (targetMap && typeof targetMap === 'object' && !Array.isArray(targetMap)) {
+        return { label: '多目标预测', value: targetMap }
+      }
       const knownKeys = ['predicted_value', 'prediction', 'predicted', 'label', targetName]
       const key = knownKeys.find((item) => item && Object.prototype.hasOwnProperty.call(result, item))
       if (key) return { value: result[key] }
@@ -20,6 +28,10 @@ export function predictionValueFromPayload(payload, { targetName = '', requiredF
   const directKeys = ['predicted_value', 'prediction', 'predicted', 'label', 'value']
   const directKey = directKeys.find((key) => Object.prototype.hasOwnProperty.call(payload, key))
   if (directKey) return { value: payload[directKey] }
+  const outputMap = payload.predictions || payload.outputs || payload.target_predictions
+  if (outputMap && typeof outputMap === 'object' && !Array.isArray(outputMap)) {
+    return { label: '多目标预测', value: outputMap }
+  }
   return null
 }
 

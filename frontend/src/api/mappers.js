@@ -49,11 +49,24 @@ function totalTokens(task) {
   return analysis + run
 }
 
+function targetColumnsFromTask(task) {
+  const requirements = task?.structured_requirements || {}
+  const definition = requirements.target_definition || {}
+  const raw = requirements.target_columns || requirements.target_columns_hint || definition.target_columns
+  if (Array.isArray(raw)) return raw.map((item) => String(item || '').trim()).filter(Boolean)
+  const text = task?.label_column || requirements.target_hint || ''
+  return String(text)
+    .split(/[，,;；|\n\r\t]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 export function mapTask(task) {
   if (!task) return task
   const run = task.last_run || null
   const metricName = run?.metric_name || task.structured_requirements?.metric_name || ''
   const metricValue = run?.metric_value
+  const targetColumns = targetColumnsFromTask(task)
   return {
     ...task,
     id: task.id,
@@ -63,7 +76,8 @@ export function mapTask(task) {
     name: task.name,
     requirement: task.description,
     task_type: task.problem_type || '',
-    target_column: task.label_column || '',
+    target_column: targetColumns.length ? targetColumns.join('、') : (task.label_column || ''),
+    target_columns: targetColumns,
     metric: metricName,
     status: displayStatusForTask(task),
     dataset_name: task.dataset_filename || '',

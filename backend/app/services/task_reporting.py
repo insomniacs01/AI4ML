@@ -188,7 +188,7 @@ def _resolve_dataset_profile(task: TaskRecord) -> DatasetProfile | None:
     if not task.dataset_path:
         return None
     dataset_path = Path(task.dataset_path)
-    if not dataset_path.exists():
+    if not dataset_path.exists() or not dataset_path.is_file() or dataset_path.suffix.lower() != ".csv":
         return None
     return build_dataset_profile(
         dataset_path,

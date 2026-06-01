@@ -16,6 +16,12 @@ class TaskStoreStorageMixin:
     def dataset_upload_path(self, team_id: str, task_id: str, filename: str) -> Path:
         return self.local_storage.dataset_upload_path(team_id, task_id, filename)
 
+    def dataset_upload_dir(self, team_id: str, task_id: str) -> Path:
+        return self.local_storage.dataset_upload_dir(team_id, task_id)
+
+    def clear_dataset_upload_dir(self, team_id: str, task_id: str) -> Path:
+        return self.local_storage.clear_dataset_upload_dir(team_id, task_id)
+
     def _task_dir(self, team_id: str, task_id: str) -> Path:
         return self.local_storage.task_dir(team_id, task_id)
 

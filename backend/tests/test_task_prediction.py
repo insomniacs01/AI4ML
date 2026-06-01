@@ -7,7 +7,7 @@ from backend.app.models.task import TaskPredictionDemoRequest, TaskRecord
 from backend.app.services.task_prediction import _build_generated_code_prediction_response
 
 
-def _task() -> TaskRecord:
+def _task(*, label_column: str | None = "target", structured_requirements: dict | None = None) -> TaskRecord:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return TaskRecord(
         id="task-prediction",
@@ -15,7 +15,8 @@ def _task() -> TaskRecord:
         created_by="user-1",
         name="Prediction Task",
         description="Run generated prediction.",
-        label_column="target",
+        label_column=label_column,
+        structured_requirements=structured_requirements,
         created_at=now,
         updated_at=now,
     )
@@ -65,3 +66,22 @@ def test_generated_code_prediction_response_rejects_empty_feature_payload(tmp_pa
     assert response.supported is False
     assert response.prediction is None
     assert "预测输入为空" in response.detail
+
+
+def test_generated_code_prediction_filters_structured_multi_targets(tmp_path: Path) -> None:
+    generated_code = tmp_path / "generated_code.py"
+    generated_code.write_text(
+        "def predict(features):\n    return sorted(features.keys())\n",
+        encoding="utf-8",
+    )
+
+    response = _build_generated_code_prediction_response(
+        _task(label_column=None, structured_requirements={"target_columns_hint": ["Y1", "Y2"]}),
+        TaskPredictionDemoRequest(features={"X1": 1, "Y1": 10, "Y2": 20}),
+        generated_code,
+    )
+
+    assert response is not None
+    assert response.supported is True
+    assert response.prediction["features"] == {"X1": 1}
+    assert response.prediction["label"] == ["X1"]

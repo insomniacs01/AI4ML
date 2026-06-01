@@ -11,6 +11,7 @@ defineProps({
   overviewRecommendation: { type: String, required: true },
   overviewCheckItems: { type: Array, default: () => [] },
   overviewBadges: { type: Array, default: () => [] },
+  targetSummaries: { type: Array, default: () => [] },
   overviewFactorDescription: { type: String, required: true },
   overviewFactors: { type: Array, default: () => [] },
   hasOverviewChart: { type: Boolean, default: false },
@@ -63,6 +64,11 @@ defineProps({
           </div>
           <div class="overview-badge-row">
             <span v-for="badge in overviewBadges" :key="badge">{{ badge }}</span>
+          </div>
+          <div v-if="targetSummaries.length" class="overview-badge-row">
+            <span v-for="item in targetSummaries" :key="item.name">
+              {{ item.name }}{{ item.metric ? ` · ${item.metric} ${item.value}` : '' }}
+            </span>
           </div>
         </section>
 

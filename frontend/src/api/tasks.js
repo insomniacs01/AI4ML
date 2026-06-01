@@ -26,6 +26,14 @@ function readForm(formData, key, fallback = '') {
   return String(formData?.get(key) ?? fallback).trim()
 }
 
+function targetColumnsFromText(value) {
+  return String(value || '')
+    .split(/[，,;；|\n\r\t]+/)
+    .map((item) => item.trim().replace(/^["'`]+|["'`]+$/g, ''))
+    .filter(Boolean)
+    .filter((item, index, list) => list.indexOf(item) === index)
+}
+
 function isFileValue(value) {
   return typeof File !== 'undefined' && value instanceof File
 }
@@ -55,7 +63,9 @@ function buildInteractionPolicies(formData) {
 function createTaskPayloadFromForm(formData) {
   const requirement = readForm(formData, 'requirement', 'Train a model from the uploaded dataset and generate a readable report.')
   const targetColumn = readForm(formData, 'target_column')
+  const targetColumns = targetColumnsFromText(targetColumn)
   const taskType = readForm(formData, 'task_type')
+  const metricName = readForm(formData, 'metric')
   const name = requirement.length > 36 ? `${requirement.slice(0, 36)}...` : requirement
   const selectedPlanText = readForm(formData, 'selected_plan_text')
   const selectedPlanId = readForm(formData, 'selected_plan_id')
@@ -69,10 +79,20 @@ function createTaskPayloadFromForm(formData) {
       source: selectedPlanId ? 'community_plan' : 'manual_plan',
     }
   }
+  if (targetColumn) {
+    structuredRequirements.target_hint = targetColumn
+    structuredRequirements.target_columns_hint = targetColumns
+    structuredRequirements.target_definition = {
+      target_mode: targetColumns.length > 1 ? 'multi_target' : 'single_target',
+      target_columns: targetColumns,
+      source: 'user_input',
+    }
+  }
+  if (metricName) structuredRequirements.metric_name = metricName
   return {
     name: name || '智能建模实验',
     description: requirement,
-    label_column: targetColumn || null,
+    label_column: targetColumns.length <= 1 ? (targetColumn || null) : null,
     problem_type: ['classification', 'regression'].includes(taskType) ? taskType : null,
     structured_requirements: Object.keys(structuredRequirements).length ? structuredRequirements : null,
     stage_routing: [],
@@ -104,7 +124,7 @@ export async function getActiveTask() {
 export async function uploadDataset(formData) {
   pendingDatasetFile = firstCsvFile(formData)
   pendingDatasetMeta = Object.fromEntries([...formData.entries()].filter(([, value]) => !isFileValue(value)))
-  if (!pendingDatasetFile) throw new Error('Please choose a CSV file first.')
+  if (!pendingDatasetFile) throw new Error('Please choose a dataset file first.')
   return {
     dataset_path: '__pending_local_upload__',
     name: pendingDatasetFile.name,

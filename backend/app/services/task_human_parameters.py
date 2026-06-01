@@ -28,6 +28,8 @@ from backend.app.services.task_human_parameter_values import (
     string_list as _string_list,
     text_value as _text,
 )
+from backend.app.services.task_targets import split_target_columns
+from backend.app.services.task_uploads import is_csv_upload_filename
 
 RUN_AFFECTING_STAGES = {
     WorkflowStage.data_analysis.value,
@@ -194,9 +196,18 @@ def _apply_data_analysis_parameters(
     normalized: dict[str, Any] = {}
     column_names = _column_names(task, requirements)
     if label_column:
-        _assert_known_columns([label_column], column_names, "target column")
+        target_columns = split_target_columns(label_column)
+        _assert_known_columns(target_columns, column_names, "target column")
         task.label_column = label_column
         normalized["label_column"] = label_column
+        if len(target_columns) > 1:
+            requirements["target_columns"] = target_columns
+            requirements["target_definition"] = {
+                "target_mode": "multi_target",
+                "target_columns": target_columns,
+                "source": "human_checkpoint",
+            }
+            normalized["target_columns"] = target_columns
         _refresh_target_profile(task, label_column, requirements)
     if problem_type:
         if problem_type not in {"classification", "regression"}:
@@ -231,11 +242,13 @@ def _apply_feature_engineering_parameters(
     if exclude_columns:
         _assert_known_columns(exclude_columns, column_names, "excluded feature columns")
 
-    target_column = _text(task.label_column)
-    if target_column:
-        include_columns = [column for column in include_columns if column != target_column]
-        if target_column in exclude_columns:
-            raise RuntimeError("The target column cannot be listed as an excluded feature column.")
+    target_columns = split_target_columns(task.label_column)
+    if target_columns:
+        target_set = set(target_columns)
+        include_columns = [column for column in include_columns if column not in target_set]
+        excluded_targets = [column for column in target_columns if column in exclude_columns]
+        if excluded_targets:
+            raise RuntimeError("Target columns cannot be listed as excluded feature columns.")
 
     overlap = sorted(set(include_columns) & set(exclude_columns))
     if overlap:
@@ -323,7 +336,14 @@ def _append_parameter_history(requirements: dict[str, Any], entry: dict[str, Any
 
 def _refresh_target_profile(task: TaskRecord, label_column: str, requirements: dict[str, Any]) -> None:
     dataset_path = Path(task.dataset_path) if task.dataset_path else None
-    if dataset_path and dataset_path.exists() and dataset_path.is_file():
+    target_columns = split_target_columns(label_column)
+    if (
+        dataset_path
+        and dataset_path.exists()
+        and dataset_path.is_file()
+        and is_csv_upload_filename(dataset_path.name)
+        and len(target_columns) <= 1
+    ):
         updated_profile = build_dataset_profile(
             dataset_path,
             filename=task.dataset_filename,
@@ -379,7 +399,7 @@ def _profile_column_name(column: object) -> str | None:
 
 def _dataset_header_column_names(task: TaskRecord) -> list[str]:
     dataset_path = Path(task.dataset_path) if task.dataset_path else None
-    if not dataset_path or not dataset_path.exists() or not dataset_path.is_file():
+    if not dataset_path or not dataset_path.exists() or not dataset_path.is_file() or not is_csv_upload_filename(dataset_path.name):
         return []
     with dataset_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         reader = csv.reader(handle)

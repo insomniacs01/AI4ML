@@ -8,6 +8,8 @@ from backend.app.models.task import TaskRecord, TaskSemanticUpdateRequest, TaskS
 from backend.app.services.dataset_profile import build_dataset_profile, dataset_profile_to_plain
 from backend.app.services.task_agent_loop import refresh_agent_loop_after_analysis
 from backend.app.services.task_human_context import ensure_task_human_loop
+from backend.app.services.task_targets import split_target_columns
+from backend.app.services.task_uploads import is_csv_upload_filename
 
 
 def apply_human_semantic_update(
@@ -17,10 +19,10 @@ def apply_human_semantic_update(
     corrected_by: str,
 ) -> TaskRecord:
     if not task.dataset_path:
-        raise ValueError("请先上传 CSV 数据集，再修正任务语义。")
+        raise ValueError("请先上传数据集，再修正任务语义。")
 
     dataset_path = Path(task.dataset_path)
-    if not dataset_path.exists() or not dataset_path.is_file():
+    if not dataset_path.exists():
         raise ValueError(f"任务数据集文件不存在，无法校验目标列：{dataset_path}")
 
     label_column = payload.label_column.strip()
@@ -28,16 +30,20 @@ def apply_human_semantic_update(
     if not metric_name:
         raise ValueError("评估指标不能为空。")
 
-    base_profile = task.dataset_profile or build_dataset_profile(
-        dataset_path,
-        filename=task.dataset_filename,
-        target_column=None,
-    )
-    column_names = [column.name for column in base_profile.columns]
-    if label_column not in column_names:
+    base_profile = task.dataset_profile
+    if base_profile is None and dataset_path.is_file() and is_csv_upload_filename(dataset_path.name):
+        base_profile = build_dataset_profile(
+            dataset_path,
+            filename=task.dataset_filename,
+            target_column=None,
+        )
+    column_names = [column.name for column in base_profile.columns] if base_profile is not None else []
+    target_columns = split_target_columns(label_column)
+    unknown_columns = [column for column in target_columns if column not in column_names]
+    if column_names and unknown_columns:
         raise ValueError(
-            "人工修正的目标列不在 CSV 表头中。"
-            f" 修正值：{label_column}；可选列：{', '.join(column_names)}"
+            "人工修正的目标列不在数据表头中。"
+            f" 修正值：{', '.join(unknown_columns)}；可选列：{', '.join(column_names)}"
         )
 
     now = datetime.now(timezone.utc)
@@ -56,11 +62,16 @@ def apply_human_semantic_update(
         }
     )
 
-    updated_profile = build_dataset_profile(
-        dataset_path,
-        filename=task.dataset_filename,
-        target_column=label_column,
-    )
+    if dataset_path.is_file() and is_csv_upload_filename(dataset_path.name) and len(target_columns) <= 1:
+        updated_profile = build_dataset_profile(
+            dataset_path,
+            filename=task.dataset_filename,
+            target_column=label_column,
+        )
+    elif base_profile is not None:
+        updated_profile = base_profile.model_copy(update={"target_column": label_column})
+    else:
+        updated_profile = None
     task.dataset_profile = updated_profile
     task.label_column = label_column
     task.problem_type = payload.problem_type
@@ -86,7 +97,7 @@ def apply_human_semantic_update(
             "reasoning": payload.correction_note or "用户已人工确认目标列、任务类型和评估指标。",
             "confidence": 1.0,
             "column_names": column_names,
-            "preview_rows": updated_profile.preview_rows,
+            "preview_rows": updated_profile.preview_rows if updated_profile is not None else [],
             "analyzed_at": now.isoformat(),
             "corrected_at": now.isoformat(),
             "corrected_by": corrected_by,
@@ -94,10 +105,20 @@ def apply_human_semantic_update(
             "analysis_prompt": None,
             "raw_response": None,
             "token_usage_calculation_method": "human_correction_no_token_usage",
-            "dataset_profile": dataset_profile_to_plain(updated_profile),
             "semantic_correction_history": correction_history[-20:],
         }
     )
+    if updated_profile is not None:
+        existing_requirements["dataset_profile"] = dataset_profile_to_plain(updated_profile)
+    else:
+        existing_requirements.pop("dataset_profile", None)
+    if target_columns:
+        existing_requirements["target_columns"] = target_columns
+        existing_requirements["target_definition"] = {
+            "target_mode": "multi_target" if len(target_columns) > 1 else "single_target",
+            "target_columns": target_columns,
+            "source": "human_correction",
+        }
     task.structured_requirements = existing_requirements
     refresh_agent_loop_after_analysis(task)
     return task

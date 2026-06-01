@@ -11,6 +11,7 @@ from backend.app.services.task_human_parameter_values import (
     string_list,
     text_value,
 )
+from backend.app.services.task_targets import target_columns_display, target_columns_from_task
 
 
 def build_task_human_parameter_guidance_lines(task: TaskRecord) -> list[str]:
@@ -50,7 +51,9 @@ def resolve_task_run_time_limit(task: TaskRecord, requested_time_limit: int | No
 
 def _data_analysis_guidance_line(task: TaskRecord, requirements: dict[str, Any]) -> str:
     data_params = stage_parameters(requirements, WorkflowStage.data_analysis.value)
-    target_column = text_value(data_params.get("label_column") or task.label_column)
+    target_column = target_columns_display(target_columns_from_task(task)) or text_value(
+        data_params.get("label_column") or task.label_column
+    )
     problem_type = text_value(data_params.get("problem_type") or task.problem_type)
     metric_name = text_value(data_params.get("metric_name") or requirements.get("metric_name"))
     if not (target_column or problem_type or metric_name):

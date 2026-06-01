@@ -209,11 +209,11 @@ describe('api client compatibility helpers', () => {
 
   it('creates a task, uploads the selected file as FormData, then starts the run', async () => {
     localStorage.setItem('ai4ml-active-team-id', 'team-1')
-    const file = new File(['a,b\n1,2\n'], 'demo.csv', { type: 'text/csv' })
+    const file = new File(['excel-bytes'], 'ENB2012_data.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     const formData = new FormData()
-    formData.append('requirement', 'Train a compact classifier')
-    formData.append('target_column', 'b')
-    formData.append('task_type', 'classification')
+    formData.append('requirement', 'Train a compact multi-output regressor')
+    formData.append('target_column', 'Y1,Y2')
+    formData.append('task_type', 'regression')
     formData.append('time_budget_s', '20')
     formData.append('file', file)
 
@@ -224,13 +224,20 @@ describe('api client compatibility helpers', () => {
       }
       if (text.endsWith('/api/teams/team-1/tasks') && options?.method === 'POST') {
         const body = JSON.parse(String(options.body || '{}'))
-        expect(body.description).toBe('Train a compact classifier')
+        expect(body.description).toBe('Train a compact multi-output regressor')
+        expect(body.label_column).toBeNull()
+        expect(body.problem_type).toBe('regression')
+        expect(body.structured_requirements.target_definition).toEqual({
+          target_mode: 'multi_target',
+          target_columns: ['Y1', 'Y2'],
+          source: 'user_input',
+        })
         return jsonResponse(baseTask({ id: 'task-upload', status: 'draft', name: body.name }), 201)
       }
       if (text.includes('/api/teams/team-1/tasks/task-upload/dataset?') && options?.method === 'POST') {
         expect(options.body).toBeInstanceOf(FormData)
         expect(options.body.get('file')).toBe(file)
-        return jsonResponse(baseTask({ id: 'task-upload', status: 'uploaded', dataset_filename: 'demo.csv' }))
+        return jsonResponse(baseTask({ id: 'task-upload', status: 'uploaded', dataset_filename: 'ENB2012_data.xlsx' }))
       }
       if (text.endsWith('/api/teams/team-1/tasks/task-upload/run') && options?.method === 'POST') {
         const body = JSON.parse(String(options.body || '{}'))

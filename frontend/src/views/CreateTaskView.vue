@@ -55,7 +55,7 @@ function setFile(event) {
 
 async function ensureDatasetUploaded() {
   if (form.value.dataset_path) return form.value.dataset_path
-  if (!form.value.dataset_file) throw new Error('请先上传表格文件或图像压缩包')
+  if (!form.value.dataset_file) throw new Error('请先上传数据文件或数据压缩包')
   const fd = new FormData()
   fd.append('dataset_file', form.value.dataset_file)
   uploadedDataset.value = await uploadDataset(fd)
@@ -225,8 +225,8 @@ onMounted(loadRouteInputs)
         <label class="upload-zone start-upload-zone">
           <UploadCloud :size="28" />
           <strong>{{ uploadedDatasetLabel || '点击上传数据集' }}</strong>
-          <span>支持 CSV 或 ZIP 文件，大小不超过 200MB。</span>
-          <input type="file" accept=".csv,.zip" @change="setFile" />
+          <span>支持 CSV、Excel、JSON、ZIP 等数据文件，大小不超过 200MB。</span>
+          <input type="file" @change="setFile" />
         </label>
 
         <button class="secondary-action full" type="button" @click="showAdvanced = !showAdvanced">
@@ -254,7 +254,7 @@ onMounted(loadRouteInputs)
           <div class="inline-fields">
             <label class="field">
               <span>目标列</span>
-              <input v-model="form.target_column" placeholder="留空则自动推断" />
+              <input v-model="form.target_column" placeholder="留空则自动推断；多个目标用逗号分隔" />
             </label>
             <label class="field">
               <span>任务类型</span>

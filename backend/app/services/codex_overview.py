@@ -36,6 +36,8 @@ def _normalize_overview_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "task_summary": dict_or_empty(payload.get("task_summary")),
         "prediction_error": dict_or_empty(payload.get("prediction_error")),
         "confidence": dict_or_empty(payload.get("confidence")),
+        "target_columns": _target_columns_from_overview(payload),
+        "target_metrics": dict_or_empty(payload.get("target_metrics") or payload.get("metrics_by_target")),
         "key_factors": list_of_dicts(payload.get("key_factors")),
         "result_checks": list_of_dicts(payload.get("result_checks")),
         "optimization_records": list_of_dicts(payload.get("optimization_records")),
@@ -65,7 +67,8 @@ def _derive_overview_from_metrics(metrics: dict[str, Any], workspace_path: str |
         "status": "completed",
         "task_summary": {
             "title": "Codex 建模结果",
-            "target": nested_get(metrics, ("task", "target_column")) or nested_get(metrics, ("task", "target_mode")),
+            "target": _target_text_from_metrics(metrics),
+            "target_columns": _target_columns_from_metrics(metrics),
             "task_type": nested_get(metrics, ("task", "target_mode")) or "other",
             "conclusion": "已生成结构化建模结果；请结合误差、可信度和报告说明使用。",
             "recommendation": "先查看报告和结果检查，再决定是否用于业务决策。",
@@ -81,6 +84,8 @@ def _derive_overview_from_metrics(metrics: dict[str, Any], workspace_path: str |
             "interpretation": error_interpretation,
         },
         "confidence": _derive_confidence(metric_name, metric_value, baseline_value, diagnostics),
+        "target_columns": _target_columns_from_metrics(metrics),
+        "target_metrics": _target_metrics_from_metrics(metrics),
         "key_factors": _derive_key_factors(metrics),
         "result_checks": _derive_result_checks(metrics, metric_name, metric_value, baseline_name, baseline_value, diagnostics, workspace_path),
         "optimization_records": _derive_optimization_records(metrics, workspace_path, metric_name),
@@ -95,6 +100,49 @@ def _derive_overview_from_metrics(metrics: dict[str, Any], workspace_path: str |
             "feature_importance": feature_importance_path,
         },
     }
+
+
+def _target_columns_from_overview(payload: dict[str, Any]) -> list[str]:
+    summary = payload.get("task_summary") if isinstance(payload.get("task_summary"), dict) else {}
+    for value in (payload.get("target_columns"), payload.get("targets"), summary.get("target_columns"), summary.get("targets")):
+        targets = _string_list(value)
+        if targets:
+            return targets
+    return []
+
+
+def _target_columns_from_metrics(metrics: dict[str, Any]) -> list[str]:
+    task = metrics.get("task") if isinstance(metrics.get("task"), dict) else {}
+    for value in (task.get("target_columns"), task.get("targets"), metrics.get("target_columns"), metrics.get("targets")):
+        targets = _string_list(value)
+        if targets:
+            return targets
+    target = task.get("target_column")
+    return [str(target)] if isinstance(target, str) and target.strip() else []
+
+
+def _target_text_from_metrics(metrics: dict[str, Any]) -> str | None:
+    targets = _target_columns_from_metrics(metrics)
+    if targets:
+        return "、".join(targets)
+    value = nested_get(metrics, ("task", "target_mode"))
+    return str(value) if value else None
+
+
+def _target_metrics_from_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    for key in ("target_metrics", "metrics_by_target", "per_target_metrics"):
+        value = metrics.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
+    return []
 
 
 def _overview_primary_metric(

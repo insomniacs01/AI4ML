@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import DatasetProfile, TaskRecord
+from backend.app.services.task_targets import target_columns_display, target_columns_from_task
 
 
 MAX_TARGET_PROFILE_ROWS = 50_000
@@ -22,10 +23,15 @@ class _TargetValueSample:
 
 
 def build_target_profile(task: TaskRecord, profile: DatasetProfile | None) -> dict[str, Any]:
-    target_column = task.label_column or (profile.target_column if profile else None)
+    target_columns = target_columns_from_task(task)
+    target_column = target_columns_display(target_columns) or (profile.target_column if profile else None)
     result: dict[str, Any] = {"status": "unavailable", "target_column": target_column}
     if not target_column:
         result["detail"] = "尚未确认目标列。"
+        return result
+    if len(target_columns) > 1:
+        result["target_columns"] = target_columns
+        result["detail"] = f"当前是多目标任务：{target_columns_display(target_columns)}，目标画像由 Codex 产物呈现。"
         return result
 
     sample = _collect_target_values(task, profile, target_column)

@@ -107,6 +107,7 @@ const {
   effectiveOverview,
   metricEntries,
   topFeatures,
+  targetSummaries,
   overviewPredictionError,
   overviewConfidenceData,
   renderedReport,
@@ -142,7 +143,10 @@ const codexStream = createCodexRealtimeStream({
     error.value = err.message
   },
 })
-const predictionTargetName = computed(() => task.value?.label_column || task.value?.target_column || effectiveOverview.value?.task_summary?.target || '预测值')
+const predictionTargetName = computed(() => {
+  if (Array.isArray(task.value?.target_columns) && task.value.target_columns.length) return task.value.target_columns.join('、')
+  return task.value?.label_column || task.value?.target_column || effectiveOverview.value?.task_summary?.target || '预测值'
+})
 const predictionResultLabel = computed(() => predictionResult.value?.label || predictionTargetName.value)
 const predictionResultValue = computed(() => {
   if (!predictionResult.value) return ''
@@ -569,6 +573,7 @@ onUnmounted(() => {
     :overview-recommendation="overviewRecommendation"
     :overview-check-items="overviewCheckItems"
     :overview-badges="overviewBadges"
+    :target-summaries="targetSummaries"
     :overview-factor-description="overviewFactorDescription"
     :overview-factors="overviewFactors"
     :has-overview-chart="hasOverviewChart"

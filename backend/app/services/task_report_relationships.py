@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import DatasetProfile, FeatureImportanceEntry, TaskRecord
+from backend.app.services.task_targets import target_columns_display, target_columns_from_task
 
 
 MAX_RELATIONSHIP_ROWS = 20_000
@@ -29,6 +30,10 @@ def collect_feature_relationships(
     target_column = _target_column(task, profile)
     if not target_column or not task.dataset_path:
         return [], ["缺少目标列或数据集路径，无法计算特征与目标列的关系。"]
+    target_columns = target_columns_from_task(task)
+    if len(target_columns) > 1:
+        targets = target_columns_display(target_columns)
+        return [], [f"当前是多目标任务（{targets}），特征关系分析由 Codex 产物呈现。"]
 
     fieldnames, rows, load_error = _load_relationship_rows(Path(task.dataset_path), target_column)
     if load_error:
@@ -42,6 +47,9 @@ def collect_feature_relationships(
 
 
 def _target_column(task: TaskRecord, profile: DatasetProfile | None) -> str | None:
+    targets = target_columns_from_task(task)
+    if len(targets) == 1:
+        return targets[0]
     return task.label_column or (profile.target_column if profile else None)
 
 
