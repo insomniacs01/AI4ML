@@ -1754,7 +1754,39 @@ textarea:focus {
   gap: 12px;
 }
 
+.overview-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.overview-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.overview-chart-legend i {
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+}
+
+.overview-chart-legend i.actual {
+  background: #2563eb;
+}
+
+.overview-chart-legend i.predicted {
+  background: #0f8b8d;
+}
+
 .overview-mini-chart {
+  display: grid;
+  gap: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background:
@@ -1769,8 +1801,18 @@ textarea:focus {
   height: 86px;
 }
 
+.overview-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .overview-insight {
-  display: -webkit-box;
+  display: grid;
+  gap: 4px;
   overflow: hidden;
   border-radius: 8px;
   background: color-mix(in srgb, var(--success) 8%, var(--surface-soft));
@@ -1779,6 +1821,16 @@ textarea:focus {
   font-size: 14px;
   font-weight: 800;
   line-height: 1.55;
+}
+
+.overview-insight strong {
+  color: color-mix(in srgb, var(--success) 92%, var(--text));
+  font-size: 13px;
+}
+
+.overview-insight span {
+  display: -webkit-box;
+  overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
 }

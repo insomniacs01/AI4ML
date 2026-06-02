@@ -3,7 +3,7 @@ import { checkLabel, featureLabel, formatMetricValue } from '@/utils/formatters'
 import { metricLabel } from '@/utils/labels'
 import { renderMarkdown } from '@/utils/markdown'
 import { modelDisplayName } from '@/utils/modelProfile'
-import { chartPolylinePoints } from '@/utils/taskDetail'
+import { comparisonChartPolylinePoints } from '@/utils/taskDetail'
 import { hasPendingHumanConfirmation } from '@/utils/taskHumanState'
 
 function addMetricValues(target, source, prefix = '') {
@@ -192,12 +192,9 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     }
     return '这些是真实模型解释返回的关键特征。'
   })
-  const overviewChartPoints = computed(() => {
-    return chartPolylinePoints(effectiveOverview.value?.charts?.actual_vs_predicted, 'actual')
-  })
-  const overviewChartPointsAlt = computed(() => {
-    return chartPolylinePoints(effectiveOverview.value?.charts?.actual_vs_predicted, 'predicted')
-  })
+  const overviewChartPointMap = computed(() => comparisonChartPolylinePoints(effectiveOverview.value?.charts?.actual_vs_predicted))
+  const overviewChartPoints = computed(() => overviewChartPointMap.value.actual || '')
+  const overviewChartPointsAlt = computed(() => overviewChartPointMap.value.predicted || '')
   const hasOverviewChart = computed(() => Boolean(overviewChartPoints.value && overviewChartPointsAlt.value))
   const predictionErrorText = computed(() => primaryMetric.value?.value || '未生成')
   const predictionErrorDescription = computed(() => overviewPredictionError.value?.interpretation || '当前任务没有返回结构化预测误差。')

@@ -129,18 +129,27 @@ function isLongText(value, limit = 72) {
 
       <aside class="panel overview-explain-panel">
         <div class="overview-panel-head stacked">
-          <h3>结果怎么理解</h3>
-          <p>辅助解释</p>
+          <h3>真实值与预测值对比</h3>
+          <p>抽样样本，横轴为样本顺序</p>
+        </div>
+        <div v-if="hasOverviewChart" class="overview-chart-legend" aria-label="图例">
+          <span><i class="actual"></i>真实值</span>
+          <span><i class="predicted"></i>预测值</span>
         </div>
         <div v-if="hasOverviewChart" class="overview-mini-chart">
           <svg viewBox="0 0 100 80" role="img" aria-label="结果趋势图">
             <polyline :points="overviewChartPoints" fill="none" stroke="#2563eb" stroke-width="2.2" />
             <polyline :points="overviewChartPointsAlt" fill="none" stroke="#0f8b8d" stroke-width="2.2" />
           </svg>
+          <div class="overview-chart-axis">
+            <span>样本顺序</span>
+            <span>同一纵轴缩放</span>
+          </div>
         </div>
         <p v-else class="muted">当前任务没有返回可绘制的真实预测对比点。</p>
         <div class="overview-insight" :title="explanationText">
-          {{ explanationText }}
+          <strong>可靠性提醒</strong>
+          <span>{{ explanationText }}</span>
         </div>
         <details v-if="isLongText(explanationText, 96)" class="overview-expand">
           <summary>展开完整解释</summary>

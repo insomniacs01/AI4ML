@@ -35,18 +35,39 @@ export function predictionValueFromPayload(payload, { targetName = '', requiredF
   return null
 }
 
-export function chartPolylinePoints(rows, field) {
-  if (!Array.isArray(rows) || rows.length < 2) return ''
-  const values = rows.map((item) => Number(item[field])).filter((value) => Number.isFinite(value))
-  if (values.length < 2) return ''
+function normalizedChartRows(rows, fields) {
+  if (!Array.isArray(rows) || rows.length < 2) return []
+  return rows.map((item) => {
+    const values = {}
+    for (const field of fields) {
+      const value = Number(item[field])
+      if (!Number.isFinite(value)) return null
+      values[field] = value
+    }
+    return values
+  }).filter(Boolean)
+}
+
+function polylineFromValues(rows, field, min, span) {
+  return rows.map((item, index) => {
+    const x = rows.length === 1 ? 0 : (index / (rows.length - 1)) * 100
+    const y = 76 - ((item[field] - min) / span) * 58
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+}
+
+export function comparisonChartPolylinePoints(rows, fields = ['actual', 'predicted']) {
+  const sampleRows = normalizedChartRows(rows, fields).slice(0, 12)
+  if (sampleRows.length < 2) return {}
+  const values = sampleRows.flatMap((item) => fields.map((field) => item[field]))
   const min = Math.min(...values)
   const max = Math.max(...values)
   const span = max - min || 1
-  return values.slice(0, 12).map((value, index) => {
-    const x = values.length === 1 ? 0 : (index / (values.length - 1)) * 100
-    const y = 76 - ((value - min) / span) * 58
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
+  return Object.fromEntries(fields.map((field) => [field, polylineFromValues(sampleRows, field, min, span)]))
+}
+
+export function chartPolylinePoints(rows, field) {
+  return comparisonChartPolylinePoints(rows, [field])[field] || ''
 }
 
 export function demoRowsFromDelivery(data) {
