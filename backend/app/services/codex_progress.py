@@ -106,6 +106,8 @@ def codex_activity_text(
         return "Codex 建模流程已完成，报告和预测入口已可查看。"
     if has_summary:
         return summary.strip()
+    if codex_status_value == "waiting_improvement_review":
+        return "Codex 已生成改进决策方案，等待用户选择继续改进或停止并生成报告。"
     if codex_status_value in CODEX_WAITING_STATUSES:
         return "Codex 已生成计划，等待人工确认后开始训练和交付。"
     if codex_status_value in CODEX_ACTIVE_STATUSES:
@@ -168,6 +170,8 @@ def _progress_status(task: TaskRecord, codex_status_value: str, artifacts: dict[
 
 
 def _current_stage(codex_status_value: str, progress: dict[str, Any], artifacts: dict[str, Any]) -> WorkflowStage | None:
+    if codex_status_value == "waiting_improvement_review":
+        return WorkflowStage.training_validation
     if codex_status_value in CODEX_WAITING_STATUSES:
         return WorkflowStage.data_analysis
     if codex_status_value == "completed" or has_completed_codex_artifacts(artifacts):
@@ -227,7 +231,7 @@ def _progress_percent_from_steps(steps: Any) -> int:
             completed_weight += 1.0
         elif status in {"running", "in_progress", "executing"}:
             completed_weight += 0.55
-        elif status in {"waiting", "waiting_human", "waiting_plan_approval", "plan_ready", "blocked"}:
+        elif status in {"waiting", "waiting_human", "waiting_plan_approval", "plan_ready", "waiting_improvement_review", "blocked"}:
             completed_weight += 0.35
 
     if completed_weight <= 0:

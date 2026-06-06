@@ -64,8 +64,18 @@ def interrupt_codex_task(task: TaskRecord, settings: Settings, *, reason: str | 
     return CodexBackendClient(settings).interrupt_task(task, reason=reason)
 
 
-def resume_codex_task(task: TaskRecord, settings: Settings, *, token_budget: int | None = None) -> dict[str, Any]:
-    return CodexBackendClient(settings).resume_task(task, token_budget=token_budget)
+def resume_codex_task(
+    task: TaskRecord,
+    settings: Settings,
+    *,
+    token_budget: int | None = None,
+    improvement_decision: str | None = None,
+) -> dict[str, Any]:
+    return CodexBackendClient(settings).resume_task(
+        task,
+        token_budget=token_budget,
+        improvement_decision=improvement_decision,
+    )
 
 
 def fetch_codex_task_status(task: TaskRecord, settings: Settings) -> dict[str, Any]:
@@ -146,7 +156,7 @@ def _apply_codex_sync_status(
     now: datetime,
 ) -> None:
     if context.status in CODEX_WAITING_STATUSES:
-        _apply_waiting_codex_status(task)
+        _apply_waiting_codex_status(task, context.status)
     elif context.status in CODEX_ACTIVE_STATUSES:
         _apply_active_codex_status(task, artifacts, context, now)
     elif context.status == "completed":
@@ -157,10 +167,13 @@ def _apply_codex_sync_status(
         _apply_failed_codex_status(task, artifacts, context, now)
 
 
-def _apply_waiting_codex_status(task: TaskRecord) -> None:
+def _apply_waiting_codex_status(task: TaskRecord, status_value: str) -> None:
     _set_human_loop_previous_status(task, previous_status=TaskStatus.running)
     task.status = TaskStatus.paused_for_review
-    task.notes = "Codex 已生成建模计划，等待人工确认后继续执行。"
+    if status_value == "waiting_improvement_review":
+        task.notes = "Codex 已生成改进决策方案，等待用户选择继续改进或停止并生成报告。"
+    else:
+        task.notes = "Codex 已生成建模计划，等待人工确认后继续执行。"
 
 
 def _apply_active_codex_status(

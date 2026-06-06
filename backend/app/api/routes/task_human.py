@@ -55,11 +55,11 @@ def _refresh_codex_task_for_human_snapshot(task: TaskRecord, team_access: TeamAc
         ):
             payload = request.payload if isinstance(request.payload, dict) else {}
             request_status = str(request.status.value if hasattr(request.status, "value") else request.status)
-            if payload.get("request_type") == "codex_plan_approval" and request_status in {"pending", "open"}:
+            if payload.get("request_type") in {"codex_plan_approval", "codex_improvement_review"} and request_status in {"pending", "open"}:
                 request.status = HumanInteractionRequestStatus.resolved
                 request.decision = {
                     "action": "auto_resolved",
-                    "summary": "Codex 已进入运行状态，旧的计划确认请求自动关闭。",
+                    "summary": "Codex 已进入运行状态，旧的人工确认请求自动关闭。",
                 }
                 task_store.update_human_request(request, access_token=team_access.access_token)
     return refreshed_task

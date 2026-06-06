@@ -48,6 +48,7 @@ from backend.app.services.task_runtime_activity import (
     ensure_task_controls_current_codex_activity,
 )
 from backend.app.services.task_runtime_progress import (
+    CODEX_IMPROVEMENT_REVIEW_STATUSES,
     ensure_codex_plan_request,
     record_codex_running_stages,
     record_codex_status_stages,
@@ -311,25 +312,23 @@ def _run_codex_task(
                 settings,
                 token_budget=quota_token_budget(quota),
             )
+        if _codex_waiting_improvement_review(task, progress):
+            return _resume_codex_task_and_save(
+                task,
+                team_access,
+                settings,
+                token_budget=quota_token_budget(quota),
+                improvement_decision=payload.improvement_decision or "continue_improvement",
+            )
         if not _codex_interrupted(task, progress):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前任务不是已暂停状态，不能按中断恢复。")
-        try:
-            response = resume_codex_task(task, settings, token_budget=quota_token_budget(quota))
-        except CodexBackendError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-        write_codex_resume_progress(task)
-        task = clear_quota_guard(task)
-        task.codex_session_id = response.get("sessionId") or task.codex_session_id
-        task.codex_thread_id = response.get("threadId") or task.codex_thread_id
-        task.executor_type = "codex"
-        task.codex_status = "running"
-        task.codex_finished_at = None
-        task.status = TaskStatus.running
-        task.notes = "Codex 已从暂停位置继续执行。"
-        task = update_codex_structured_metadata(task)
-        saved_task = task_store.save_task(task, access_token=team_access.access_token)
-        record_codex_running_stages(saved_task, team_access)
-        return saved_task
+        return _resume_codex_task_and_save(
+            task,
+            team_access,
+            settings,
+            token_budget=quota_token_budget(quota),
+            improvement_decision=payload.improvement_decision,
+        )
 
     if payload.resume_after_human:
         quota = _assert_quota_allows_action(team_access, action_name="Codex 继续运行")
@@ -410,8 +409,72 @@ def _codex_waiting_plan_approval(task: TaskRecord, progress: dict[str, object]) 
     return False
 
 
+def _codex_waiting_improvement_review(task: TaskRecord, progress: dict[str, object]) -> bool:
+    values = [
+        task.codex_status,
+        progress.get("status"),
+        progress.get("current_step"),
+    ]
+    if any(_status_value(value) in CODEX_IMPROVEMENT_REVIEW_STATUSES for value in values):
+        return True
+    steps = progress.get("steps")
+    if isinstance(steps, list):
+        for item in steps:
+            if not isinstance(item, dict):
+                continue
+            step_values = (item.get("id"), item.get("name"), item.get("status"))
+            if any(_status_value(value) in CODEX_IMPROVEMENT_REVIEW_STATUSES for value in step_values):
+                return True
+    return False
+
+
 def _status_value(value: object) -> str:
     return str(value.value if hasattr(value, "value") else value or "").strip().lower()
+
+
+def _resume_codex_task_and_save(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    settings: Settings,
+    *,
+    token_budget: int | None,
+    improvement_decision: str | None,
+) -> TaskRecord:
+    task_store = get_task_store()
+    if improvement_decision:
+        requests = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
+        if any(str(item.status.value if hasattr(item.status, "value") else item.status) in {"pending", "open"} for item in requests):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="There are open human confirmation requests.")
+    try:
+        response = resume_codex_task(
+            task,
+            settings,
+            token_budget=token_budget,
+            improvement_decision=improvement_decision,
+        )
+    except CodexBackendError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    write_codex_resume_progress(task)
+    task = clear_quota_guard(task)
+    task.codex_session_id = response.get("sessionId") or task.codex_session_id
+    task.codex_thread_id = response.get("threadId") or task.codex_thread_id
+    task.executor_type = "codex"
+    task.codex_status = "running"
+    task.codex_finished_at = None
+    task.status = TaskStatus.running
+    task.notes = _resume_note_for_improvement_decision(improvement_decision)
+    task = update_codex_structured_metadata(task)
+    saved_task = task_store.save_task(task, access_token=team_access.access_token)
+    record_codex_running_stages(saved_task, team_access)
+    return saved_task
+
+
+def _resume_note_for_improvement_decision(improvement_decision: str | None) -> str:
+    if improvement_decision == "continue_improvement":
+        return "Codex 已按用户选择继续执行改进方案。"
+    if improvement_decision == "stop_and_report":
+        return "Codex 已按用户选择停止继续改进，正在生成当前结果报告。"
+    return "Codex 已从暂停位置继续执行。"
 
 
 def _approve_codex_plan_and_save(

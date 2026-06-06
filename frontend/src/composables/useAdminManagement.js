@@ -35,6 +35,9 @@ const DEFAULT_MODEL_CONFIG = {
   config_toml: '',
   auth_path: '',
   config_path: '',
+  auth_configured: false,
+  auth_key_preview: '未配置',
+  api_key: '',
 }
 
 export function useAdminManagement() {
@@ -140,6 +143,9 @@ export function useAdminManagement() {
       config_toml: payload?.config_toml || '',
       auth_path: payload?.auth_path || '',
       config_path: payload?.config_path || '',
+      auth_configured: Boolean(payload?.auth_configured),
+      auth_key_preview: payload?.auth_key_preview || '未配置',
+      api_key: '',
     }
     setModelDisplayName(modelConfig.value.display_name)
   }

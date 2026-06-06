@@ -383,6 +383,7 @@ class TaskRunRequest(BaseModel):
     resume_after_human: bool = False
     resume_interrupted: bool = False
     regenerate_plan: bool = False
+    improvement_decision: Optional[Literal["continue_improvement", "stop_and_report"]] = None
     plan_text: Optional[str] = Field(default=None, max_length=200000)
 
 

@@ -20,6 +20,7 @@ import {
   getFeatureImportance,
   getHitl,
   getMetrics,
+  getMyTasks,
   getOperationCode,
   getReport,
   getTaskOverview,
@@ -64,6 +65,7 @@ const report = ref('')
 const code = ref('')
 const delivery = ref(null)
 const hitl = ref(null)
+const peerTasks = ref([])
 const codeValidation = ref(null)
 const activeTab = ref(validTabs.has(initialTab) ? initialTab : 'overview')
 const loading = ref(false)
@@ -94,7 +96,10 @@ const readOnlyMode = computed(() => Boolean(hasAnotherActiveTask.value))
 const isFinished = computed(() => isFinishedTaskStatus(task.value?.status))
 const isRuntimeActive = computed(() => runtimeActiveStatuses.has(task.value?.status))
 const canControlTask = computed(() => !readOnlyMode.value && !isFinished.value)
-const showRealtime = computed(() => isCurrentActiveTask.value && !isFinished.value && isRuntimeActive.value)
+const isLiveCodexRun = computed(() => isCurrentActiveTask.value && !isFinished.value && isRuntimeActive.value)
+const hasCodexSession = computed(() => Boolean(taskRun.value?.codex?.session_id || task.value?.codex_session_id))
+const hasCodexSnapshotSteps = computed(() => Array.isArray(taskRun.value?.codex?.steps) && taskRun.value.codex.steps.length > 0)
+const showRealtime = computed(() => isLiveCodexRun.value || hasCodexSession.value || hasCodexSnapshotSteps.value)
 const pausable = computed(() => isCurrentActiveTask.value && task.value?.status === 'running')
 const waitingStep = computed(() => firstWaitingHumanStep(steps.value))
 const isWaitingHuman = computed(() => hasPendingHumanConfirmation(task.value, taskRun.value, steps.value))
@@ -107,6 +112,75 @@ const runActionLabel = computed(() => (startableStatuses.has(task.value?.status)
 const canHandleHitl = computed(() => canControlTask.value && isWaitingHuman.value)
 const canEditCode = computed(() => !readOnlyMode.value)
 const llmUsageText = computed(() => formatTokenCount(task.value?.llm_usage?.total_tokens))
+const codexRunStrategy = computed(() => taskRun.value?.codex?.run_strategy || null)
+const strategyExecutionLimits = computed(() => codexRunStrategy.value?.execution_limits || {})
+const strategyOverview = computed(() => {
+  const strategy = codexRunStrategy.value
+  if (!strategy || typeof strategy !== 'object') return null
+  const limits = strategy.execution_limits || {}
+  return {
+    id: strategy.strategy_id || '',
+    label: strategyLabel(strategy.strategy_id),
+    reason: strategy.decision_reason || '当前策略文件没有提供选择原因。',
+    items: [
+      { label: '候选模型数', value: valueOrDash(limits.candidate_model_count) },
+      { label: 'Subagents', value: limits.allow_subagents ? '允许' : '不启用' },
+      { label: '调参深度', value: searchDepthLabel(limits.hyperparameter_search) },
+      { label: '报告深度', value: reportDepthLabel(limits.report_depth) },
+      { label: '自动改进轮数', value: valueOrDash(limits.max_auto_improvement_rounds) },
+      { label: '顾问触发轮数', value: valueOrDash(limits.advisor_after_failed_rounds) },
+    ],
+  }
+})
+const codexTokenUsage = computed(() => (
+  normalizeTokenUsage(taskRun.value?.codex?.token_usage)
+  || normalizeTokenUsage(task.value?.llm_usage)
+  || null
+))
+const tokenObservability = computed(() => {
+  const usage = codexTokenUsage.value || {}
+  const totalTokens = Number(usage.total_tokens || 0)
+  const limits = strategyExecutionLimits.value
+  const reasons = []
+  if (!totalTokens) reasons.push('当前任务还没有真实 token 用量记录。')
+  if (limits.allow_subagents || (Array.isArray(limits.planned_subagents) && limits.planned_subagents.length)) reasons.push('策略允许 subagents，会增加独立上下文、工具调用和汇总成本。')
+  if (Number(limits.candidate_model_count || 0) > 3) reasons.push('候选模型数量较多，模型比较和结果解释会增加消耗。')
+  if (Number(limits.max_auto_improvement_rounds || 0) > 1) reasons.push('允许多轮自动改进，失败诊断和重试会增加消耗。')
+  if (limits.report_depth === 'detailed') reasons.push('报告深度为 detailed，最终报告和诊断说明会更长。')
+  if (taskRun.value?.codex?.thread_id) reasons.push('Codex thread 会累计历史上下文，新轮恢复会读取已有计划和产物。')
+  if (totalTokens && !reasons.length) reasons.push('当前策略边界较轻，主要消耗来自计划、执行日志和最终报告。')
+  return {
+    totalText: formatTokenCount(totalTokens),
+    inputText: formatTokenCount(usage.input_tokens),
+    outputText: formatTokenCount(usage.output_tokens),
+    reasons,
+    comparison: tokenComparison.value,
+  }
+})
+const tokenComparison = computed(() => {
+  const currentTotal = Number((codexTokenUsage.value || {}).total_tokens || 0)
+  const related = peerTasks.value
+    .filter((item) => item.id !== props.taskId)
+    .filter((item) => sameComparableTask(item, task.value))
+    .map((item) => Number(item.llm_usage?.total_tokens || 0))
+    .filter((value) => value > 0)
+  if (!currentTotal || !related.length) {
+    return {
+      available: false,
+      text: '暂无可比较的历史同类任务 token 记录。',
+    }
+  }
+  const average = Math.round(related.reduce((sum, value) => sum + value, 0) / related.length)
+  const diffRatio = average > 0 ? (currentTotal - average) / average : 0
+  const direction = diffRatio > 0.08 ? '高于' : diffRatio < -0.08 ? '低于' : '接近'
+  return {
+    available: true,
+    text: `当前 ${formatTokenCount(currentTotal)}，历史同类均值 ${formatTokenCount(average)}，${direction}均值。`,
+    current: currentTotal,
+    average,
+    sample_count: related.length,
+  }
+})
 const taskFlowStep = computed(() => {
   if (task.value?.status === 'completed') return 4
   if (['running', 'waiting_human', 'paused_for_review', 'failed', 'cancelled'].includes(task.value?.status)) return 3
@@ -144,6 +218,7 @@ const codexStream = createCodexRealtimeStream({
   getTaskId: () => props.taskId,
   getSnapshotCodex: () => taskRun.value?.codex,
   isFinished: () => isFinished.value,
+  allowFinishedReplay: true,
   onMessage: (payload) => {
     if (['token_usage_updated', 'task_completed', 'quota_exhausted'].includes(payload.type)) {
       scheduleSnapshotRefresh()
@@ -202,6 +277,7 @@ async function load() {
   try {
     const currentActiveTask = await optionalLoad(() => getActiveTask())
     activeTaskId.value = taskIdOf(currentActiveTask)
+    peerTasks.value = await optionalLoad(() => getMyTasks(), peerTasks.value)
     const detail = await getTaskRuntimeSnapshot(props.taskId)
     task.value = detail.task || detail
     taskRun.value = detail.task_run || null
@@ -225,6 +301,68 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function strategyLabel(value) {
+  return {
+    light_tabular: '轻量表格建模',
+    standard_tabular: '标准表格建模',
+    deep_tabular: '深度表格建模',
+    custom_research: '自定义研究流程',
+  }[value] || value || '未生成策略'
+}
+
+function searchDepthLabel(value) {
+  return {
+    none: '不调参',
+    small: '小范围',
+    bounded: '有边界',
+    deep: '较深入',
+  }[value] || valueOrDash(value)
+}
+
+function reportDepthLabel(value) {
+  return {
+    brief: '简短',
+    standard: '标准',
+    detailed: '详细',
+  }[value] || valueOrDash(value)
+}
+
+function valueOrDash(value) {
+  if (value === null || value === undefined || value === '') return '-'
+  return String(value)
+}
+
+function sameComparableTask(candidate, current) {
+  if (!candidate || !current) return false
+  const candidateDataset = candidate.dataset_filename || candidate.dataset_name || ''
+  const currentDataset = current.dataset_filename || current.dataset_name || ''
+  if (candidateDataset && currentDataset && candidateDataset === currentDataset) return true
+  const candidateType = candidate.task_type || candidate.problem_type || ''
+  const currentType = current.task_type || current.problem_type || ''
+  return Boolean(candidateType && currentType && candidateType === currentType)
+}
+
+function normalizeTokenUsage(value) {
+  if (!value || typeof value !== 'object') return null
+  const total = value.total && typeof value.total === 'object' ? value.total : value
+  const inputTokens = numberValue(total.total_input_tokens ?? total.input_tokens ?? total.inputTokens)
+  const outputTokens = numberValue(total.total_output_tokens ?? total.output_tokens ?? total.outputTokens)
+  const explicitTotal = numberValue(total.total_tokens ?? total.totalTokens)
+  const totalTokens = explicitTotal || inputTokens + outputTokens
+  if (!totalTokens) return null
+  return {
+    ...value,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+  }
+}
+
+function numberValue(value) {
+  const numeric = Number(value || 0)
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0
 }
 
 async function refreshRuntimeSnapshot() {
@@ -483,7 +621,7 @@ function closeStream() {
 }
 
 function scheduleSnapshotRefresh() {
-  if (!showRealtime.value) return
+  if (!isLiveCodexRun.value) return
   if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer)
   snapshotRefreshTimer = window.setTimeout(() => {
     refreshRuntimeSnapshot().catch(() => {})
@@ -551,7 +689,7 @@ onUnmounted(() => {
   <p v-if="error" class="form-error">{{ error }}</p>
   <p v-if="message" class="form-success">{{ message }}</p>
   <p v-if="readOnlyMode" class="form-warning">
-    当前有任务 {{ activeTaskId }} 正在进行；此历史任务以只读方式打开，不会连接实时运行或触发执行动作。
+    当前有任务 {{ activeTaskId }} 正在进行；此任务以只读方式打开，不会触发执行动作，历史运行记录仍可查看。
   </p>
 
   <LoadingBlock v-if="loading" />
@@ -602,6 +740,8 @@ onUnmounted(() => {
     :explanation-text="explanationText"
     :show-realtime="showRealtime"
     :codex-realtime="codexRealtime"
+    :strategy-overview="strategyOverview"
+    :token-observability="tokenObservability"
   />
 
   <section v-else-if="activeTab === 'report'" class="panel readable">

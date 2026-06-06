@@ -241,6 +241,7 @@ export async function rerunTask(taskId, adjustments, options = {}) {
       resume_after_human: Boolean(options.resume_after_human),
       resume_interrupted: Boolean(options.resume_interrupted),
       regenerate_plan: Boolean(options.regenerate_plan),
+      improvement_decision: options.improvement_decision || null,
       plan_text: options.plan_text || null,
     }),
   })

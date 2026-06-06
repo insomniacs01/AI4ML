@@ -14,7 +14,7 @@ export async function updateModelConfig(payload) {
     method: 'PUT',
     body: JSON.stringify({
       display_name: payload.display_name,
-      auth_json: payload.auth_json,
+      api_key: payload.api_key || '',
       config_toml: payload.config_toml,
     }),
   })

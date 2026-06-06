@@ -24,6 +24,13 @@ from backend.app.services.task_artifacts import (
 from backend.app.services.task_workflow_tracking import _record_stage_selection_map
 
 
+CODEX_IMPROVEMENT_REVIEW_STATUSES = {
+    "waiting_improvement_review",
+    "improvement_review",
+    "waiting_improvement_approval",
+}
+
+
 def update_codex_structured_metadata(task: TaskRecord) -> TaskRecord:
     structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
     codex = structured.get("codex") if isinstance(structured.get("codex"), dict) else {}
@@ -205,8 +212,18 @@ def record_user_paused_stages(task: TaskRecord, team_access: TeamAccessContext) 
 def record_codex_status_stages(task: TaskRecord, team_access: TeamAccessContext, artifacts: dict) -> None:
     workspace_path = codex_stage_workspace_path(task)
     plan_path = codex_workspace_plan_path(task, get_settings())
+    improvement_plan_path = codex_workspace_improvement_plan_path(task, artifacts)
     if is_human_waiting_task(task) and task.codex_status == "interrupted":
         record_user_paused_stages(task, team_access)
+        return
+    if is_human_waiting_task(task) and has_codex_improvement_review(artifacts):
+        record_codex_improvement_gate_stages(
+            task,
+            team_access,
+            artifacts=artifacts,
+            workspace_path=workspace_path,
+            improvement_plan_path=improvement_plan_path,
+        )
         return
     if is_human_waiting_task(task):
         record_codex_plan_gate_stages(task, team_access, workspace_path=workspace_path, plan_path=plan_path)
@@ -217,6 +234,45 @@ def record_codex_status_stages(task: TaskRecord, team_access: TeamAccessContext,
 
 def codex_stage_workspace_path(task: TaskRecord) -> str | None:
     return task.codex_workspace_path or (task.last_run_attempt.output_dir if task.last_run_attempt else None)
+
+
+def codex_workspace_improvement_plan_path(task: TaskRecord, artifacts: dict | None = None) -> str | None:
+    file_payload = artifacts.get("improvement_plan_file") if isinstance(artifacts, dict) else None
+    if isinstance(file_payload, dict) and file_payload.get("exists") and isinstance(file_payload.get("path"), str):
+        return file_payload["path"]
+    workspace_path = codex_stage_workspace_path(task)
+    if not workspace_path:
+        return None
+    plan_path = Path(workspace_path) / "output" / "improvement_plan.md"
+    return str(plan_path) if plan_path.is_file() else None
+
+
+def codex_improvement_plan_text(task: TaskRecord, artifacts: dict | None = None) -> str:
+    if isinstance(artifacts, dict) and isinstance(artifacts.get("improvement_plan"), str):
+        return artifacts["improvement_plan"]
+    plan_path = codex_workspace_improvement_plan_path(task, artifacts)
+    if not plan_path:
+        return ""
+    try:
+        return Path(plan_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def has_codex_improvement_review(artifacts: dict | None) -> bool:
+    if not isinstance(artifacts, dict):
+        return False
+    progress = artifacts.get("progress") if isinstance(artifacts.get("progress"), dict) else {}
+    status_values = {
+        str(progress.get("status") or "").strip().lower(),
+        str(progress.get("current_step") or "").strip().lower(),
+    }
+    file_payload = artifacts.get("improvement_plan_file") if isinstance(artifacts.get("improvement_plan_file"), dict) else {}
+    return bool(
+        status_values & CODEX_IMPROVEMENT_REVIEW_STATUSES
+        or isinstance(artifacts.get("improvement_plan"), str) and artifacts["improvement_plan"].strip()
+        or file_payload.get("exists")
+    )
 
 
 def is_human_waiting_task(task: TaskRecord) -> bool:
@@ -253,6 +309,47 @@ def record_codex_plan_gate_stages(
                 WorkflowStage.report_generation: "等待最终报告。",
             },
             artifact_refs=[path for path in [workspace_path, plan_path] if path],
+        )
+    except ConnectionError:
+        return
+
+
+def record_codex_improvement_gate_stages(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    *,
+    artifacts: dict,
+    workspace_path: str | None,
+    improvement_plan_path: str | None,
+) -> None:
+    try:
+        ensure_codex_improvement_request(
+            task,
+            team_access,
+            artifacts=artifacts,
+            improvement_plan_path=improvement_plan_path,
+        )
+        _record_stage_selection_map(
+            task,
+            team_access,
+            stage_selection_map={},
+            status_by_stage={
+                WorkflowStage.requirement_analysis: WorkflowStageStatus.completed,
+                WorkflowStage.data_analysis: WorkflowStageStatus.completed,
+                WorkflowStage.feature_engineering: WorkflowStageStatus.completed,
+                WorkflowStage.model_selection: WorkflowStageStatus.completed,
+                WorkflowStage.training_validation: WorkflowStageStatus.waiting_human,
+                WorkflowStage.report_generation: WorkflowStageStatus.pending,
+            },
+            summary_by_stage={
+                WorkflowStage.requirement_analysis: "任务和数据已提交给 Codex。",
+                WorkflowStage.data_analysis: "Codex 已完成数据理解和计划确认。",
+                WorkflowStage.feature_engineering: "Codex 已完成当前策略内的数据处理或核心分析。",
+                WorkflowStage.model_selection: "Codex 已完成当前策略内的候选模型或方法比较。",
+                WorkflowStage.training_validation: "当前结果未满足验收规则，等待用户选择继续改进或停止并生成报告。",
+                WorkflowStage.report_generation: "等待用户确认后生成最终报告。",
+            },
+            artifact_refs=[path for path in [workspace_path, improvement_plan_path] if path],
         )
     except ConnectionError:
         return
@@ -332,3 +429,78 @@ def ensure_codex_plan_request(
     )
     request.status = HumanInteractionRequestStatus.open
     task_store.update_human_request(request, access_token=team_access.access_token)
+
+
+def ensure_codex_improvement_request(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    *,
+    artifacts: dict | None = None,
+    improvement_plan_path: str | None = None,
+) -> None:
+    task_store = get_task_store()
+    if improvement_plan_path is None:
+        improvement_plan_path = codex_workspace_improvement_plan_path(task, artifacts)
+    improvement_plan_text = codex_improvement_plan_text(task, artifacts)
+    if not improvement_plan_path and not improvement_plan_text.strip():
+        return
+
+    existing = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
+    version_id = _codex_improvement_review_version_id(improvement_plan_path)
+    for request in existing:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        status_value = str(request.status.value if hasattr(request.status, "value") else request.status)
+        if payload.get("request_type") != "codex_improvement_review":
+            continue
+        if status_value in {"pending", "open"}:
+            return
+        if request.version_id == version_id and status_value in {
+            HumanInteractionRequestStatus.confirmed.value,
+            HumanInteractionRequestStatus.skipped.value,
+            HumanInteractionRequestStatus.modified.value,
+            HumanInteractionRequestStatus.rejected.value,
+            HumanInteractionRequestStatus.resolved.value,
+        }:
+            return
+
+    request_payload = {
+        "request_type": "codex_improvement_review",
+        "title": "确认是否继续改进",
+        "summary": "Codex 已写入 output/improvement_plan.md。当前结果未满足验收或继续改进需要人工确认。",
+        "suggested_action": "选择继续改进，或停止改进并直接生成当前结果报告。",
+        "improvement_plan_text": improvement_plan_text,
+        "artifact_paths": [path for path in [improvement_plan_path, task.codex_workspace_path] if path],
+        "checkpoint_mode": "codex_improvement_gate",
+        "options": [
+            {"id": "continue_improvement", "label": "继续改进"},
+            {"id": "stop_and_report", "label": "停止并生成报告"},
+        ],
+    }
+    advisor_diagnosis = artifacts.get("advisor_diagnosis") if isinstance(artifacts, dict) else None
+    if isinstance(advisor_diagnosis, dict):
+        request_payload["advisor_diagnosis"] = advisor_diagnosis
+
+    request = task_store.create_human_request(
+        team_id=task.team_id,
+        task_id=task.id,
+        stage=WorkflowStage.training_validation,
+        requested_by=team_access.user.id,
+        assigned_to=team_access.user.id,
+        assignee_type="member",
+        assignee_value=team_access.user.id,
+        version_id=version_id,
+        payload=request_payload,
+        access_token=team_access.access_token,
+    )
+    request.status = HumanInteractionRequestStatus.open
+    task_store.update_human_request(request, access_token=team_access.access_token)
+
+
+def _codex_improvement_review_version_id(improvement_plan_path: str | None) -> str:
+    if not improvement_plan_path:
+        return "codex-improvement-review"
+    try:
+        fingerprint = Path(improvement_plan_path).stat().st_mtime_ns
+    except OSError:
+        fingerprint = abs(hash(improvement_plan_path))
+    return f"codex-improvement-review:{fingerprint}"

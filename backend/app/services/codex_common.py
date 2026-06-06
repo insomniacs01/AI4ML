@@ -10,7 +10,11 @@ from backend.app.models.task import TaskStatus
 
 
 CODEX_ACTIVE_STATUSES = {"running", "in_progress", "executing"}
-CODEX_WAITING_STATUSES = {"waiting_plan_approval", "plan_ready"}
+CODEX_WAITING_STATUSES = {
+    "waiting_plan_approval",
+    "plan_ready",
+    "waiting_improvement_review",
+}
 CODEX_FAILED_STATUSES = {"failed", "error", "interrupted"}
 
 

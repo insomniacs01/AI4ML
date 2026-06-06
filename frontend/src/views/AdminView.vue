@@ -248,28 +248,24 @@ const {
 
     <section v-else-if="activeSection === 'model' && isSystemAdmin" class="panel model-config-panel">
       <div class="panel-title"><span>模型配置</span></div>
-      <p class="muted">这里直接管理本机模型运行配置。保存后会写入配置文件，并让空闲运行会话重新加载。</p>
       <div class="model-config-grid">
         <label class="field model-name-field">
           <span>前端显示名称</span>
           <input v-model="modelConfig.display_name" maxlength="48" placeholder="例如：deepseek、课程助教模型" />
         </label>
-        <label class="field config-file-field">
-          <span>auth.json 路径</span>
-          <input :value="modelConfig.auth_path" readonly />
-        </label>
-        <label class="field config-file-field">
-          <span>config.toml 路径</span>
-          <input :value="modelConfig.config_path" readonly />
+        <label class="field">
+          <span>API Key</span>
+          <input
+            v-model="modelConfig.api_key"
+            autocomplete="new-password"
+            placeholder="留空则不修改"
+            type="password"
+          />
         </label>
       </div>
-      <div class="model-config-editors">
+      <div class="model-config-editors model-config-editors-single">
         <label class="field">
-          <span>auth.json</span>
-          <textarea v-model="modelConfig.auth_json" class="config-textarea" rows="12" spellcheck="false"></textarea>
-        </label>
-        <label class="field">
-          <span>config.toml</span>
+          <span>高级配置</span>
           <textarea v-model="modelConfig.config_toml" class="config-textarea" rows="16" spellcheck="false"></textarea>
         </label>
       </div>

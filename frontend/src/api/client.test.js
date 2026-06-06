@@ -11,6 +11,7 @@ import {
   publishPrompt,
   submitHitl,
   updateUser,
+  updateModelConfig,
 } from './client'
 import { supabase } from '@/lib/supabase'
 
@@ -322,6 +323,47 @@ describe('api client compatibility helpers', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
+  it('submits Codex improvement decisions and resumes with the selected decision', async () => {
+    localStorage.setItem('ai4ml-active-team-id', 'team-1')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const text = String(url)
+      if (text.endsWith('/api/teams/team-1/tasks/task-1/human-collaboration')) {
+        return jsonResponse({
+          task: baseTask({ status: 'paused_for_review' }),
+          open_request_count: 1,
+          requests: [{
+            id: 'request-2',
+            status: 'open',
+            stage: 'training_validation',
+            payload: { request_type: 'codex_improvement_review' },
+          }],
+        })
+      }
+      if (text.endsWith('/api/teams/team-1/tasks/task-1/human-requests/request-2/decision')) {
+        const body = JSON.parse(String(options?.body || '{}'))
+        expect(body.action).toBe('skip')
+        expect(body.details.improvement_decision).toBe('stop_and_report')
+        return jsonResponse({
+          task: baseTask({ status: 'paused_for_review' }),
+          open_request_count: 0,
+        })
+      }
+      if (text.endsWith('/api/teams/team-1/tasks/task-1/run')) {
+        const body = JSON.parse(String(options?.body || '{}'))
+        expect(body.resume_interrupted).toBe(true)
+        expect(body.improvement_decision).toBe('stop_and_report')
+        return jsonResponse(baseTask({ status: 'running' }))
+      }
+      throw new Error(`unexpected fetch: ${text}`)
+    })
+
+    const result = await submitHitl('task-1', { action: 'stop_and_report', adjustments: {} })
+
+    expect(result.status).toBe('running')
+    expect(result.continued_run).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('publishes task prompts with the prompt asset type', async () => {
     localStorage.setItem('ai4ml-active-team-id', 'team-1')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
@@ -399,6 +441,40 @@ describe('api client compatibility helpers', () => {
       original_quota_status: 'exhausted',
       warning_threshold: 0,
       original_warning_threshold: 0,
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('updates model config without sending returned auth json', async () => {
+    localStorage.setItem('ai4ml-active-team-id', 'team-1')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const text = String(url)
+      if (text.endsWith('/api/teams/team-1/model-config')) {
+        const body = JSON.parse(String(options?.body || '{}'))
+        expect(body).toEqual({
+          display_name: 'AIOUR',
+          api_key: '',
+          config_toml: 'model = "gpt-5"\n',
+        })
+        return jsonResponse({
+          display_name: 'AIOUR',
+          auth_json: '',
+          config_toml: 'model = "gpt-5"\n',
+          auth_path: 'auth.json',
+          config_path: 'config.toml',
+          auth_configured: true,
+          auth_key_preview: '已配置（末尾 1234）',
+        })
+      }
+      throw new Error(`unexpected fetch: ${text}`)
+    })
+
+    await updateModelConfig({
+      display_name: 'AIOUR',
+      auth_json: '{"OPENAI_API_KEY":"should-not-send"}',
+      api_key: '',
+      config_toml: 'model = "gpt-5"\n',
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)

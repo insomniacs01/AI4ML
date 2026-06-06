@@ -24,6 +24,10 @@ class CodexWorkspaceReader:
         if workspace is None:
             return {"workspace": None}
         output_dir = workspace / "output"
+        run_strategy_path = output_dir / "run_strategy.json"
+        improvement_plan_path = output_dir / "improvement_plan.md"
+        advisor_request_path = output_dir / "advisor_request.json"
+        advisor_diagnosis_path = output_dir / "advisor_diagnosis.json"
         return {
             "workspace": {
                 "name": workspace.name,
@@ -31,10 +35,31 @@ class CodexWorkspaceReader:
                 "modifiedAt": iso_from_mtime(workspace),
             },
             "plan": read_text(output_dir / "plan.md"),
+            "run_strategy": read_json(run_strategy_path),
             "progress": read_json(output_dir / "progress.json"),
             "metrics": read_json(output_dir / "metrics.json"),
             "overview": read_json(output_dir / "overview.json"),
             "token_usage": read_json(output_dir / "token_usage.json"),
+            "improvement_plan": read_text(improvement_plan_path),
+            "advisor_request": read_json(advisor_request_path),
+            "advisor_diagnosis": read_json(advisor_diagnosis_path),
+            "run_strategy_file": {
+                "path": str(run_strategy_path),
+                "exists": run_strategy_path.is_file(),
+            },
+            "improvement_plan_file": {
+                "path": str(improvement_plan_path),
+                "exists": improvement_plan_path.is_file(),
+                "modifiedAt": iso_from_mtime(improvement_plan_path) if improvement_plan_path.is_file() else None,
+            },
+            "advisor_request_file": {
+                "path": str(advisor_request_path),
+                "exists": advisor_request_path.is_file(),
+            },
+            "advisor_diagnosis_file": {
+                "path": str(advisor_diagnosis_path),
+                "exists": advisor_diagnosis_path.is_file(),
+            },
             "overview_file": {
                 "path": str(output_dir / "overview.json"),
                 "exists": (output_dir / "overview.json").is_file(),

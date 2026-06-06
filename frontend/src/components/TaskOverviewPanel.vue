@@ -21,6 +21,8 @@ defineProps({
   explanationText: { type: String, required: true },
   showRealtime: { type: Boolean, default: false },
   codexRealtime: { type: Object, default: () => ({ events: [], status: 'idle', activity: '' }) },
+  strategyOverview: { type: Object, default: null },
+  tokenObservability: { type: Object, default: null },
 })
 
 function isLongText(value, limit = 72) {
@@ -89,6 +91,49 @@ function isLongText(value, limit = 72) {
           <summary>展开完整建议</summary>
           <p>{{ overviewRecommendation }}</p>
         </details>
+      </article>
+    </div>
+
+    <div v-if="strategyOverview || tokenObservability" class="overview-observability-grid">
+      <article v-if="strategyOverview" class="panel overview-strategy-panel">
+        <div class="overview-panel-head stacked">
+          <h3>执行策略</h3>
+          <p>{{ strategyOverview.reason }}</p>
+        </div>
+        <div class="strategy-title-row">
+          <strong>{{ strategyOverview.label }}</strong>
+          <span>{{ strategyOverview.id || 'strategy' }}</span>
+        </div>
+        <div class="strategy-limit-grid">
+          <div v-for="item in strategyOverview.items" :key="item.label">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
+        </div>
+      </article>
+
+      <article v-if="tokenObservability" class="panel overview-token-panel">
+        <div class="overview-panel-head stacked">
+          <h3>Token 观察</h3>
+          <p>{{ tokenObservability.comparison?.text || '暂无历史对比。' }}</p>
+        </div>
+        <div class="token-usage-row">
+          <div>
+            <span>总量</span>
+            <strong>{{ tokenObservability.totalText }}</strong>
+          </div>
+          <div>
+            <span>输入</span>
+            <strong>{{ tokenObservability.inputText }}</strong>
+          </div>
+          <div>
+            <span>输出</span>
+            <strong>{{ tokenObservability.outputText }}</strong>
+          </div>
+        </div>
+        <ul class="token-reason-list">
+          <li v-for="item in tokenObservability.reasons" :key="item">{{ item }}</li>
+        </ul>
       </article>
     </div>
 

@@ -49,35 +49,46 @@ export async function submitHitl(taskId, payload) {
   const requestRecord = (snapshot.my_requests || snapshot.requests || []).find((item) => ['pending', 'open'].includes(item.status))
     || snapshot.requests?.find((item) => ['pending', 'open'].includes(item.status))
   if (!requestRecord?.id) throw new Error('There is no open human confirmation request.')
-  const actionMap = { verify: 'approve', retry: 'revise', reject: 'reject' }
+  const actionMap = {
+    verify: 'approve',
+    retry: 'revise',
+    reject: 'reject',
+    continue_improvement: 'approve',
+    stop_and_report: 'skip',
+  }
   const action = actionMap[payload.action] || payload.action || 'approve'
+  const improvementDecision = ['continue_improvement', 'stop_and_report'].includes(payload.action) ? payload.action : null
   const decision = await request(`/tasks/${taskId}/human-requests/${requestRecord.id}/decision`, {
     method: 'POST',
     body: JSON.stringify({
       action,
-      decision_summary: payload.action === 'retry' ? 'Applied human adjustments and will continue.' : payload.action === 'reject' ? 'Human rejected continuing the task.' : 'Human confirmed continuing the task.',
+      decision_summary: decisionSummaryForAction(payload.action),
       artifact_paths: [],
       resume_task: payload.action !== 'reject',
       details: {
         parameters: payload.adjustments || {},
+        improvement_decision: improvementDecision,
         source: 'vue_frontend_adapter',
       },
     }),
   })
   const isCodexPlanApproval = requestRecord?.payload?.request_type === 'codex_plan_approval'
+  const isCodexImprovementReview = requestRecord?.payload?.request_type === 'codex_improvement_review'
   const shouldContinueRun = (
     payload.action !== 'reject'
     && action !== 'reject'
     && decision.open_request_count === 0
     && decision.task?.id
-    && (isCodexPlanApproval || !['paused_for_review', 'waiting_human'].includes(decision.task.status))
+    && (isCodexPlanApproval || isCodexImprovementReview || !['paused_for_review', 'waiting_human'].includes(decision.task.status))
   )
   if (shouldContinueRun) {
     const runTask = await request(`/tasks/${taskId}/run`, {
       method: 'POST',
       body: JSON.stringify({
-        resume_after_human: isCodexPlanApproval ? action === 'approve' : action !== 'revise',
+        resume_after_human: isCodexImprovementReview ? false : isCodexPlanApproval ? action === 'approve' : action !== 'revise',
+        resume_interrupted: isCodexImprovementReview,
         regenerate_plan: isCodexPlanApproval ? action === 'revise' : false,
+        improvement_decision: isCodexImprovementReview ? improvementDecision : null,
         plan_text: isCodexPlanApproval && action === 'approve' ? payload.plan_text || null : null,
       }),
     })
@@ -88,4 +99,12 @@ export async function submitHitl(taskId, payload) {
     }
   }
   return { status: mapStatus(decision.task?.status), task: mapTask(decision.task), continued_run: false }
+}
+
+function decisionSummaryForAction(action) {
+  if (action === 'retry') return 'Applied human adjustments and will continue.'
+  if (action === 'reject') return 'Human rejected continuing the task.'
+  if (action === 'continue_improvement') return 'Human confirmed continuing the improvement plan.'
+  if (action === 'stop_and_report') return 'Human chose to stop further improvement and generate the report.'
+  return 'Human confirmed continuing the task.'
 }

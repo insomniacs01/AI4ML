@@ -418,9 +418,13 @@ async function readOptionalJson(filePath) {
 
 async function readAi4mlWorkspaceArtifacts(workspaceRoot, workspace) {
   const planPath = path.join(workspace.path, 'output', 'plan.md');
+  const runStrategyPath = path.join(workspace.path, 'output', 'run_strategy.json');
   const progressPath = path.join(workspace.path, 'output', 'progress.json');
   const metricsPath = path.join(workspace.path, 'output', 'metrics.json');
   const tokenUsagePath = path.join(workspace.path, 'output', 'token_usage.json');
+  const improvementPlanPath = path.join(workspace.path, 'output', 'improvement_plan.md');
+  const advisorRequestPath = path.join(workspace.path, 'output', 'advisor_request.json');
+  const advisorDiagnosisPath = path.join(workspace.path, 'output', 'advisor_diagnosis.json');
   const reportPath = path.join(workspace.path, 'output', 'report.md');
   const predictPath = path.join(workspace.path, 'output', 'predict.py');
 
@@ -432,9 +436,13 @@ async function readAi4mlWorkspaceArtifacts(workspaceRoot, workspace) {
       modifiedAt: new Date(workspace.modifiedAtMs).toISOString()
     },
     plan: await readOptionalText(planPath),
+    runStrategy: await readOptionalJson(runStrategyPath),
     progress: await readOptionalJson(progressPath),
     metrics: await readOptionalJson(metricsPath),
     tokenUsage: await readOptionalJson(tokenUsagePath),
+    improvementPlan: await readOptionalText(improvementPlanPath),
+    advisorRequest: await readOptionalJson(advisorRequestPath),
+    advisorDiagnosis: await readOptionalJson(advisorDiagnosisPath),
     report: {
       path: reportPath,
       exists: Boolean(await readOptionalText(reportPath))

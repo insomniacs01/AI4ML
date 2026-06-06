@@ -1,5 +1,13 @@
 import path from 'node:path';
 
+const CODEX_INTERRUPTED_STATUSES = new Set(['interrupted']);
+const CODEX_IMPROVEMENT_REVIEW_STATUSES = new Set([
+  'waiting_improvement_review',
+  'improvement_review',
+  'waiting_improvement_approval'
+]);
+const IMPROVEMENT_DECISIONS = new Set(['continue_improvement', 'stop_and_report']);
+
 function trimmedString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -37,7 +45,8 @@ export function normalizeTaskThreadMessage(message = {}, activeTaskId) {
   return {
     taskId: optionalTrimmedString(message.taskId) || activeTaskId,
     threadId: optionalTrimmedString(message.threadId),
-    tokenBudget: normalizeTokenBudget(message.tokenBudget)
+    tokenBudget: normalizeTokenBudget(message.tokenBudget),
+    improvementDecision: normalizeImprovementDecision(message.improvementDecision)
   };
 }
 
@@ -55,6 +64,20 @@ export function resolveRequestedWorkspacePath(message = {}) {
 }
 
 export function resolveInterruptedResumeWorkspacePath(artifacts, requestedWorkspacePath) {
+  return resolveResumeWorkspacePath(artifacts, requestedWorkspacePath, CODEX_INTERRUPTED_STATUSES);
+}
+
+export function resolveTaskResumeWorkspacePath(artifacts, requestedWorkspacePath, options = {}) {
+  const allowedStatuses = new Set(CODEX_INTERRUPTED_STATUSES);
+  if (options.improvementDecision) {
+    for (const status of CODEX_IMPROVEMENT_REVIEW_STATUSES) {
+      allowedStatuses.add(status);
+    }
+  }
+  return resolveResumeWorkspacePath(artifacts, requestedWorkspacePath, allowedStatuses);
+}
+
+function resolveResumeWorkspacePath(artifacts, requestedWorkspacePath, allowedStatuses) {
   const resolvedWorkspacePath = requestedWorkspacePath || artifacts?.workspace?.path;
 
   if (!resolvedWorkspacePath) {
@@ -70,11 +93,16 @@ export function resolveInterruptedResumeWorkspacePath(artifacts, requestedWorksp
     : {};
   const status = typeof progress.status === 'string' ? progress.status : '';
 
-  if (status !== 'interrupted') {
-    throw new Error(`当前任务状态不是 interrupted，实际状态是 ${status || 'unknown'}。`);
+  if (!allowedStatuses.has(status)) {
+    throw new Error(`当前任务状态不是可恢复状态，实际状态是 ${status || 'unknown'}。`);
   }
 
   return resolvedWorkspacePath;
+}
+
+function normalizeImprovementDecision(value) {
+  const text = trimmedString(value);
+  return IMPROVEMENT_DECISIONS.has(text) ? text : undefined;
 }
 
 export function buildTaskStartEvents(input, options = {}) {

@@ -122,10 +122,15 @@ ${planText || ''}
 ${approvePrompt.trimStart()}`;
 }
 
-export async function buildAi4mlResumeTaskPrompt(workspacePath) {
+export async function buildAi4mlResumeTaskPrompt(workspacePath, options = {}) {
   const resumePrompt = await loadAi4mlResumeTaskPrompt();
+  const improvementDecision = typeof options.improvementDecision === 'string' && options.improvementDecision.trim()
+    ? options.improvementDecision.trim()
+    : 'none';
 
-  return resumePrompt.replaceAll('{workspace_path}', workspacePath);
+  return resumePrompt
+    .replaceAll('{workspace_path}', workspacePath)
+    .replaceAll('{improvement_decision}', improvementDecision);
 }
 
 async function loadTemplate(name) {

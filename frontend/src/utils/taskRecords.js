@@ -1,8 +1,12 @@
-export const WORKSPACE_TASK_STATUSES = new Set(['running'])
+export const WORKSPACE_TASK_STATUSES = new Set(['running', 'waiting_human', 'paused_for_review', 'planning', 'uploaded'])
 export const BLOCKING_RUNTIME_TASK_STATUSES = new Set(['running'])
 
 const WORKSPACE_TASK_PRIORITY = {
   running: 0,
+  waiting_human: 1,
+  paused_for_review: 2,
+  planning: 3,
+  uploaded: 4,
 }
 
 export function taskIdOf(task) {

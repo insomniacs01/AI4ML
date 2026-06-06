@@ -12,6 +12,7 @@ import {
   normalizeTaskThreadMessage,
   requireApprovedPlanText,
   resolveInterruptedResumeWorkspacePath,
+  resolveTaskResumeWorkspacePath,
   resolveRequestedWorkspacePath
 } from './web-session-task-commands.js';
 
@@ -63,7 +64,8 @@ test('normalizeTaskThreadMessage trims explicit task/thread ids and falls back t
   }, 'active-task'), {
     taskId: 'task-2',
     threadId: 'thread-2',
-    tokenBudget: 30
+    tokenBudget: 30,
+    improvementDecision: undefined
   });
 
   assert.deepEqual(normalizeTaskThreadMessage({
@@ -72,8 +74,16 @@ test('normalizeTaskThreadMessage trims explicit task/thread ids and falls back t
   }, 'active-task'), {
     taskId: 'active-task',
     threadId: undefined,
-    tokenBudget: undefined
+    tokenBudget: undefined,
+    improvementDecision: undefined
   });
+
+  assert.equal(
+    normalizeTaskThreadMessage({
+      improvementDecision: 'continue_improvement'
+    }, 'active-task').improvementDecision,
+    'continue_improvement'
+  );
 });
 
 test('evaluateTokenBudget interrupts when run consumption reaches the remaining budget', () => {
@@ -257,7 +267,7 @@ test('resolveInterruptedResumeWorkspacePath rejects missing, stale, and non-inte
       workspace: { path: path.resolve('D:\\workspace\\latest') },
       progress: { status: 'running' }
     }, undefined),
-    /当前任务状态不是 interrupted，实际状态是 running。/
+    /当前任务状态不是可恢复状态，实际状态是 running。/
   );
 
   assert.throws(
@@ -265,6 +275,23 @@ test('resolveInterruptedResumeWorkspacePath rejects missing, stale, and non-inte
       workspace: { path: path.resolve('D:\\workspace\\latest') },
       progress: {}
     }, undefined),
-    /当前任务状态不是 interrupted，实际状态是 unknown。/
+    /当前任务状态不是可恢复状态，实际状态是 unknown。/
+  );
+});
+
+test('resolveTaskResumeWorkspacePath accepts improvement review only with an improvement decision', () => {
+  const workspacePath = path.resolve('D:\\workspace\\ai4ml-2');
+  const artifacts = {
+    workspace: { path: workspacePath },
+    progress: { status: 'waiting_improvement_review' }
+  };
+
+  assert.equal(resolveTaskResumeWorkspacePath(artifacts, undefined, {
+    improvementDecision: 'stop_and_report'
+  }), workspacePath);
+
+  assert.throws(
+    () => resolveTaskResumeWorkspacePath(artifacts, undefined),
+    /当前任务状态不是可恢复状态，实际状态是 waiting_improvement_review。/
   );
 });

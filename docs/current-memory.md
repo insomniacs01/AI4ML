@@ -1,6 +1,6 @@
 # AI4ML Current Memory
 
-更新时间：2026-05-29
+更新时间：2026-06-06
 
 这份文档只记录当前仍然成立的项目事实。已经清理掉旧 React 主入口、MLZero/AutoGluon/AIDE 旧执行链路、模型/数据/工作流广场、业务/技术双报告、无效下载入口等过时记忆。后续代理应以本文件为准，不要再按旧章节恢复已删除的产品口径。
 
@@ -124,6 +124,26 @@ AI4ML 是一个团队协作式智能建模工作台。当前主线是：
 历史任务如果之前没有保存 `codex_thread_id`，第一次继续时仍会尽量根据 workspace 恢复；新任务开始会严格绑定独立 thread。
 
 ## 当前前端页面状态
+
+### 应用外壳和侧边导航
+
+`frontend/src/App.vue` 是登录后应用外壳入口，左侧侧边栏只保留当前主线入口：
+
+- 开始任务：`/create`
+- 工作台：`/workspace`
+- 我的任务：`/tasks`
+- 社区广场：`/community`
+
+当前导航使用 `lucide-vue-next` 图标，不再使用数字序号。侧边栏折叠状态由 `sidebarCollapsed` 控制，点击入口为显式 `toggleSidebar()`，不要恢复模板内直接写 `sidebarCollapsed = !sidebarCollapsed` 的口径。
+
+`frontend/src/styles.css` 当前侧边栏设计口径：
+
+- 桌面展开宽度为 `152px`，折叠宽度为 `56px`。
+- 导航行是轻量图标 + 文本，不再给每个图标做重背景小盒子。
+- 选中态使用浅色背景和左侧短指示条，避免重边框和阴影。
+- 窄屏下侧边栏变成顶部横向区域；手机宽度导航为 2x2 网格。
+
+不要把侧边栏恢复成旧的宽侧栏、数字步骤导航或“建模流程”标题。当前标签是“工作流”。
 
 ### 社区广场
 
@@ -284,6 +304,17 @@ select pg_notify('pgrst', 'reload schema');
 
 ## 近期验证状态
 
+2026-06-02 应用外壳侧边导航收窄和图标化调整后已验证并部署到华为云：
+
+- 本地 `cd frontend && npm test`：8 files / 38 tests passed。
+- 本地 `cd frontend && npm run build`：通过。
+- 本地用 Playwright CLI 做桌面展开态、折叠态和手机 390px 视觉检查；截图保存在 `output/playwright/sidebar-desktop.png`、`output/playwright/sidebar-collapsed.png`、`output/playwright/sidebar-mobile.png`。
+- 服务器 `/opt/ai4ml/app/frontend` 执行 `npm test`：8 files / 38 tests passed。
+- 服务器 `/opt/ai4ml/app/frontend` 执行 `npm run build`：通过。
+- 服务器执行 `nginx -t` 和 `systemctl reload nginx`：通过，`systemctl is-active nginx` 返回 `active`。
+- 公网首页 `http://116.63.15.143` 返回 HTTP 200，`/api/health` 返回 HTTP 200。
+- 部署前服务器备份目录：`/opt/ai4ml/deploy-backups/sidebar-nav-20260602131944`。
+
 2026-05-29 Linus 风格后端热点重构后已验证：
 
 - `python -m pytest backend\tests`：149 passed，1 个既有 FastAPI `HTTP_422_UNPROCESSABLE_ENTITY` deprecation warning。
@@ -313,7 +344,7 @@ select pg_notify('pgrst', 'reload schema');
 - 历史旧任务缺少 `token_usage.json` 时不能恢复真实 token。
 - 工作区或任务产物缺失时，不要补造报告、源码、指标或预测结果。
 - 当前工作区有大量用户既有修改和未跟踪文件，后续代理不能用 `git reset --hard` 或 `git checkout --` 回退未确认的内容。
-- 旧华为云部署信息没有在本轮重新验证，若要部署必须重新检查服务器状态和线上差异，不能把旧日期的部署记录当作当前事实。
+- 华为云部署最近一次重新验证时间是 2026-06-02。后续再次部署前仍必须重新检查服务器状态、线上差异、nginx 配置和健康检查，不能把旧日期的部署记录当作当前事实。
 - `storage/tasks` 可能仍保留历史旧任务数据，这不是当前源码链路残留；除非用户明确要求清历史数据，否则不要删除。
 
 ## 关键文件

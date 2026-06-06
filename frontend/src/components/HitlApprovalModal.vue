@@ -1,7 +1,8 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
-import { CheckCircle2, RefreshCw, X } from 'lucide-vue-next'
+import { CheckCircle2, FileText, RefreshCw, X } from 'lucide-vue-next'
 import { submitHitl } from '@/api/client'
+import { renderMarkdown } from '@/utils/markdown'
 import { modelDisplayName } from '@/utils/modelProfile'
 
 const props = defineProps({
@@ -16,6 +17,7 @@ const emit = defineEmits(['close', 'submitted'])
 
 const busy = ref(false)
 const error = ref('')
+const planViewMode = ref('preview')
 
 const requirementForm = reactive({
   requirement_notes: '',
@@ -44,11 +46,22 @@ const reportForm = reactive({
 const codexPlanForm = reactive({
   plan_text: '',
 })
+const improvementPlanForm = reactive({
+  plan_text: '',
+})
 
 const requestPayload = computed(() => props.hitl?.request || {})
 const isCodexPlanApproval = computed(() => requestPayload.value.request_type === 'codex_plan_approval')
+const isCodexImprovementReview = computed(() => requestPayload.value.request_type === 'codex_improvement_review')
 const stage = computed(() => normalizeStage(requestPayload.value.stage || props.hitl?.approval?.stage || 'training_validation'))
 const stageMeta = computed(() => {
+  if (isCodexImprovementReview.value) {
+    return {
+      title: '确认是否继续改进',
+      description: `${modelDisplayName.value} 已生成改进决策方案。请选择继续改进，或停止改进并直接生成当前结果报告。`,
+      defaultAction: '选择继续改进或停止并生成报告',
+    }
+  }
   if (isCodexPlanApproval.value) {
     return {
       title: `确认 ${modelDisplayName.value} 建模计划`,
@@ -96,6 +109,13 @@ const suggestedAction = computed(() => requestPayload.value.suggested_action || 
 const parameterDefaults = computed(() => requestPayload.value.parameters || requestPayload.value.details?.parameters || {})
 const riskNotes = computed(() => requestPayload.value.risk_notes || props.hitl?.risk_notes || [])
 const submittingDisabled = computed(() => busy.value || props.loading || Boolean(props.loadError))
+const renderedCodexPlan = computed(() => renderMarkdown(codexPlanForm.plan_text || `等待 ${modelDisplayName.value} 写入 output/plan.md`))
+const renderedImprovementPlan = computed(() => renderMarkdown(improvementPlanForm.plan_text || '等待 Codex 写入 output/improvement_plan.md'))
+const advisorSummary = computed(() => {
+  const diagnosis = requestPayload.value.advisor_diagnosis
+  if (!diagnosis || typeof diagnosis !== 'object') return ''
+  return diagnosis.summary || diagnosis.root_cause || diagnosis.recommendation || ''
+})
 
 function normalizeStage(value) {
   return {
@@ -129,10 +149,12 @@ function setIfChanged(result, key, value, baseline, cast = null) {
 
 function resetForms() {
   error.value = ''
+  planViewMode.value = 'preview'
   const spec = props.hitl?.task_spec || requestPayload.value.task_spec || {}
   const plan = props.hitl?.train_plan || requestPayload.value.train_plan || {}
   const parameters = parameterDefaults.value
   codexPlanForm.plan_text = requestPayload.value.plan_text || requestPayload.value.details?.plan_text || ''
+  improvementPlanForm.plan_text = requestPayload.value.improvement_plan_text || requestPayload.value.details?.improvement_plan_text || ''
 
   requirementForm.requirement_notes = csvText(parameters.requirement_notes || parameters.notes)
   dataForm.label_column = parameters.label_column || spec.target_column || ''
@@ -154,6 +176,8 @@ function collectAdjustments() {
 
   if (isCodexPlanApproval.value) {
     setIfChanged(result, 'plan_text', codexPlanForm.plan_text, parameters)
+  } else if (isCodexImprovementReview.value) {
+    setIfChanged(result, 'improvement_plan_text', improvementPlanForm.plan_text, parameters)
   } else if (stage.value === 'requirement_analysis') {
     setIfChanged(result, 'requirement_notes', requirementForm.requirement_notes, parameters, 'csv')
   } else if (stage.value === 'data_analysis') {
@@ -226,15 +250,59 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
           <span>建议动作：{{ suggestedAction }}</span>
         </div>
 
-        <div v-if="!loading && isCodexPlanApproval" class="form-stack">
-          <label class="field">
-            <span>{{ modelDisplayName }} 建模计划</span>
+        <div v-if="!loading && isCodexImprovementReview" class="form-stack">
+          <div class="field plan-review-field">
+            <div class="plan-review-toolbar">
+              <span>改进决策方案</span>
+            </div>
+            <article
+              class="markdown-report plan-markdown-preview"
+              v-html="renderedImprovementPlan"
+            ></article>
+          </div>
+          <div v-if="advisorSummary" class="hitl-advisor-summary">
+            <strong>顾问诊断</strong>
+            <span>{{ advisorSummary }}</span>
+          </div>
+        </div>
+
+        <div v-else-if="!loading && isCodexPlanApproval" class="form-stack">
+          <div class="field plan-review-field">
+            <div class="plan-review-toolbar">
+              <span>{{ modelDisplayName }} 建模计划</span>
+              <div class="plan-view-tabs" role="tablist" aria-label="计划显示方式">
+                <button
+                  type="button"
+                  :class="{ active: planViewMode === 'preview' }"
+                  :aria-selected="planViewMode === 'preview'"
+                  role="tab"
+                  @click="planViewMode = 'preview'"
+                >
+                  预览
+                </button>
+                <button
+                  type="button"
+                  :class="{ active: planViewMode === 'edit' }"
+                  :aria-selected="planViewMode === 'edit'"
+                  role="tab"
+                  @click="planViewMode = 'edit'"
+                >
+                  编辑
+                </button>
+              </div>
+            </div>
+            <article
+              v-if="planViewMode === 'preview'"
+              class="markdown-report plan-markdown-preview"
+              v-html="renderedCodexPlan"
+            ></article>
             <textarea
+              v-else
               v-model="codexPlanForm.plan_text"
               rows="16"
               :placeholder="`等待 ${modelDisplayName} 写入 output/plan.md`"
             />
-          </label>
+          </div>
         </div>
 
         <div v-else-if="!loading && stage === 'requirement_analysis'" class="form-stack">
@@ -292,7 +360,19 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
           <span v-for="item in riskNotes.slice(0, 2)" :key="item">{{ item }}</span>
         </div>
 
-        <div v-if="!loading" class="modal-actions">
+        <div v-if="!loading && isCodexImprovementReview" class="modal-actions">
+          <button class="primary-action" type="button" :disabled="submittingDisabled" @click="submit('continue_improvement')">
+            <CheckCircle2 :size="17" />{{ busy ? '正在提交' : '继续改进' }}
+          </button>
+          <button class="secondary-action" type="button" :disabled="submittingDisabled" @click="submit('stop_and_report')">
+            <FileText :size="17" />停止并生成报告
+          </button>
+          <button class="danger-action" type="button" :disabled="submittingDisabled" @click="submit('reject')">
+            <X :size="17" />拒绝任务
+          </button>
+        </div>
+
+        <div v-else-if="!loading" class="modal-actions">
           <button class="primary-action" type="button" :disabled="submittingDisabled" @click="submit('verify')">
             <CheckCircle2 :size="17" />{{ busy ? '正在提交' : (isCodexPlanApproval ? '确认执行' : '确认继续') }}
           </button>

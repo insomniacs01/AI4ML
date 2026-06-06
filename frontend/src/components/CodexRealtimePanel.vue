@@ -32,11 +32,12 @@ const frameRef = ref(null)
 
 const visibleEvents = computed(() => props.events)
 const isBusy = computed(() => props.status === 'running' || (props.status !== 'snapshot' && props.activity?.status === 'busy'))
+const isHistoryView = computed(() => props.status === 'snapshot')
 const statusText = computed(() => {
   if (isBusy.value) return '运行中'
   if (props.status === 'connected') return '已连接'
   if (props.status === 'replaying') return '同步历史'
-  if (props.status === 'snapshot') return '历史进度'
+  if (props.status === 'snapshot') return '历史记录'
   if (props.status === 'idle') return '待连接'
   if (props.status === 'closed') return '连接已断开'
   if (props.status === 'error') return '连接异常'
@@ -52,9 +53,11 @@ const statusClass = computed(() => {
   return ''
 })
 const activityText = computed(() => {
-  if (props.status === 'snapshot') return `状态 · ${statusText.value}`
+  if (props.status === 'snapshot') return props.activity?.message || `状态 · ${statusText.value}`
   return props.activity?.message || `状态 · ${statusText.value}`
 })
+const eyebrowText = computed(() => (isHistoryView.value ? `${modelDisplayName.value} RUN LOG` : `${modelDisplayName.value} LIVE`))
+const headingText = computed(() => (isHistoryView.value ? `${modelDisplayName.value} 历史运行记录` : `${modelDisplayName.value} 实时运行`))
 
 const promptEvent = computed(() =>
   [...visibleEvents.value].reverse().find((event) => event.kind === 'prompt' || event.kind === 'input'),
@@ -82,13 +85,24 @@ const turnCompleted = computed(() =>
 )
 const hasWorkingContent = computed(() => Boolean(latestWorking.value || toolEvents.value.length))
 const hasAnyContent = computed(() =>
-  Boolean(promptText.value || assistantMessages.value.length || hasWorkingContent.value || usageEvent.value),
+  Boolean(promptText.value || milestoneEvents.value.length || assistantMessages.value.length || hasWorkingContent.value || usageEvent.value),
 )
 const workingTitle = computed(() => {
   if (isBusy.value) return 'Working'
   if (latestTurn.value?.raw?.durationMs) return `Worked for ${formatDuration(latestTurn.value.raw.durationMs)}`
   return 'Working'
 })
+const emptyTitle = computed(() => (isHistoryView.value ? `没有可回放的 ${modelDisplayName.value} 输出` : `等待 ${modelDisplayName.value} 输出`))
+const emptyDescription = computed(() => (
+  isHistoryView.value
+    ? '当前只找到步骤快照，未找到可展示的回复正文或工具输出。'
+    : `任务开始后，这里会显示提示词、Working 状态和 ${modelDisplayName.value} 回复。`
+))
+const noAssistantDescription = computed(() => (
+  isHistoryView.value
+    ? '当前历史记录没有可展示的回复正文；这里已显示步骤、Working 状态或工具事件。'
+    : `${modelDisplayName.value} 正在执行，回复内容会在生成后出现在这里。`
+))
 
 watch(
   () => props.events.length,
@@ -153,8 +167,8 @@ function toolMeta(event) {
   <section id="codex-realtime" class="panel codex-realtime-panel">
     <header class="codex-chat-head">
       <div>
-        <span class="eyebrow">{{ modelDisplayName }} LIVE</span>
-        <h2><Play :size="22" /> {{ modelDisplayName }} 实时运行</h2>
+        <span class="eyebrow">{{ eyebrowText }}</span>
+        <h2><Play :size="22" /> {{ headingText }}</h2>
         <p>{{ activityText }}</p>
       </div>
       <span class="codex-stream-status" :class="statusClass">{{ statusText }}</span>
@@ -220,13 +234,13 @@ function toolMeta(event) {
 
       <div v-if="!hasAnyContent" class="codex-chat-empty">
         <MessageSquare :size="24" />
-        <strong>等待 {{ modelDisplayName }} 输出</strong>
-        <span>任务开始后，这里会显示提示词、Working 状态和 {{ modelDisplayName }} 回复。</span>
+        <strong>{{ emptyTitle }}</strong>
+        <span>{{ emptyDescription }}</span>
       </div>
 
       <div v-if="!assistantMessages.length && hasAnyContent" class="codex-chat-note">
         <Settings2 :size="16" />
-        <span>{{ modelDisplayName }} 正在执行，回复内容会在生成后出现在这里。</span>
+        <span>{{ noAssistantDescription }}</span>
       </div>
 
       <div v-if="usageEvent" class="codex-chat-note done">

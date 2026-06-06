@@ -70,7 +70,13 @@ class CodexBackendClient:
             },
         )
 
-    def resume_task(self, task: TaskRecord, *, token_budget: int | None = None) -> dict[str, Any]:
+    def resume_task(
+        self,
+        task: TaskRecord,
+        *,
+        token_budget: int | None = None,
+        improvement_decision: str | None = None,
+    ) -> dict[str, Any]:
         if not task.codex_workspace_path:
             raise CodexBackendError("Codex workspace is missing; cannot resume interrupted task.")
         payload = {
@@ -79,6 +85,7 @@ class CodexBackendClient:
             "sessionId": task.codex_session_id,
             "threadId": task.codex_thread_id,
             "workspacePath": task.codex_workspace_path,
+            "improvementDecision": improvement_decision,
         }
         _apply_token_budget(payload, token_budget)
         return self.post_json("/api/ai4ml/tasks/resume", payload)

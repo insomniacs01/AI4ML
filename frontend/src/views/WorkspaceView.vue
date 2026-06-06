@@ -24,7 +24,7 @@ import { modelDisplayName } from '@/utils/modelProfile'
 import { taskProgressPercent } from '@/utils/progress'
 import { continueRunOptions } from '@/utils/taskRunControl'
 import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
-import { isFinishedTaskStatus, pickActiveTask, stepStatusLabel, taskIdOf } from '@/utils/taskRecords'
+import { WORKSPACE_TASK_STATUSES, isFinishedTaskStatus, pickActiveTask, stepStatusLabel, taskIdOf } from '@/utils/taskRecords'
 import {
   isWorkspaceRuntimeCacheFresh,
   readWorkspaceCache,
@@ -163,7 +163,7 @@ function persistWorkspaceCache() {
 function hydrateWorkspaceFromCache() {
   const cached = readWorkspaceCache(workspaceCacheContext())
   if (!cached) return false
-  if (!runtimeActiveStatuses.has(cached.task?.status)) return false
+  if (!WORKSPACE_TASK_STATUSES.has(cached.task?.status)) return false
   tasks.value = Array.isArray(cached.tasks) ? cached.tasks : []
   task.value = cached.task || null
   taskRun.value = cached.taskRun || null
@@ -274,7 +274,7 @@ async function loadTask(taskId, options = {}) {
         }
       : item
   ))
-  if (!runtimeActiveStatuses.has(freshTask?.status)) {
+  if (!WORKSPACE_TASK_STATUSES.has(freshTask?.status)) {
     clearActiveWorkspace()
     persistWorkspaceCache()
     return

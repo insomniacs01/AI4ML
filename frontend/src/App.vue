@@ -5,8 +5,12 @@ import {
   Bell,
   ArrowLeft,
   ArrowRight,
+  ClipboardList,
+  Compass,
   LogOut,
+  PlusCircle,
   Shield,
+  Workflow,
 } from 'lucide-vue-next'
 import {
   getCurrentUser,
@@ -57,10 +61,10 @@ const roleLabel = computed(() => {
   return map[user.value?.role] || '会话'
 })
 const sidebarNavItems = computed(() => [
-  { label: '开始任务', path: '/create' },
-  { label: '工作台', path: '/workspace' },
-  { label: '我的任务', path: '/tasks' },
-  { label: '社区广场', path: '/community' },
+  { label: '开始任务', path: '/create', icon: PlusCircle },
+  { label: '工作台', path: '/workspace', icon: Workflow },
+  { label: '我的任务', path: '/tasks', icon: ClipboardList },
+  { label: '社区广场', path: '/community', icon: Compass },
 ])
 
 function setUserFromSession(sessionUser) {
@@ -172,6 +176,10 @@ async function navigateTo(path) {
   } catch {
     window.location.assign(path)
   }
+}
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
 function closeNotificationStream() {
@@ -345,24 +353,26 @@ router.afterEach(refreshUser)
       <aside class="profile-sidebar">
         <div class="sidebar-head">
           <div class="sidebar-brand-mark">AI</div>
-          <strong class="sidebar-brand-text">AI4ML</strong>
+          <div class="sidebar-brand-text">
+            <strong>AI4ML</strong>
+          </div>
           <button
             class="sidebar-toggle"
             type="button"
             :aria-expanded="!sidebarCollapsed"
             :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
             :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
-            @click="sidebarCollapsed = !sidebarCollapsed"
+            @click="toggleSidebar"
           >
             <component :is="sidebarCollapsed ? ArrowRight : ArrowLeft" :size="17" />
           </button>
         </div>
 
-        <p class="sidebar-section-label">建模流程</p>
+        <p class="sidebar-section-label">工作流</p>
 
         <nav class="nav-stack">
           <button
-            v-for="(item, index) in sidebarNavItems"
+            v-for="item in sidebarNavItems"
             :key="item.path"
             type="button"
             class="nav-item"
@@ -371,7 +381,7 @@ router.afterEach(refreshUser)
             :title="item.label"
             @click="navigateTo(item.path)"
           >
-            <span class="nav-index">{{ index + 1 }}</span>
+            <span class="nav-icon"><component :is="item.icon" :size="18" /></span>
             <span class="nav-label">{{ item.label }}</span>
           </button>
         </nav>

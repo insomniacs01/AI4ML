@@ -22,6 +22,8 @@ class ModelConfigResponse(ModelProfileResponse):
     config_toml: str
     auth_path: str
     config_path: str
+    auth_configured: bool = False
+    auth_key_preview: str = "未配置"
     reload: dict[str, Any] | None = None
 
 
@@ -29,6 +31,7 @@ class ModelConfigUpdateRequest(BaseModel):
     display_name: str = Field(default="Codex", max_length=48)
     auth_json: str = ""
     config_toml: str = ""
+    api_key: str = ""
 
 
 @router.get("/profile", response_model=ModelProfileResponse)
@@ -54,8 +57,9 @@ def update_current_model_config(
         return save_model_config(
             get_settings(),
             display_name=payload.display_name,
-            auth_json=payload.auth_json,
             config_toml=payload.config_toml,
+            api_key=payload.api_key,
+            auth_json=payload.auth_json,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

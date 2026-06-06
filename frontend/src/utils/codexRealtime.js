@@ -85,7 +85,7 @@ export function applyCodexRealtimeEvent(state, payload) {
     return
   }
   if (payload.type === 'replay_done') {
-    state.status = payload.running ? 'running' : 'connected'
+    state.status = payload.running ? 'running' : state.events.length ? 'snapshot' : 'connected'
     return
   }
   if (payload.type === 'activity') {

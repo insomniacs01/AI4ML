@@ -11,6 +11,7 @@ export function createCodexRealtimeStream({
   getTaskId = () => '',
   getSnapshotCodex = () => null,
   isFinished = () => false,
+  allowFinishedReplay = false,
   onMessage = () => {},
   onError = () => {},
 }) {
@@ -18,7 +19,7 @@ export function createCodexRealtimeStream({
   let connectedSessionId = ''
 
   function connect() {
-    if (isFinished()) {
+    if (isFinished() && !allowFinishedReplay) {
       close()
       return
     }
@@ -47,7 +48,12 @@ export function createCodexRealtimeStream({
     socket.addEventListener('message', (event) => {
       try {
         const payload = JSON.parse(event.data)
-        applyCodexRealtimeEvent(unwrapState(state), payload)
+        const realtimeState = unwrapState(state)
+        applyCodexRealtimeEvent(realtimeState, payload)
+        if (payload.type === 'replay_done' && !payload.running && !realtimeState.events.length) {
+          seedCodexRealtimeFromSnapshot(realtimeState, getSnapshotCodex())
+          if (realtimeState.events.length) realtimeState.status = 'snapshot'
+        }
         onMessage(payload)
       } catch {
         // Ignore malformed socket frames.

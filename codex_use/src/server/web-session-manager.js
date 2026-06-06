@@ -29,7 +29,7 @@ import {
   normalizeStartTaskMessage,
   normalizeTaskThreadMessage,
   requireApprovedPlanText,
-  resolveInterruptedResumeWorkspacePath,
+  resolveTaskResumeWorkspacePath,
   resolveRequestedWorkspacePath
 } from './web-session-task-commands.js';
 import { buildTaskStatePollTransition } from './web-session-task-state.js';
@@ -518,14 +518,16 @@ class PersistentWebSession {
 
   async resumeAi4mlTask(message) {
     try {
-      const { taskId, threadId, tokenBudget } = normalizeTaskThreadMessage(message, this.activeTaskId);
+      const { taskId, threadId, tokenBudget, improvementDecision } = normalizeTaskThreadMessage(message, this.activeTaskId);
       await this.useTaskThread(taskId, threadId);
       this.applyTokenBudget(tokenBudget);
       const workspacePath = resolveRequestedWorkspacePath(message);
       const artifacts = await getLatestAi4mlWorkspaceArtifacts({
         workspacePath
       });
-      const resolvedWorkspacePath = resolveInterruptedResumeWorkspacePath(artifacts, workspacePath);
+      const resolvedWorkspacePath = resolveTaskResumeWorkspacePath(artifacts, workspacePath, {
+        improvementDecision
+      });
 
       this.taskStarted = true;
       this.taskStartedAtMs = Date.now();
@@ -537,7 +539,9 @@ class PersistentWebSession {
         this.publish(event);
       }
 
-      const promptText = await buildAi4mlResumeTaskPrompt(resolvedWorkspacePath);
+      const promptText = await buildAi4mlResumeTaskPrompt(resolvedWorkspacePath, {
+        improvementDecision
+      });
       this.startTaskStatePolling();
       await this.runner.sendPrompt(promptText);
       await this.saveActiveTaskThread(taskId);
