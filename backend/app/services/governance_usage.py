@@ -10,14 +10,15 @@ from backend.app.models.governance import (
     TeamQuotaRecord,
     TokenLedgerRecord,
 )
+from backend.app.services.governance_payload_values import coerce_non_negative_int
 from backend.app.services.governance_quota_records import (
     ConnectorSummary,
     QuotaScope,
-    coerce_non_negative_int,
     quota_map,
     quota_record_from_payload,
     quota_scope,
 )
+from backend.app.services.governance_token_ledgers import normalize_ledger_limit, token_ledger_from_payload
 
 RequestJson = Callable[..., Any]
 ListMembers = Callable[..., list[TeamMemberRecord]]
@@ -32,6 +33,7 @@ _QUOTA_SELECT = (
 class GovernanceUsageRepository:
     _quota_map = staticmethod(quota_map)
     _quota_record_from_payload = staticmethod(quota_record_from_payload)
+    _token_ledger_from_payload = staticmethod(token_ledger_from_payload)
 
     def __init__(
         self,
@@ -166,7 +168,7 @@ class GovernanceUsageRepository:
         user_id: str | None = None,
         task_id: str | None = None,
     ) -> list[TokenLedgerRecord]:
-        capped_limit = min(max(limit, 1), 1000)
+        capped_limit = normalize_ledger_limit(limit)
         path = (
             "token_ledgers"
             f"?select=*&team_id=eq.{quote(team_id, safe='')}"
@@ -295,46 +297,6 @@ class GovernanceUsageRepository:
             for item in payload
             if isinstance(item, dict) and item.get("id")
         }
-
-    def _token_ledger_from_payload(
-        self,
-        payload: dict[str, Any],
-        *,
-        profile_map: dict[str, TeamProfileRecord],
-        task_map: dict[str, str],
-        connector_map: dict[str, str],
-    ) -> TokenLedgerRecord:
-        ledger_user_id = str(payload.get("user_id")) if payload.get("user_id") else None
-        profile = profile_map.get(ledger_user_id or "")
-        ledger_task_id = str(payload.get("task_id")) if payload.get("task_id") else None
-        ledger_connector_id = str(payload.get("connector_id")) if payload.get("connector_id") else None
-        connector_display_name = (
-            str(payload.get("connector_display_name"))
-            if payload.get("connector_display_name")
-            else connector_map.get(ledger_connector_id or "")
-        )
-        return TokenLedgerRecord(
-            id=str(payload.get("id")),
-            team_id=str(payload.get("team_id")),
-            user_id=ledger_user_id,
-            user_display_name=profile.display_name if profile else None,
-            user_email=profile.email if profile else None,
-            task_id=ledger_task_id,
-            task_name=task_map.get(ledger_task_id or ""),
-            connector_id=ledger_connector_id,
-            connector_display_name=connector_display_name,
-            phase=str(payload.get("phase")),
-            stage_key=str(payload.get("stage_key")) if payload.get("stage_key") else None,
-            source_key=str(payload.get("source_key")),
-            model_name=str(payload.get("model_name")) if payload.get("model_name") else None,
-            input_tokens=coerce_non_negative_int(payload.get("input_tokens")),
-            output_tokens=coerce_non_negative_int(payload.get("output_tokens")),
-            total_tokens=coerce_non_negative_int(payload.get("total_tokens")),
-            calculation_method=str(payload.get("calculation_method")) if payload.get("calculation_method") else None,
-            raw_usage=payload.get("raw_usage") if isinstance(payload.get("raw_usage"), dict) else None,
-            created_at=payload.get("created_at"),
-            updated_at=payload.get("updated_at"),
-        )
 
     def _list_task_names(self, team_id: str, task_ids: list[str], *, access_token: str) -> dict[str, str]:
         normalized_ids = sorted({item for item in task_ids if item})

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.app.models.governance import TeamMemberRecord, TeamQuotaRecord
+from backend.app.services.governance_payload_values import coerce_non_negative_int, optional_payload_str
 
 
 @dataclass(frozen=True)
@@ -141,18 +142,5 @@ def quota_subject(
         connector_display_name=optional_payload_str(payload.get("connector_display_name")),
     )
 
-
-def optional_payload_str(value: Any) -> str | None:
-    return str(value) if value else None
-
-
 def quota_status(payload: dict[str, Any], resolved_quota: int, remaining: int) -> str:
     return str(payload.get("status") or ("exhausted" if resolved_quota and remaining == 0 else "active"))
-
-
-def coerce_non_negative_int(value: Any) -> int:
-    try:
-        result = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return max(result, 0)
