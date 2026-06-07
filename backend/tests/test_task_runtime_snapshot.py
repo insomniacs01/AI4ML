@@ -15,10 +15,10 @@ from backend.app.models.task import (
 )
 from backend.app.services.task_runtime_snapshot import (
     TaskRuntimeSnapshotSyncError,
-    _build_task_run_payload,
     build_task_runtime_snapshot_response,
 )
 from backend.app.services.task_codex_runtime_activity import reconcile_codex_runtime_activity
+from backend.app.services.task_runtime_snapshot_payload import build_task_run_payload
 
 
 def _task() -> TaskRecord:
@@ -58,7 +58,7 @@ def test_task_run_payload_uses_last_run_fields_without_codex_progress() -> None:
         output_dir="D:/runs/task-runtime-snapshot",
     )
 
-    payload = _build_task_run_payload(
+    payload = build_task_run_payload(
         task,
         [_step()],
         None,
@@ -102,7 +102,7 @@ def test_task_run_payload_prefers_codex_progress_fields() -> None:
         codex_workspace_path="D:/workspaces/current",
     )
 
-    payload = _build_task_run_payload(
+    payload = build_task_run_payload(
         task,
         [_step()],
         progress_response,
@@ -132,6 +132,37 @@ def test_task_run_payload_prefers_codex_progress_fields() -> None:
         "steps": [{"id": "model_selection", "status": "running"}],
         "status": "running",
     }
+
+
+def test_task_run_payload_exposes_codex_artifact_context() -> None:
+    task = _task()
+    task.codex_workspace_path = "D:/workspaces/current"
+    task.codex_status = "waiting_improvement_review"
+    events = [{"index": index} for index in range(100)]
+
+    payload = build_task_run_payload(
+        task,
+        [_step()],
+        None,
+        {"status": "blocked"},
+        {},
+        should_sync_codex=True,
+        codex_plan="Approved plan",
+        codex_artifacts={
+            "progress_events": events,
+            "progress_events_file": {"exists": True, "path": "state/progress_events.jsonl"},
+            "improvement_plan": "Improve validation.",
+            "improvement_plan_file": {"exists": True, "path": "output/improvement_plan.md"},
+            "token_usage": {"total": {"total_tokens": 123}},
+        },
+    )
+
+    codex = payload["codex"]
+    assert codex["progress_events"] == events[-80:]
+    assert codex["progress_events_path"] == "state/progress_events.jsonl"
+    assert codex["improvement_plan_text"] == "Improve validation."
+    assert codex["improvement_plan_path"] == "output/improvement_plan.md"
+    assert codex["token_usage"] == {"total": {"total_tokens": 123}}
 
 
 def test_reconcile_codex_runtime_activity_pauses_inactive_running_task(monkeypatch) -> None:
@@ -236,7 +267,10 @@ def test_runtime_snapshot_returns_cached_state_when_codex_sync_fails(monkeypatch
         "backend.app.services.task_runtime_snapshot.safe_reconcile_codex_runtime_activity",
         lambda task_store, task_arg, team_access, settings: task_arg,
     )
-    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.build_codex_run_progress", lambda task_arg, settings: None)
+    monkeypatch.setattr(
+        "backend.app.services.task_runtime_snapshot.build_codex_run_progress",
+        lambda task_arg, settings: None,
+    )
     monkeypatch.setattr("backend.app.services.task_runtime_snapshot.codex_plan_text", lambda task_arg, settings: "")
     team_access = SimpleNamespace(
         team_id="team-1",
