@@ -61,7 +61,7 @@ ${description || '用户未提供额外任务描述。'}
 ${workspacePath || `workspaces/${workspaceName || '{task_id}'}`}
 \`\`\`
 
-- 如果该 workspace 中已有 \`input/task_request.json\`、\`input/project_rules.md\`、\`output/progress.json\`、\`output/plan.md\` 和 \`state/artifact_index.json\`，请直接更新它们。
+- 如果该 workspace 中已有 \`input/task_request.json\`、\`input/project_rules.md\`、\`state/progress_events.jsonl\`、\`output/progress.json\`、\`output/plan.md\` 和 \`state/artifact_index.json\`，请按进度事件协议更新它们。
 - 将上述数据路径和任务描述写入 \`input/task_request.json\`。
 - 数据路径可能是任意文件或文件夹，不要假设一定是 CSV。请先判断路径类型和内容结构，再选择合适的读取方式。
 - 如果是文件夹，请梳理文件结构，识别可用的数据文件、说明文档、元数据和结果文件，再决定任务输入。

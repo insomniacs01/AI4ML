@@ -2,6 +2,14 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import path from 'node:path';
 
 import { ai4mlDataRoot, ai4mlWorkspaceRoot } from './config.js';
+import {
+  appendAi4mlProgressEvent,
+  ensureAi4mlProgressSnapshot,
+  initializeAi4mlProgress,
+  progressEventsPath,
+  progressEventsRelativePath,
+  readAi4mlProgressEvents
+} from './ai4ml-progress.js';
 
 const maxDataPathEntries = 800;
 const maxDataPathDepth = 6;
@@ -93,11 +101,7 @@ export async function initializeAi4mlWorkspace(options) {
       ? options.approvedPlanText.trimEnd() + '\n'
       : `# AI4ML 任务计划\n\nCodex 正在读取数据并生成可确认的建模计划。\n`
   );
-  await writeJsonFile(path.join(workspacePath, 'output', 'progress.json'), {
-    status: 'running',
-    current_step: 'dataset_analysis',
-    percent: 12,
-    summary: 'Codex 运行环境已创建，正在分析数据集并准备生成建模计划。',
+  await initializeAi4mlProgress(workspacePath, {
     steps: [
       {
         id: 'environment_creation',
@@ -123,8 +127,7 @@ export async function initializeAi4mlWorkspace(options) {
         status: 'pending',
         detail: '计划生成后将等待用户确认、编辑或要求重写。'
       }
-    ],
-    updated_at: now
+    ]
   });
   await writeJsonFile(path.join(workspacePath, 'state', 'artifact_index.json'), {
     workspace: workspaceName,
@@ -138,7 +141,12 @@ export async function initializeAi4mlWorkspace(options) {
       {
         path: 'output/progress.json',
         type: 'progress',
-        description: '记录当前任务进度。'
+        description: '由 AI4ML 进度事件生成的当前任务进度快照。'
+      },
+      {
+        path: progressEventsRelativePath,
+        type: 'progress_events',
+        description: '追加式记录任务进度事件，便于追溯 progress.json 的来源。'
       },
       {
         path: 'output/plan.md',
@@ -249,18 +257,16 @@ export async function markLatestAi4mlWorkspaceInterrupted(options = {}) {
 
   const interruptedAt = options.interruptedAt || new Date().toISOString();
   const reason = options.reason || 'Codex 进程已停止，任务未正常完成。';
-  const updatedProgress = {
-    ...artifacts.progress,
+  const updatedProgress = await appendAi4mlProgressEvent(artifacts.workspace.path, {
+    event: 'interrupted',
+    actor: 'codex_use',
     status: 'interrupted',
-    current_step: 'interrupted',
-    summary: reason,
-    steps: updateInterruptedSteps(artifacts.progress.steps),
-    interrupted_at: interruptedAt,
-    updated_at: interruptedAt
-  };
-
-  const progressPath = path.join(artifacts.workspace.path, 'output', 'progress.json');
-  await writeJsonFile(progressPath, updatedProgress);
+    step: 'interrupted',
+    message: reason,
+    ts: interruptedAt,
+    evidence: ['output/progress.json'],
+    steps: updateInterruptedSteps(artifacts.progress.steps)
+  });
 
   return {
     ...artifacts,
@@ -427,6 +433,11 @@ async function readAi4mlWorkspaceArtifacts(workspaceRoot, workspace) {
   const advisorDiagnosisPath = path.join(workspace.path, 'output', 'advisor_diagnosis.json');
   const reportPath = path.join(workspace.path, 'output', 'report.md');
   const predictPath = path.join(workspace.path, 'output', 'predict.py');
+  const progressEventsFilePath = progressEventsPath(workspace.path);
+  const progress = await ensureAi4mlProgressSnapshot(workspace.path, {
+    currentProgress: await readOptionalJson(progressPath)
+  });
+  const progressEvents = await readAi4mlProgressEvents(workspace.path);
 
   return {
     workspaceRoot,
@@ -437,7 +448,12 @@ async function readAi4mlWorkspaceArtifacts(workspaceRoot, workspace) {
     },
     plan: await readOptionalText(planPath),
     runStrategy: await readOptionalJson(runStrategyPath),
-    progress: await readOptionalJson(progressPath),
+    progress,
+    progressEvents,
+    progressEventsFile: {
+      path: progressEventsFilePath,
+      exists: progressEvents.length > 0
+    },
     metrics: await readOptionalJson(metricsPath),
     tokenUsage: await readOptionalJson(tokenUsagePath),
     improvementPlan: await readOptionalText(improvementPlanPath),
@@ -598,6 +614,14 @@ function buildProjectRules() {
 - 如果用户修改计划，更新 \`output/plan.md\` 并继续等待批准，除非用户明确要求执行。
 - 如果用户要求重新生成计划，重新生成 \`output/plan.md\` 并继续等待批准。
 - \`output/progress.json\` 必须反映当前任务状态。
+
+## 进度维护
+
+- \`state/progress_events.jsonl\` 是追加式进度事件日志；更新任务阶段时必须追加一行 JSON 事件，不能删除历史事件。
+- \`output/progress.json\` 是由进度事件折叠出来的当前快照；写快照时必须保留 \`schema_version: "ai4ml-progress-v1"\`、\`events_path: "state/progress_events.jsonl"\`、\`status\`、\`current_step\`、\`summary\` 和 \`updated_at\`。
+- 进度百分比只能来自 Codex/AIOUR 执行体明确写入的真实 \`percent\` / \`progress_percent\` 字段；不得按任务状态、里程碑、步骤数量或页面位置推导百分比。
+- 初始化 workspace 时可以写 \`percent: 0\`，含义仅是工作区刚创建、真实执行尚未开始；离开初始化阶段后，如果没有新的真实百分比，应省略 \`percent\` / \`progress_percent\` 或写为 \`null\`。
+- 暂停、等待人工确认或中断时保留已有真实百分比；没有真实百分比时显示未知，不得因为状态变化写固定 25、65、82 等兜底值。
 
 ## 数据路径与目标定义
 

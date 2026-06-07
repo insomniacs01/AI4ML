@@ -11,6 +11,10 @@ describe('taskHumanState', () => {
     expect(isHumanWaitingStatus('waiting_plan_approval')).toBe(true)
     expect(isHumanWaitingStatus('interrupted')).toBe(false)
     expect(hasPendingHumanConfirmation(
+      { status: 'paused_for_review', codex_status: 'waiting_plan_approval' },
+      null,
+    )).toBe(true)
+    expect(hasPendingHumanConfirmation(
       { status: 'paused_for_review' },
       { codex: { status: 'waiting_plan_approval' } },
     )).toBe(true)

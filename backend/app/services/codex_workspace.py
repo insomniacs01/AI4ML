@@ -13,6 +13,7 @@ from backend.app.services.codex_common import (
     read_json,
     read_text,
 )
+from backend.app.services.codex_progress_store import ensure_progress_snapshot, progress_events_path, read_progress_events
 
 
 class CodexWorkspaceReader:
@@ -24,10 +25,14 @@ class CodexWorkspaceReader:
         if workspace is None:
             return {"workspace": None}
         output_dir = workspace / "output"
+        progress_path = output_dir / "progress.json"
         run_strategy_path = output_dir / "run_strategy.json"
         improvement_plan_path = output_dir / "improvement_plan.md"
         advisor_request_path = output_dir / "advisor_request.json"
         advisor_diagnosis_path = output_dir / "advisor_diagnosis.json"
+        progress_payload = ensure_progress_snapshot(workspace, current_progress=read_json(progress_path))
+        events_path = progress_events_path(workspace)
+        progress_events = read_progress_events(workspace)
         return {
             "workspace": {
                 "name": workspace.name,
@@ -36,7 +41,18 @@ class CodexWorkspaceReader:
             },
             "plan": read_text(output_dir / "plan.md"),
             "run_strategy": read_json(run_strategy_path),
-            "progress": read_json(output_dir / "progress.json"),
+            "progress": progress_payload,
+            "progress_events": progress_events,
+            "progress_file": {
+                "path": str(progress_path),
+                "exists": progress_path.is_file(),
+                "readable": progress_payload is not None,
+            },
+            "progress_events_file": {
+                "path": str(events_path),
+                "exists": events_path.is_file(),
+                "readable": events_path.is_file(),
+            },
             "metrics": read_json(output_dir / "metrics.json"),
             "overview": read_json(output_dir / "overview.json"),
             "token_usage": read_json(output_dir / "token_usage.json"),

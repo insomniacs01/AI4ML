@@ -1,6 +1,6 @@
 # AI4ML Current Memory
 
-更新时间：2026-06-06
+更新时间：2026-06-07
 
 这份文档只记录当前仍然成立的项目事实。已经清理掉旧 React 主入口、MLZero/AutoGluon/AIDE 旧执行链路、模型/数据/工作流广场、业务/技术双报告、无效下载入口等过时记忆。后续代理应以本文件为准，不要再按旧章节恢复已删除的产品口径。
 
@@ -98,6 +98,12 @@ AI4ML 是一个团队协作式智能建模工作台。当前主线是：
 
 - Codex 任务阶段以 `output/progress.json` 为主。
 - `runtime-snapshot` 对 Codex 任务不应再用旧 `workflow_stage_records` 或前端 completed 兜底覆盖真实进度。
+- 运行百分比只能来自真实来源。`output/progress.json` 中的 `percent` / `progress_percent` 是 Codex/AIOUR 执行体在 workspace 内维护的原始进度字段；AI4ML 后端不按任务状态、暂停状态、步骤数量或前端页面位置推导百分比。
+- AI4ML 后端只读取和校验 `output/progress.json` 的 `percent` / `progress_percent`，并转换为 API 的 `task_run.progress_percent`。如果任务已完成或真实完成产物齐全，API 可返回 `100`；如果任务明确未启动（`draft` / `uploaded` / `planning`），API 返回 `0`；其他运行、暂停、等待人工确认、失败或取消场景没有明确百分比时，API 返回 `progress_percent: null`，并带 `progress_unavailable_reason`。
+- `progress_unavailable_reason` 当前用于区分 `workspace_not_ready`、`progress_file_missing`、`progress_file_unreadable`、`progress_percent_missing`、`progress_percent_invalid` 和 `progress_not_available`。前端遇到 `null` 应显示“进度未知”和原因，不能显示伪造的 `0%`、`25%`、`65%` 或其他兜底值。
+- `steps` 只用于展示运行步骤目录，不再换算成百分比。不要恢复“完成步骤数 / 总步骤数”或“running 固定 65% / paused 固定 25% / resume 固定 82%”的口径。
+- `backend/app/services/task_runtime_progress.py` 在确认计划继续执行或恢复暂停任务时只更新状态、当前步骤、摘要和步骤列表；如果旧 `progress.json` 已有明确 `percent` / `progress_percent`，会保留该真实值；没有真实百分比时不写新的百分比字段。
+- `codex_use/src/server/ai4ml-artifacts.js` 初始化 workspace 时写入的 `percent: 0` 只表示任务刚初始化、真实执行尚未开始。后续运行过程中的真实百分比应由 Codex/AIOUR 在 `output/progress.json` 中维护。
 - 旧任务如果没有真实 `output/token_usage.json`，大模型用量显示 `-` 是正确行为。
 - 不允许用估算 token 数冒充真实大模型用量。
 - 新任务的 token usage 依赖 Codex app-server 是否发出 `thread/tokenUsage/updated`。收到后由 `codex_use` 写入 `output/token_usage.json`，AI4ML 后端再同步到任务记录。

@@ -15,7 +15,8 @@
 - 继续使用下面指定的现有 workspace。
 - 先读取并理解现有协议文件和产物，再决定从哪里继续。
 - 已经完成且产物可信的步骤不要无意义重跑；缺失、不完整、可疑或被中断的步骤需要继续执行或修复。
-- 如果 `output/progress.json` 仍是 `interrupted`，请先更新为正在恢复或正在执行的状态。
+- 如果 `output/progress.json` 仍是 `interrupted`，请先追加 `state/progress_events.jsonl` 事件并更新快照为正在恢复或正在执行的状态。
+- 更新进度时必须保留 `schema_version: "ai4ml-progress-v1"` 和 `events_path: "state/progress_events.jsonl"`；`percent` / `progress_percent` 只能保留或写入 Codex/AIOUR 执行体已有的真实百分比，没有真实百分比时省略该字段或写为 `null`，不要填写固定猜测值。
 - 如果 `output/plan.md` 尚未被用户批准，必须回到等待计划确认，不要训练模型。
 - 如果 `output/progress.json` 是 `waiting_improvement_review`，必须先读取 `output/improvement_plan.md`、`output/run_strategy.json`、`output/advisor_request.json` 和 `output/advisor_diagnosis.json`（如果存在），再按上方用户选择处理。
 - 当用户选择为 `continue_improvement` 时，只能执行 `output/improvement_plan.md` 中已说明且被人工确认的继续改进方案；仍不得无边界增加模型、调参、subagents 或报告深度。若继续改进后仍无明显提升或需要再次超出边界，重新写入 `output/improvement_plan.md` 并设置 `waiting_improvement_review`，等待人工确认。

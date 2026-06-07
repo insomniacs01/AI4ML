@@ -43,5 +43,7 @@
 - `验收与改进规则` 必须说明：自动改进达到上限、连续改进无明显提升或继续改进需要超出策略边界时，Codex 写入 `output/improvement_plan.md`，设置 `output/progress.json` 为 `waiting_improvement_review`，等待用户选择“继续改进”或“停止并生成报告”。
 - 如果策略允许在多次无效改进后请求顾问，必须在 `run_strategy.json.execution_limits.advisor_after_failed_rounds` 中写清触发轮数；顾问只读诊断输入为 `output/advisor_request.json`，输出为 `output/advisor_diagnosis.json`。
 - 生成计划和 `run_strategy.json` 后，将 `output/progress.json` 设置为 `waiting_plan_approval`。
+- 更新进度时必须追加 `state/progress_events.jsonl`，再更新 `output/progress.json` 快照；不要删除历史进度事件。
+- `percent` / `progress_percent` 只能来自已有真实百分比、初始化阶段的 `percent: 0` 或任务完成状态；没有真实百分比时省略该字段或写为 `null`，不要填写固定猜测值。
 - 只生成计划，不训练模型，不生成 `metrics.json`、`report.md` 或 `predict.py`。
 - 用中文回复，并告诉用户计划文件路径、策略文件路径和下一步如何批准或修改计划。

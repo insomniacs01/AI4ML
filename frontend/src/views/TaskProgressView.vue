@@ -14,10 +14,11 @@ import { createCodexRealtimeStream } from '@/composables/useCodexRealtimeStream'
 import { displayTaskTitle } from '@/utils/labels'
 import { createCodexRealtimeState, seedCodexRealtimeFromSnapshot } from '@/utils/codexRealtime'
 import { modelDisplayName } from '@/utils/modelProfile'
-import { taskProgressPercent } from '@/utils/progress'
+import { progressUnavailableText, taskProgressPercent } from '@/utils/progress'
 import { continueRunOptions } from '@/utils/taskRunControl'
 import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
 import { isFinishedTaskStatus, stepStatusLabel } from '@/utils/taskRecords'
+import { workspaceRealtimeUpdate } from '@/utils/workspaceRuntime'
 
 const props = defineProps({ taskId: { type: String, required: true } })
 const router = useRouter()
@@ -71,12 +72,22 @@ const progressPercent = computed(() => {
     progressPercent: taskRun.value?.progress_percent,
   })
 })
+const progressBarWidth = computed(() => progressPercent.value ?? 0)
+const progressPercentLabel = computed(() => (progressPercent.value === null ? '进度未知' : `${progressPercent.value}%`))
+const progressUnavailableReason = computed(() => (
+  progressPercent.value === null
+    ? progressUnavailableText(taskRun.value?.progress_unavailable_reason)
+    : ''
+))
 const codexStream = createCodexRealtimeStream({
   state: codexRealtime,
   getSessionId: () => taskRun.value?.codex?.session_id || task.value?.codex_session_id || '',
   getTaskId: () => props.taskId,
   getSnapshotCodex: () => taskRun.value?.codex,
   isFinished: () => finished.value,
+  onMessage: (payload) => {
+    mergeRealtimeEvent(payload)
+  },
   onError: (err) => {
     error.value = err.message
   },
@@ -88,6 +99,22 @@ function mergeSnapshot(data) {
     ...data,
   }
   if (Array.isArray(data.steps)) steps.value = data.steps
+}
+
+function mergeRealtimeEvent(payload) {
+  const update = workspaceRealtimeUpdate({
+    payload,
+    activeTask: task.value,
+    taskRun: taskRun.value,
+    realtimeStatus: codexRealtime.value.status,
+    finished: finished.value,
+  })
+  if (!update) return
+
+  if (update.taskPatch && task.value) task.value = { ...task.value, ...update.taskPatch }
+  if (Object.prototype.hasOwnProperty.call(update, 'taskRun')) taskRun.value = update.taskRun
+  if (update.closeStream) closeStream()
+  if (update.refreshSnapshot) refreshSnapshot({ force: true })
 }
 
 async function load() {
@@ -107,8 +134,8 @@ async function load() {
   }
 }
 
-async function refreshSnapshot() {
-  if (loading.value || finished.value) return
+async function refreshSnapshot(options = {}) {
+  if (loading.value || (finished.value && !options.force)) return
   try {
     const detail = await getTaskRuntimeSnapshot(props.taskId)
     task.value = detail.task || detail
@@ -256,12 +283,13 @@ onUnmounted(() => {
           <button class="primary-action compact-action" type="button" @click="openCurrentHitl">处理确认</button>
         </div>
         <div class="simple-progress">
-          <span :style="{ width: `${progressPercent}%` }"></span>
+          <span :style="{ width: `${progressBarWidth}%` }"></span>
         </div>
         <div class="progress-meta">
-          <strong>{{ progressPercent }}%</strong>
+          <strong>{{ progressPercentLabel }}</strong>
           <span>{{ task?.status || '加载中' }}</span>
         </div>
+        <p v-if="progressUnavailableReason" class="muted progress-unavailable">{{ progressUnavailableReason }}</p>
         <p v-if="codexWorkspacePath" class="muted codex-workspace-path">{{ modelDisplayName }} workspace: {{ codexWorkspacePath }}</p>
       </section>
 

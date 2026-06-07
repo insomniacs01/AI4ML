@@ -1,6 +1,6 @@
 # Codex Web Console Current Memory
 
-更新时间：2026-05-28
+更新时间：2026-06-07
 
 这份文档记录 `D:\333\AI4ML\codex_use` 子项目当前仍然成立的记忆。`codex_use/` 是 AI4ML 主项目使用的 Codex-native 执行桥，不是上一级主项目的 `frontend/` 或 `backend/`。
 
@@ -53,6 +53,10 @@ AI4ML 任务 workspace 目录通常是：
 - 确认前不应训练模型、生成最终报告或写预测产物。
 - 执行阶段由 Codex 原生能力和 subagents 完成，不在 Web Console 里重写一套自研多进程调度器。
 - 最终 `metrics.json`、`report.md`、`predict.py`、`artifact_index.json` 等用户可见产物应由父 Codex 统一确认和写入。
+- `output/progress.json` 中的 `percent` / `progress_percent` 是 Codex/AIOUR 执行体维护的真实运行百分比字段。主项目后端只读取、校验并展示该字段，不根据步骤数量、任务状态、暂停状态或页面位置推导百分比。
+- 初始化 workspace 时可以写 `percent: 0`，含义仅是任务刚初始化、真实执行尚未开始。确认计划、恢复暂停或等待人工确认时不能写固定猜测值，例如 `22`、`25`、`65`、`72` 或 `82`。
+- 如果当前没有真实百分比，应在 `progress.json` 中省略 `percent` / `progress_percent`，或在确需保留字段的模板场景写 `null`。不要用 `0` 冒充未知进度；`0` 只用于明确未开始。
+- 写入 `waiting_plan_approval`、`waiting_improvement_review`、`interrupted` 等状态时，应保留已有真实 `percent` / `progress_percent`，或在没有真实百分比时让主项目显示“进度未知”。
 
 ## 当前实现重点
 

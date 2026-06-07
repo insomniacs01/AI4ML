@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
 from backend.app.models.task import (
-    HumanInteractionRequestStatus,
+    DatasetProfile,
     TaskCreateRequest,
     TaskDeleteResponse,
     TaskInteractionPolicyRecord,
@@ -305,6 +308,49 @@ async def upload_dataset(
 
     dataset_dir = task_store.clear_dataset_upload_dir(team_access.team_id, task_id)
     uploaded_file_path = task_store.dataset_upload_path(team_access.team_id, task_id, filename)
+    size_bytes, dataset_profile, profile_error = await _save_uploaded_dataset_file(
+        file,
+        filename=filename,
+        uploaded_file_path=uploaded_file_path,
+    )
+    task = _apply_uploaded_dataset_to_task(
+        task,
+        filename=filename,
+        dataset_dir=dataset_dir,
+        uploaded_file_path=uploaded_file_path,
+        size_bytes=size_bytes,
+        content_type=file.content_type,
+        dataset_profile=dataset_profile,
+        profile_error=profile_error,
+    )
+    initialize_agent_loop_for_upload(task)
+    task.notes = "数据文件已上传到任务数据目录，Codex 将读取目录内容并生成建模计划。"
+    task = task_store.save_task(task, access_token=team_access.access_token)
+    _record_dataset_upload_stage(
+        task,
+        team_access,
+        filename=filename,
+        dataset_dir=dataset_dir,
+        uploaded_file_path=uploaded_file_path,
+        size_bytes=size_bytes,
+        dataset_profile=dataset_profile,
+    )
+
+    if not auto_run:
+        return task
+    return run_task(
+        task.id,
+        TaskRunRequest(time_limit=time_limit),
+        team_access,
+    )
+
+
+async def _save_uploaded_dataset_file(
+    file: UploadFile,
+    *,
+    filename: str,
+    uploaded_file_path: Path,
+) -> tuple[int, DatasetProfile | None, str]:
     size_bytes = 0
     sample = bytearray()
     dataset_profile = None
@@ -341,14 +387,56 @@ async def upload_dataset(
             except HTTPException as exc:
                 profile_error = str(exc.detail)
     except HTTPException:
-        if uploaded_file_path.exists():
-            uploaded_file_path.unlink()
+        _delete_partial_upload(uploaded_file_path)
         raise
     except OSError as exc:
-        if uploaded_file_path.exists():
-            uploaded_file_path.unlink()
+        _delete_partial_upload(uploaded_file_path)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"failed to save uploaded dataset: {exc}") from exc
+    return size_bytes, dataset_profile, profile_error
 
+
+def _delete_partial_upload(uploaded_file_path: Path) -> None:
+    if uploaded_file_path.exists():
+        uploaded_file_path.unlink()
+
+
+def _apply_uploaded_dataset_to_task(
+    task: TaskRecord,
+    *,
+    filename: str,
+    dataset_dir: Path,
+    uploaded_file_path: Path,
+    size_bytes: int,
+    content_type: str | None,
+    dataset_profile: DatasetProfile | None,
+    profile_error: str,
+) -> TaskRecord:
+    _reset_task_for_uploaded_dataset(
+        task,
+        filename=filename,
+        dataset_dir=dataset_dir,
+        dataset_profile=dataset_profile,
+    )
+    task.structured_requirements = _uploaded_dataset_requirements(
+        task,
+        filename=filename,
+        dataset_dir=dataset_dir,
+        uploaded_file_path=uploaded_file_path,
+        size_bytes=size_bytes,
+        content_type=content_type,
+        dataset_profile=dataset_profile,
+        profile_error=profile_error,
+    )
+    return task
+
+
+def _reset_task_for_uploaded_dataset(
+    task: TaskRecord,
+    *,
+    filename: str,
+    dataset_dir: Path,
+    dataset_profile: DatasetProfile | None,
+) -> None:
     task.dataset_filename = filename
     task.dataset_path = str(dataset_dir)
     task.dataset_profile = dataset_profile
@@ -363,6 +451,19 @@ async def upload_dataset(
     task.last_run = None
     task.last_run_attempt = None
     task.analysis_token_usage = None
+
+
+def _uploaded_dataset_requirements(
+    task: TaskRecord,
+    *,
+    filename: str,
+    dataset_dir: Path,
+    uploaded_file_path: Path,
+    size_bytes: int,
+    content_type: str | None,
+    dataset_profile: DatasetProfile | None,
+    profile_error: str,
+) -> dict[str, Any]:
     structured_requirements = (
         dict(task.structured_requirements)
         if isinstance(task.structured_requirements, dict)
@@ -376,7 +477,7 @@ async def upload_dataset(
                 "filename": filename,
                 "path": str(uploaded_file_path),
                 "size_bytes": size_bytes,
-                "content_type": file.content_type,
+                "content_type": content_type,
             }
         ],
     }
@@ -388,6 +489,11 @@ async def upload_dataset(
         structured_requirements.pop("dataset_profile", None)
         if profile_error:
             structured_requirements["dataset_profile_error"] = profile_error
+    _apply_target_hints(structured_requirements, task)
+    return structured_requirements
+
+
+def _apply_target_hints(structured_requirements: dict[str, Any], task: TaskRecord) -> None:
     target_columns = target_columns_from_requirements(structured_requirements) or split_target_columns(task.label_column)
     if target_columns:
         structured_requirements["target_hint"] = structured_requirements.get("target_hint") or task.label_column
@@ -397,10 +503,18 @@ async def upload_dataset(
             "target_columns": target_columns,
             "source": "user_input",
         }
-    task.structured_requirements = structured_requirements
-    initialize_agent_loop_for_upload(task)
-    task.notes = "数据文件已上传到任务数据目录，Codex 将读取目录内容并生成建模计划。"
-    task = task_store.save_task(task, access_token=team_access.access_token)
+
+
+def _record_dataset_upload_stage(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    *,
+    filename: str,
+    dataset_dir: Path,
+    uploaded_file_path: Path,
+    size_bytes: int,
+    dataset_profile: DatasetProfile | None,
+) -> None:
     _record_workflow_stage(
         task,
         team_access,
@@ -423,14 +537,6 @@ async def upload_dataset(
                 else f"dataset_dir={dataset_dir}"
             )
         ),
-    )
-
-    if not auto_run:
-        return task
-    return run_task(
-        task.id,
-        TaskRunRequest(time_limit=time_limit),
-        team_access,
     )
 
 

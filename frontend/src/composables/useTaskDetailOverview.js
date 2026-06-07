@@ -3,7 +3,6 @@ import { checkLabel, featureLabel, formatMetricValue } from '@/utils/formatters'
 import { metricLabel } from '@/utils/labels'
 import { renderMarkdown } from '@/utils/markdown'
 import { modelDisplayName } from '@/utils/modelProfile'
-import { comparisonChartPolylinePoints } from '@/utils/taskDetail'
 import { hasPendingHumanConfirmation } from '@/utils/taskHumanState'
 
 function addMetricValues(target, source, prefix = '') {
@@ -98,7 +97,6 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     const taskTargets = task.value?.target_columns || []
     return Array.isArray(taskTargets) ? taskTargets.map((name) => ({ name, metric: '', value: '' })) : []
   })
-  const overviewConfidenceData = computed(() => effectiveOverview.value?.confidence || {})
   const renderedReport = computed(() => renderMarkdown(report.value || '报告尚未生成。'))
   const planPreview = computed(() => {
     const normalized = String(planText.value || '').replace(/\s+/g, ' ').trim()
@@ -126,23 +124,6 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     if (task.value.status === 'paused_for_review') return '运行已暂停'
     if (task.value.status === 'running') return '等待生成可读报告'
     return '等待开始运行'
-  })
-  const overviewRecommendation = computed(() => {
-    const recommendation = effectiveOverview.value?.task_summary?.recommendation
-    if (recommendation) return recommendation
-    if (task.value?.status === 'completed') return '先查看报告'
-    if (waitingHuman.value) return '先处理人工确认'
-    if (task.value?.status === 'paused_for_review') return '继续运行'
-    if (task.value?.status === 'failed') return '先查看诊断'
-    return '先完成运行'
-  })
-  const overviewConfidence = computed(() => {
-    const data = overviewConfidenceData.value
-    if (data?.display) return data.display
-    if (data?.score !== null && data?.score !== undefined && Number.isFinite(Number(data.score))) {
-      return `${Math.round(Number(data.score) * 100)}%`
-    }
-    return '未生成'
   })
   const overviewCheckItems = computed(() => {
     const checks = effectiveOverview.value?.result_checks
@@ -192,44 +173,16 @@ export function useTaskDetailOverview({ task, taskRun, metrics, importance, over
     }
     return '这些是真实模型解释返回的关键特征。'
   })
-  const overviewChartPointMap = computed(() => comparisonChartPolylinePoints(effectiveOverview.value?.charts?.actual_vs_predicted))
-  const overviewChartPoints = computed(() => overviewChartPointMap.value.actual || '')
-  const overviewChartPointsAlt = computed(() => overviewChartPointMap.value.predicted || '')
-  const hasOverviewChart = computed(() => Boolean(overviewChartPoints.value && overviewChartPointsAlt.value))
-  const predictionErrorText = computed(() => primaryMetric.value?.value || '未生成')
-  const predictionErrorDescription = computed(() => overviewPredictionError.value?.interpretation || '当前任务没有返回结构化预测误差。')
-  const confidenceDescription = computed(() => overviewConfidenceData.value?.rationale || '当前任务没有返回结构化可信度说明。')
-  const explanationText = computed(() => {
-    const warnings = overviewConfidenceData.value?.warnings
-    if (Array.isArray(warnings) && warnings.length) return warnings[0]
-    if (overviewPredictionError.value?.interpretation) return overviewPredictionError.value.interpretation
-    return '当前任务没有返回结构化结果解释。'
-  })
-
   return {
-    effectiveMetrics,
     effectiveOverview,
-    metricEntries,
-    topFeatures,
     targetSummaries,
-    overviewPredictionError,
-    overviewConfidenceData,
     renderedReport,
     planPreview,
     primaryMetric,
     overviewConclusion,
-    overviewRecommendation,
-    overviewConfidence,
     overviewCheckItems,
     overviewBadges,
     overviewFactors,
     overviewFactorDescription,
-    overviewChartPoints,
-    overviewChartPointsAlt,
-    hasOverviewChart,
-    predictionErrorText,
-    predictionErrorDescription,
-    confidenceDescription,
-    explanationText,
   }
 }

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from backend.app.models.task import (
     WorkflowStageStatus,
 )
 from backend.app.services.codex_backend import codex_plan_text, codex_workspace_plan_path
+from backend.app.services.codex_progress_store import append_progress_event
 from backend.app.services.service_registry import get_task_store
 from backend.app.services.task_artifacts import (
     collect_stage_artifacts_by_stage,
@@ -51,12 +51,15 @@ def update_codex_structured_metadata(task: TaskRecord) -> TaskRecord:
 def write_codex_plan_approved_progress(task: TaskRecord) -> None:
     if not task.codex_workspace_path:
         return
-    progress = {
-        "status": "running",
-        "current_step": "modeling",
-        "percent": 22,
-        "summary": "计划已确认，Codex 正在执行建模、评估和报告生成。",
-        "steps": [
+    append_progress_event(
+        task.codex_workspace_path,
+        "plan_approved",
+        actor="ai4ml_backend",
+        status="running",
+        step="modeling",
+        message="计划已确认，Codex 正在执行建模、评估和报告生成。",
+        evidence=["output/plan.md"],
+        steps=[
             {
                 "id": "environment_creation",
                 "title": "正在创建环境",
@@ -88,19 +91,21 @@ def write_codex_plan_approved_progress(task: TaskRecord) -> None:
                 "detail": "等待 Codex 写入 metrics、report、model 和预测入口等产物。",
             },
         ],
-    }
-    write_codex_progress_file(task, progress)
+    )
 
 
 def write_codex_resume_progress(task: TaskRecord) -> None:
     if not task.codex_workspace_path:
         return
-    progress = {
-        "status": "running",
-        "current_step": "resuming",
-        "percent": 82,
-        "summary": "用户已要求继续运行，Codex 正在从现有工作区恢复任务。",
-        "steps": [
+    append_progress_event(
+        task.codex_workspace_path,
+        "resume_requested",
+        actor="ai4ml_backend",
+        status="running",
+        step="resuming",
+        message="用户已要求继续运行，Codex 正在从现有工作区恢复任务。",
+        evidence=["output/progress.json"],
+        steps=[
             {
                 "id": "resume_interrupted_task",
                 "title": "恢复暂停任务",
@@ -108,20 +113,7 @@ def write_codex_resume_progress(task: TaskRecord) -> None:
                 "detail": "正在读取已有 workspace、历史产物和进度，从中断处继续执行。",
             }
         ],
-    }
-    write_codex_progress_file(task, progress)
-
-
-def write_codex_progress_file(task: TaskRecord, progress: dict[str, Any]) -> None:
-    if not task.codex_workspace_path:
-        return
-    progress_path = Path(task.codex_workspace_path) / "output" / "progress.json"
-    progress["updated_at"] = datetime.now(timezone.utc).isoformat()
-    try:
-        progress_path.parent.mkdir(parents=True, exist_ok=True)
-        progress_path.write_text(f"{json.dumps(progress, ensure_ascii=False, indent=2)}\n", encoding="utf-8")
-    except OSError:
-        return
+    )
 
 
 def has_confirmed_codex_plan_request(task: TaskRecord, requests: list[object]) -> bool:

@@ -111,7 +111,9 @@ class TaskRunProgressResponse(BaseModel):
     task: "TaskRecord"
     output_dir: Optional[str] = None
     status: Literal["not_started", "running", "repairing", "blocked", "stale", "completed", "failed", "unknown"] = "unknown"
-    progress_percent: int = 0
+    progress_percent: Optional[int] = None
+    progress_source: Optional[str] = None
+    progress_unavailable_reason: Optional[str] = None
     current_stage: Optional["WorkflowStage"] = None
     current_activity: str = ""
     observer_status: Optional[str] = None

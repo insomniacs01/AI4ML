@@ -62,7 +62,7 @@ def test_build_runtime_steps_applies_progress_activity_and_training_metric_summa
     assert by_name[WorkflowStage.training_validation.value].summary == "mae: 2.5；最佳模型: ridge"
 
 
-def test_progress_from_steps_uses_running_step_and_weighted_percent() -> None:
+def test_progress_from_steps_uses_running_step_without_inventing_percent() -> None:
     steps = [
         TaskStepSummaryRecord(
             id="requirement_analysis",
@@ -95,7 +95,9 @@ def test_progress_from_steps_uses_running_step_and_weighted_percent() -> None:
 
     assert progress == {
         "status": "running",
-        "progress_percent": 49,
+        "progress_percent": None,
+        "progress_source": None,
+        "progress_unavailable_reason": "progress_percent_missing",
         "current_stage": WorkflowStage.model_selection.value,
         "current_activity": "Selecting candidate models",
     }
@@ -118,7 +120,9 @@ def test_progress_from_steps_preserves_waiting_step_detail_for_blocked_task() ->
 
     assert progress == {
         "status": "blocked",
-        "progress_percent": 25,
+        "progress_percent": None,
+        "progress_source": None,
+        "progress_unavailable_reason": "progress_percent_missing",
         "current_stage": WorkflowStage.training_validation.value,
         "current_activity": "Review the selected model",
     }
@@ -170,7 +174,9 @@ def test_progress_from_steps_never_reports_failed_task_as_100_percent() -> None:
 
     assert progress == {
         "status": "failed",
-        "progress_percent": 50,
+        "progress_percent": None,
+        "progress_source": None,
+        "progress_unavailable_reason": "progress_percent_missing",
         "current_stage": WorkflowStage.training_validation.value,
         "current_activity": "Training failed",
     }
@@ -181,7 +187,9 @@ def test_progress_from_steps_reports_cancelled_task_without_full_completion() ->
 
     assert progress == {
         "status": "cancelled",
-        "progress_percent": 0,
+        "progress_percent": None,
+        "progress_source": None,
+        "progress_unavailable_reason": "progress_percent_missing",
         "current_stage": None,
         "current_activity": "",
     }

@@ -69,7 +69,9 @@ def progress_from_steps(task: TaskRecord, steps: list[TaskStepSummaryRecord]) ->
     current = _current_progress_step(steps)
     return {
         "status": "running" if task.status == TaskStatus.running else _enum_value(task.status),
-        "progress_percent": _steps_progress_percent(steps),
+        "progress_percent": None,
+        "progress_source": None,
+        "progress_unavailable_reason": "progress_percent_missing",
         "current_stage": current.name if current is not None else None,
         "current_activity": current.message if current is not None else "",
     }
@@ -87,7 +89,9 @@ def _blocked_progress_from_steps(steps: list[TaskStepSummaryRecord]) -> dict[str
     waiting = _step_with_status(steps, WorkflowStageStatus.waiting_human)
     return {
         "status": "blocked",
-        "progress_percent": 25,
+        "progress_percent": None,
+        "progress_source": None,
+        "progress_unavailable_reason": "progress_percent_missing",
         "current_stage": waiting.name if waiting else WorkflowStage.training_validation.value,
         "current_activity": waiting.message if waiting else "等待人工确认",
     }
@@ -97,7 +101,9 @@ def _non_completion_terminal_progress(task: TaskRecord, steps: list[TaskStepSumm
     current = _terminal_progress_step(steps)
     return {
         "status": _enum_value(task.status),
-        "progress_percent": min(99, _steps_progress_percent(steps)) if steps else 0,
+        "progress_percent": None,
+        "progress_source": None,
+        "progress_unavailable_reason": "progress_percent_missing",
         "current_stage": current.name if current is not None else None,
         "current_activity": current.message if current is not None else "",
     }
@@ -133,14 +139,6 @@ def _step_with_status(
     status: WorkflowStageStatus,
 ) -> TaskStepSummaryRecord | None:
     return next((step for step in steps if _enum_value(step.status) == status.value), None)
-
-
-def _steps_progress_percent(steps: list[TaskStepSummaryRecord]) -> int:
-    completed = sum(1 for step in steps if _enum_value(step.status) == WorkflowStageStatus.completed.value)
-    running = 1 if _step_with_status(steps, WorkflowStageStatus.running) else 0
-    waiting = 1 if _step_with_status(steps, WorkflowStageStatus.waiting_human) else 0
-    ratio = (completed + running * 0.45 + waiting * 0.75) / max(len(steps), 1)
-    return min(94, max(8, round(8 + ratio * 84)))
 
 
 def _codex_steps_from_progress(progress: object | None) -> list[TaskStepSummaryRecord]:
@@ -308,11 +306,29 @@ def _progress_from_cached_task(task: TaskRecord) -> dict[str, object]:
     if task.status == TaskStatus.completed:
         return {"status": "completed", "progress_percent": 100, "current_stage": WorkflowStage.report_generation.value}
     if task.status in {TaskStatus.failed, TaskStatus.cancelled}:
-        return {"status": _enum_value(task.status), "progress_percent": 0, "current_stage": None}
+        return {
+            "status": _enum_value(task.status),
+            "progress_percent": None,
+            "progress_source": None,
+            "progress_unavailable_reason": "progress_percent_missing",
+            "current_stage": None,
+        }
     if task.status in {TaskStatus.waiting_human, TaskStatus.paused_for_review}:
-        return {"status": "blocked", "progress_percent": 25, "current_stage": WorkflowStage.training_validation.value}
+        return {
+            "status": "blocked",
+            "progress_percent": None,
+            "progress_source": None,
+            "progress_unavailable_reason": "progress_percent_missing",
+            "current_stage": WorkflowStage.training_validation.value,
+        }
     if task.status == TaskStatus.running:
-        return {"status": "running", "progress_percent": 33, "current_stage": WorkflowStage.training_validation.value}
+        return {
+            "status": "running",
+            "progress_percent": None,
+            "progress_source": None,
+            "progress_unavailable_reason": "progress_percent_missing",
+            "current_stage": WorkflowStage.training_validation.value,
+        }
     if task.status in {TaskStatus.uploaded, TaskStatus.planning}:
         return {"status": "not_started", "progress_percent": 0, "current_stage": WorkflowStage.data_analysis.value}
     return {"status": "not_started", "progress_percent": 0, "current_stage": None}

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from backend.app.models.task import TaskRecord, TaskStatus
 from backend.app.services.codex_backend import build_codex_run_progress, sync_task_from_codex_artifacts
+from backend.app.services.codex_progress_store import append_progress_event
 
 
 def _task() -> TaskRecord:
@@ -84,6 +85,72 @@ def test_codex_failed_progress_is_not_reported_as_completed(tmp_path: Path) -> N
     assert synced_task.status == TaskStatus.failed
     assert progress.status == "failed"
     assert progress.progress_percent == 99
+
+
+def test_codex_progress_does_not_infer_percent_from_steps(tmp_path: Path) -> None:
+    _workspace(tmp_path, {
+        "status": "running",
+        "summary": "training models",
+        "steps": [{"status": "completed"}, {"status": "running"}],
+    })
+    settings = _settings(tmp_path)
+
+    progress = build_codex_run_progress(_task(), settings)
+
+    assert progress.status == "running"
+    assert progress.progress_percent is None
+    assert progress.progress_unavailable_reason == "progress_percent_missing"
+
+
+def test_codex_progress_repairs_snapshot_shape_without_inferring_percent(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, {
+        "status": "running",
+        "current_step": "data_preparation",
+        "summary": "Codex wrote a direct snapshot without percent.",
+        "steps": [{"id": "data_preparation", "status": "running"}],
+    })
+    append_progress_event(
+        workspace,
+        "execution_started",
+        actor="codex",
+        status="running",
+        step="data_preparation",
+        message="running approved plan",
+        evidence=["output/plan.md"],
+    )
+    (workspace / "output" / "progress.json").write_text(
+        json.dumps({
+            "status": "running",
+            "current_step": "data_preparation",
+            "summary": "Codex wrote a direct snapshot without percent.",
+            "steps": [{"id": "data_preparation", "status": "running"}],
+        }),
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path)
+
+    progress = build_codex_run_progress(_task(), settings)
+    repaired = json.loads((workspace / "output" / "progress.json").read_text(encoding="utf-8"))
+
+    assert progress.status == "running"
+    assert progress.progress_percent is None
+    assert progress.progress_source is None
+    assert progress.progress_unavailable_reason == "progress_percent_missing"
+    assert repaired["schema_version"] == "ai4ml-progress-v1"
+    assert "percent" not in repaired
+    assert repaired["current_step"] == "data_preparation"
+
+
+def test_codex_interrupted_progress_preserves_explicit_percent(tmp_path: Path) -> None:
+    _workspace(tmp_path, {"status": "interrupted", "percent": 64, "summary": "process stopped"})
+    settings = _settings(tmp_path)
+
+    synced_task, _artifacts = sync_task_from_codex_artifacts(_task(), settings)
+    progress = build_codex_run_progress(synced_task, settings)
+
+    assert synced_task.status == TaskStatus.paused_for_review
+    assert progress.status == "blocked"
+    assert progress.progress_percent == 64
 
 
 def test_codex_sync_interrupted_status_is_recoverable_pause(tmp_path: Path) -> None:

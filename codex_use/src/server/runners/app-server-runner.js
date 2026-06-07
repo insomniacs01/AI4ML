@@ -15,11 +15,13 @@ export class AppServerRunner extends AppServerRpcClient {
     this.currentProcess = undefined;
     this.threadId = undefined;
     this.currentTurnId = undefined;
+    this.startingTurn = false;
     this.initialized = false;
     this.initializing = false;
     this.nextRequestId = 1;
     this.pendingRequests = new Map();
     this.pendingPrompts = [];
+    this.queuedPrompts = [];
     this.initializationPromise = undefined;
     this.stdoutBuffer = '';
     this.stderrBuffer = '';
@@ -42,11 +44,13 @@ export class AppServerRunner extends AppServerRpcClient {
     this.stop();
     this.threadId = undefined;
     this.currentTurnId = undefined;
+    this.startingTurn = false;
     this.initialized = false;
     this.initializing = false;
     this.nextRequestId = 1;
     this.pendingRequests.clear();
     this.pendingPrompts = [];
+    this.rejectQueuedPrompts(new Error('Codex app-server restarted.'));
     this.initializationPromise = undefined;
     this.stdoutBuffer = '';
     this.stderrBuffer = '';
@@ -88,8 +92,10 @@ export class AppServerRunner extends AppServerRpcClient {
         message: error.message
       });
       this.rejectPendingRequests(error);
+      this.rejectQueuedPrompts(error);
       this.currentProcess = undefined;
       this.currentTurnId = undefined;
+      this.startingTurn = false;
       this.currentTurnStartedAt = undefined;
     });
 
@@ -111,8 +117,10 @@ export class AppServerRunner extends AppServerRpcClient {
       }
 
       this.rejectPendingRequests(new Error('Codex app-server closed.'));
+      this.rejectQueuedPrompts(new Error('Codex app-server closed.'));
       this.currentProcess = undefined;
       this.currentTurnId = undefined;
+      this.startingTurn = false;
       this.currentTurnStartedAt = undefined;
       this.initialized = false;
       this.initializing = false;
@@ -139,8 +147,10 @@ export class AppServerRunner extends AppServerRpcClient {
     }
 
     this.currentTurnId = undefined;
+    this.startingTurn = false;
     this.currentTurnStartedAt = undefined;
     this.rejectPendingRequests(new Error('Codex app-server stopped.'));
+    this.rejectQueuedPrompts(new Error('Codex app-server stopped.'));
     this.initialized = false;
     this.initializing = false;
     this.initializationPromise = undefined;
@@ -161,7 +171,7 @@ export class AppServerRunner extends AppServerRpcClient {
     this.start();
   }
 
-  async sendPrompt(promptText) {
+  async sendPrompt(promptText, options = {}) {
     if (!this.currentProcess) {
       this.start();
     }
@@ -175,7 +185,20 @@ export class AppServerRunner extends AppServerRpcClient {
       await this.initializationPromise;
     }
 
-    if (this.currentTurnId) {
+    if (this.currentTurnId || this.startingTurn) {
+      if (options.queueIfBusy) {
+        this.queuePrompt(promptText);
+        this.send({
+          type: 'activity',
+          label: 'Queued',
+          status: 'pending'
+        });
+        return {
+          threadId: this.threadId,
+          turnId: this.currentTurnId,
+          queued: true
+        };
+      }
       this.send({
         type: 'error',
         message: 'Codex is already running.'
@@ -184,6 +207,42 @@ export class AppServerRunner extends AppServerRpcClient {
     }
 
     return this.startTurn(promptText);
+  }
+
+  queuePrompt(promptText) {
+    if (typeof promptText !== 'string' || !promptText.trim()) {
+      return;
+    }
+    this.queuedPrompts.push(promptText);
+  }
+
+  hasQueuedPrompts() {
+    return this.queuedPrompts.length > 0 || this.pendingPrompts.length > 0;
+  }
+
+  hasActiveOrQueuedTurn() {
+    return Boolean(this.currentTurnId || this.startingTurn || this.hasQueuedPrompts());
+  }
+
+  async startNextQueuedPrompt() {
+    if (this.currentTurnId || !this.currentProcess || !this.initialized) {
+      return;
+    }
+    const promptText = this.queuedPrompts.shift();
+    if (!promptText) {
+      return;
+    }
+    await this.startTurn(promptText);
+  }
+
+  rejectQueuedPrompts(error) {
+    if (this.queuedPrompts.length) {
+      this.queuedPrompts = [];
+      this.send({
+        type: 'error',
+        message: error.message
+      });
+    }
   }
 
   async interrupt() {
@@ -209,6 +268,7 @@ export class AppServerRunner extends AppServerRpcClient {
     }
 
     this.currentTurnId = undefined;
+    this.startingTurn = false;
     this.send({
       type: 'activity',
       label: 'Interrupted',
@@ -337,9 +397,11 @@ export class AppServerRunner extends AppServerRpcClient {
         status: 'busy'
       });
 
+      this.startingTurn = true;
       const turnResult = await this.call('turn/start', turnParams, 120000);
       const turn = turnResult && typeof turnResult === 'object' ? turnResult.turn : null;
       this.currentTurnId = turn && typeof turn.id === 'string' ? turn.id : this.currentTurnId;
+      this.startingTurn = false;
       if (this.threadId) {
         await saveThread(process.cwd(), this.threadId);
       }
@@ -349,6 +411,7 @@ export class AppServerRunner extends AppServerRpcClient {
       };
     } catch (error) {
       this.currentTurnId = undefined;
+      this.startingTurn = false;
       this.send({
         type: 'error',
         message: `Failed to start Codex turn: ${error.message}`
@@ -459,6 +522,7 @@ export class AppServerRunner extends AppServerRpcClient {
     if (method === 'turn/started') {
       const turn = params.turn;
       this.currentTurnId = turn && typeof turn.id === 'string' ? turn.id : this.currentTurnId;
+      this.startingTurn = false;
       this.currentTurnStartedAt = this.timestampFromSeconds(turn?.startedAt) || Date.now();
       this.send({
         type: 'turn_started',
@@ -484,6 +548,7 @@ export class AppServerRunner extends AppServerRpcClient {
         ? officialDurationMs
         : (this.currentTurnStartedAt ? completedAt - this.currentTurnStartedAt : undefined);
       this.currentTurnId = undefined;
+      this.startingTurn = false;
       this.currentTurnStartedAt = undefined;
       this.send({
         type: 'turn_completed',
@@ -499,6 +564,12 @@ export class AppServerRunner extends AppServerRpcClient {
         type: 'activity',
         label: 'Ready',
         status: 'online'
+      });
+      this.startNextQueuedPrompt().catch((error) => {
+        this.send({
+          type: 'error',
+          message: `Failed to start queued Codex turn: ${error.message}`
+        });
       });
       return;
     }

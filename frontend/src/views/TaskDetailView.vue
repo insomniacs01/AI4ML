@@ -12,7 +12,18 @@ import TaskOverviewPanel from '@/components/TaskOverviewPanel.vue'
 import TaskPredictionPanel from '@/components/TaskPredictionPanel.vue'
 import { displayTaskTitle, taskStatusLabel, taskTypeLabel } from '@/utils/labels'
 import { formatPredictionValue, formatTokenCount } from '@/utils/formatters'
-import { demoRowsFromDelivery, hasObjectContent, predictionValueFromPayload } from '@/utils/taskDetail'
+import {
+  buildTokenComparison,
+  buildTokenObservability,
+  demoRowsFromDelivery,
+  hasObjectContent,
+  normalizeTokenUsage,
+  predictionValueFromPayload,
+  reportDepthLabel,
+  searchDepthLabel,
+  strategyLabel,
+  valueOrDash,
+} from '@/utils/taskDetail'
 import {
   deleteTask,
   getActiveTask,
@@ -137,80 +148,29 @@ const codexTokenUsage = computed(() => (
   || normalizeTokenUsage(task.value?.llm_usage)
   || null
 ))
-const tokenObservability = computed(() => {
-  const usage = codexTokenUsage.value || {}
-  const totalTokens = Number(usage.total_tokens || 0)
-  const limits = strategyExecutionLimits.value
-  const reasons = []
-  if (!totalTokens) reasons.push('当前任务还没有真实 token 用量记录。')
-  if (limits.allow_subagents || (Array.isArray(limits.planned_subagents) && limits.planned_subagents.length)) reasons.push('策略允许 subagents，会增加独立上下文、工具调用和汇总成本。')
-  if (Number(limits.candidate_model_count || 0) > 3) reasons.push('候选模型数量较多，模型比较和结果解释会增加消耗。')
-  if (Number(limits.max_auto_improvement_rounds || 0) > 1) reasons.push('允许多轮自动改进，失败诊断和重试会增加消耗。')
-  if (limits.report_depth === 'detailed') reasons.push('报告深度为 detailed，最终报告和诊断说明会更长。')
-  if (taskRun.value?.codex?.thread_id) reasons.push('Codex thread 会累计历史上下文，新轮恢复会读取已有计划和产物。')
-  if (totalTokens && !reasons.length) reasons.push('当前策略边界较轻，主要消耗来自计划、执行日志和最终报告。')
-  return {
-    totalText: formatTokenCount(totalTokens),
-    inputText: formatTokenCount(usage.input_tokens),
-    outputText: formatTokenCount(usage.output_tokens),
-    reasons,
-    comparison: tokenComparison.value,
-  }
-})
-const tokenComparison = computed(() => {
-  const currentTotal = Number((codexTokenUsage.value || {}).total_tokens || 0)
-  const related = peerTasks.value
-    .filter((item) => item.id !== props.taskId)
-    .filter((item) => sameComparableTask(item, task.value))
-    .map((item) => Number(item.llm_usage?.total_tokens || 0))
-    .filter((value) => value > 0)
-  if (!currentTotal || !related.length) {
-    return {
-      available: false,
-      text: '暂无可比较的历史同类任务 token 记录。',
-    }
-  }
-  const average = Math.round(related.reduce((sum, value) => sum + value, 0) / related.length)
-  const diffRatio = average > 0 ? (currentTotal - average) / average : 0
-  const direction = diffRatio > 0.08 ? '高于' : diffRatio < -0.08 ? '低于' : '接近'
-  return {
-    available: true,
-    text: `当前 ${formatTokenCount(currentTotal)}，历史同类均值 ${formatTokenCount(average)}，${direction}均值。`,
-    current: currentTotal,
-    average,
-    sample_count: related.length,
-  }
-})
+const tokenComparison = computed(() => buildTokenComparison(codexTokenUsage.value, peerTasks.value, task.value))
+const tokenObservability = computed(() => buildTokenObservability({
+  usage: codexTokenUsage.value || {},
+  limits: strategyExecutionLimits.value,
+  threadId: taskRun.value?.codex?.thread_id,
+  comparison: tokenComparison.value,
+}))
 const taskFlowStep = computed(() => {
   if (task.value?.status === 'completed') return 4
   if (['running', 'waiting_human', 'paused_for_review', 'failed', 'cancelled'].includes(task.value?.status)) return 3
   return 2
 })
 const {
-  effectiveMetrics,
   effectiveOverview,
-  metricEntries,
-  topFeatures,
   targetSummaries,
-  overviewPredictionError,
-  overviewConfidenceData,
   renderedReport,
   planPreview,
   primaryMetric,
   overviewConclusion,
-  overviewRecommendation,
-  overviewConfidence,
   overviewCheckItems,
   overviewBadges,
   overviewFactors,
   overviewFactorDescription,
-  overviewChartPoints,
-  overviewChartPointsAlt,
-  hasOverviewChart,
-  predictionErrorText,
-  predictionErrorDescription,
-  confidenceDescription,
-  explanationText,
 } = useTaskDetailOverview({ task, taskRun, metrics, importance, overview, report, planText })
 const codexStream = createCodexRealtimeStream({
   state: codexRealtime,
@@ -301,68 +261,6 @@ async function load() {
   } finally {
     loading.value = false
   }
-}
-
-function strategyLabel(value) {
-  return {
-    light_tabular: '轻量表格建模',
-    standard_tabular: '标准表格建模',
-    deep_tabular: '深度表格建模',
-    custom_research: '自定义研究流程',
-  }[value] || value || '未生成策略'
-}
-
-function searchDepthLabel(value) {
-  return {
-    none: '不调参',
-    small: '小范围',
-    bounded: '有边界',
-    deep: '较深入',
-  }[value] || valueOrDash(value)
-}
-
-function reportDepthLabel(value) {
-  return {
-    brief: '简短',
-    standard: '标准',
-    detailed: '详细',
-  }[value] || valueOrDash(value)
-}
-
-function valueOrDash(value) {
-  if (value === null || value === undefined || value === '') return '-'
-  return String(value)
-}
-
-function sameComparableTask(candidate, current) {
-  if (!candidate || !current) return false
-  const candidateDataset = candidate.dataset_filename || candidate.dataset_name || ''
-  const currentDataset = current.dataset_filename || current.dataset_name || ''
-  if (candidateDataset && currentDataset && candidateDataset === currentDataset) return true
-  const candidateType = candidate.task_type || candidate.problem_type || ''
-  const currentType = current.task_type || current.problem_type || ''
-  return Boolean(candidateType && currentType && candidateType === currentType)
-}
-
-function normalizeTokenUsage(value) {
-  if (!value || typeof value !== 'object') return null
-  const total = value.total && typeof value.total === 'object' ? value.total : value
-  const inputTokens = numberValue(total.total_input_tokens ?? total.input_tokens ?? total.inputTokens)
-  const outputTokens = numberValue(total.total_output_tokens ?? total.output_tokens ?? total.outputTokens)
-  const explicitTotal = numberValue(total.total_tokens ?? total.totalTokens)
-  const totalTokens = explicitTotal || inputTokens + outputTokens
-  if (!totalTokens) return null
-  return {
-    ...value,
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    total_tokens: totalTokens,
-  }
-}
-
-function numberValue(value) {
-  const numeric = Number(value || 0)
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0
 }
 
 async function refreshRuntimeSnapshot() {
@@ -722,22 +620,13 @@ onUnmounted(() => {
 
   <TaskOverviewPanel
     v-else-if="activeTab === 'overview'"
-    :task="task"
     :overview-conclusion="overviewConclusion"
-    :prediction-error-text="predictionErrorText"
-    :prediction-error-description="predictionErrorDescription"
-    :overview-confidence="overviewConfidence"
-    :confidence-description="confidenceDescription"
-    :overview-recommendation="overviewRecommendation"
+    :primary-metric="primaryMetric"
     :overview-check-items="overviewCheckItems"
     :overview-badges="overviewBadges"
     :target-summaries="targetSummaries"
     :overview-factor-description="overviewFactorDescription"
     :overview-factors="overviewFactors"
-    :has-overview-chart="hasOverviewChart"
-    :overview-chart-points="overviewChartPoints"
-    :overview-chart-points-alt="overviewChartPointsAlt"
-    :explanation-text="explanationText"
     :show-realtime="showRealtime"
     :codex-realtime="codexRealtime"
     :strategy-overview="strategyOverview"

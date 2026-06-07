@@ -258,6 +258,12 @@ def _build_task_run_payload(
         "artifacts": progress_response.artifacts.model_dump(mode="json") if progress_response else {},
         "overview": codex_overview,
         "progress_percent": progress_response.progress_percent if progress_response else progress.get("progress_percent"),
+        "progress_source": getattr(progress_response, "progress_source", None) if progress_response else progress.get("progress_source"),
+        "progress_unavailable_reason": (
+            getattr(progress_response, "progress_unavailable_reason", None)
+            if progress_response
+            else progress.get("progress_unavailable_reason")
+        ),
         "current_stage": _current_stage_payload(progress_response, progress),
         "current_activity": progress_response.current_activity if progress_response else progress.get("current_activity", ""),
         "progress_status": progress_response.status if progress_response else progress.get("status", ""),
@@ -303,6 +309,12 @@ def _codex_payload(
     run_strategy_file = artifacts.get("run_strategy_file") if isinstance(artifacts.get("run_strategy_file"), dict) else {}
     improvement_plan_file = artifacts.get("improvement_plan_file") if isinstance(artifacts.get("improvement_plan_file"), dict) else {}
     advisor_diagnosis_file = artifacts.get("advisor_diagnosis_file") if isinstance(artifacts.get("advisor_diagnosis_file"), dict) else {}
+    progress_events_file = artifacts.get("progress_events_file") if isinstance(artifacts.get("progress_events_file"), dict) else {}
+    progress_events = artifacts.get("progress_events") if isinstance(artifacts.get("progress_events"), list) else []
+    if progress_events:
+        payload["progress_events"] = progress_events[-80:]
+    if progress_events_file.get("exists"):
+        payload["progress_events_path"] = progress_events_file.get("path")
     if isinstance(artifacts.get("run_strategy"), dict):
         payload["run_strategy"] = artifacts["run_strategy"]
     if run_strategy_file.get("exists"):

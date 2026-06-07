@@ -18,13 +18,13 @@ import {
   createCodexRealtimeState,
   resetCodexRealtimeState,
   seedCodexRealtimeFromSnapshot,
-  shouldApplyRealtimeTaskPatch,
 } from '@/utils/codexRealtime'
 import { modelDisplayName } from '@/utils/modelProfile'
-import { taskProgressPercent } from '@/utils/progress'
+import { progressUnavailableText, taskProgressPercent } from '@/utils/progress'
 import { continueRunOptions } from '@/utils/taskRunControl'
 import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
 import { WORKSPACE_TASK_STATUSES, isFinishedTaskStatus, pickActiveTask, stepStatusLabel, taskIdOf } from '@/utils/taskRecords'
+import { workspaceRealtimeUpdate } from '@/utils/workspaceRuntime'
 import {
   isWorkspaceRuntimeCacheFresh,
   readWorkspaceCache,
@@ -118,6 +118,13 @@ const progressPercent = computed(() => {
     progressPercent: taskRun.value?.progress_percent,
   })
 })
+const progressBarWidth = computed(() => progressPercent.value ?? 0)
+const progressPercentLabel = computed(() => (progressPercent.value === null ? '进度未知' : `${progressPercent.value}%`))
+const progressUnavailableReason = computed(() => (
+  progressPercent.value === null
+    ? progressUnavailableText(taskRun.value?.progress_unavailable_reason)
+    : ''
+))
 const codexStream = createCodexRealtimeStream({
   state: codexRealtime,
   getSessionId: () => taskRun.value?.codex?.session_id || activeTask.value?.codex_session_id || '',
@@ -190,63 +197,20 @@ function patchActiveTask(patch) {
 }
 
 function mergeRealtimeEvent(payload) {
-  if (!payload || typeof payload !== 'object' || !activeTask.value) return
-  if (!shouldApplyRealtimeTaskPatch(payload, codexRealtime.value.status)) return
-  if (finished.value && payload.type !== 'task_completed') return
+  const update = workspaceRealtimeUpdate({
+    payload,
+    activeTask: activeTask.value,
+    taskRun: taskRun.value,
+    realtimeStatus: codexRealtime.value.status,
+    finished: finished.value,
+  })
+  if (!update) return
 
-  if (payload.type === 'task_completed') {
-    patchActiveTask({ status: 'completed', codex_status: 'completed' })
-    taskRun.value = {
-      ...(taskRun.value || {}),
-      progress_percent: 100,
-      progress_status: 'completed',
-      codex: {
-        ...(taskRun.value?.codex || {}),
-        status: 'completed',
-      },
-    }
-    persistWorkspaceCache()
-    refreshSnapshot({ force: true })
-    return
-  }
-
-  if (payload.type === 'plan_generation_completed') {
-    patchActiveTask({ status: 'paused_for_review', codex_status: 'waiting_plan_approval' })
-    persistWorkspaceCache()
-    return
-  }
-
-  if (payload.type === 'quota_exhausted') {
-    patchActiveTask({ status: 'paused_for_review', codex_status: 'interrupted', notes: payload.reason || activeTask.value?.notes })
-    taskRun.value = {
-      ...(taskRun.value || {}),
-      progress_status: 'blocked',
-      current_activity: payload.reason || taskRun.value?.current_activity || '',
-      codex: {
-        ...(taskRun.value?.codex || {}),
-        status: 'interrupted',
-      },
-    }
-    persistWorkspaceCache()
-    closeStream()
-    refreshSnapshot({ force: true })
-    return
-  }
-
-  if (['task_resume_requested', 'modeling_started', 'turn_started'].includes(payload.type)) {
-    patchActiveTask({ status: 'running', codex_status: 'running' })
-    persistWorkspaceCache()
-    return
-  }
-
-  if (payload.type === 'activity') {
-    taskRun.value = {
-      ...(taskRun.value || {}),
-      current_activity: payload.message || taskRun.value?.current_activity || '',
-      progress_status: payload.status || taskRun.value?.progress_status || '',
-    }
-    persistWorkspaceCache()
-  }
+  if (update.taskPatch) patchActiveTask(update.taskPatch)
+  if (Object.prototype.hasOwnProperty.call(update, 'taskRun')) taskRun.value = update.taskRun
+  if (update.persist) persistWorkspaceCache()
+  if (update.closeStream) closeStream()
+  if (update.refreshSnapshot) refreshSnapshot({ force: true })
 }
 
 function mergeSnapshot(data) {
@@ -487,12 +451,13 @@ onUnmounted(() => {
           <StatusBadge v-if="activeTask?.status" :status="activeTask.status" />
         </div>
         <div class="simple-progress">
-          <span :style="{ width: `${progressPercent}%` }"></span>
+          <span :style="{ width: `${progressBarWidth}%` }"></span>
         </div>
         <div class="progress-meta">
-          <strong>{{ progressPercent }}%</strong>
+          <strong>{{ progressPercentLabel }}</strong>
           <span>{{ activeTask?.status || '加载中' }}</span>
         </div>
+        <p v-if="progressUnavailableReason" class="muted progress-unavailable">{{ progressUnavailableReason }}</p>
         <p v-if="codexWorkspacePath" class="muted codex-workspace-path">{{ modelDisplayName }} workspace: {{ codexWorkspacePath }}</p>
         <div v-if="finished" class="report-ready-card">
           <div>

@@ -38,13 +38,15 @@
 
 ```json
 {
+  "schema_version": "ai4ml-progress-v1",
   "status": "waiting_improvement_review",
   "current_step": "waiting_improvement_review",
-  "percent": 72,
-  "summary": "当前结果未满足验收或继续改进需要人工确认，等待用户选择继续改进或停止并生成报告。"
+  "summary": "当前结果未满足验收或继续改进需要人工确认，等待用户选择继续改进或停止并生成报告。",
+  "events_path": "state/progress_events.jsonl"
 }
 ```
 
+- 这里的 `percent` 只能保留当前已有的真实进度百分比；如果没有真实进度百分比，必须省略该字段，不得填写 72、80 或其他猜测值。
 - 写入 `output/improvement_plan.md` 后必须停止，等待用户人工选择。不得在等待期间继续训练、增加模型、扩大调参或生成最终完成状态。
 - `output/improvement_plan.md` 必须简短、可决策，使用这些章节：
   - `# 改进决策方案`
@@ -61,6 +63,8 @@
 - `output/advisor_diagnosis.json` 必须包含：`schema_version`、`summary`、`root_causes`、`recommended_actions`、`actions_to_avoid`、`confidence`、`evidence_reviewed`。顾问建议不能自动扩大执行边界；如果采纳建议会超过已确认策略，仍必须进入人工确认。
 - 不得伪造指标、报告、模型或预测能力。
 - 用中文持续说明进展，最终报告也使用中文。
+- 进度更新必须先追加 `state/progress_events.jsonl`，再更新 `output/progress.json` 快照。快照必须包含 `schema_version: "ai4ml-progress-v1"`、`events_path: "state/progress_events.jsonl"`、`status`、`current_step`、`summary` 和 `updated_at`。
+- `percent` / `progress_percent` 只能来自 Codex/AIOUR 执行体明确写入的真实百分比、初始化阶段的 `percent: 0` 或任务完成状态；不得按任务状态、进度里程碑、步骤数量、证据文件或页面位置推导。等待人工确认、中断或暂停时保留已有真实百分比；没有真实百分比时省略该字段或写为 `null`，不得填写固定兜底值。
 - 必须生成 `output/overview.json`，它是前端“概览”页的结构化数据来源，不能只生成最终报告。
 - `output/overview.json` 必须是合法 JSON，字段只能来自真实数据、真实指标、真实诊断、真实 subagent 输出和真实产物；不得填写占位值、示例值、猜测百分比或装饰性文案。
 - `output/overview.json` 必须包含以下顶层字段：

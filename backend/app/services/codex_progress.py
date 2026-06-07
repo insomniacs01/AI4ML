@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from backend.app.models.task import (
     TaskRecord,
@@ -31,11 +31,17 @@ from backend.app.services.codex_overview import build_codex_overview_from_artifa
 from backend.app.services.codex_usage import token_usage_from_artifacts
 
 
+class ProgressPercentResult(NamedTuple):
+    percent: int | None
+    source: str | None
+    unavailable_reason: str | None
+
+
 def build_codex_run_progress_response(task: TaskRecord, artifacts: dict[str, Any]) -> TaskRunProgressResponse:
     workspace = artifacts.get("workspace")
     progress = artifacts.get("progress") if isinstance(artifacts.get("progress"), dict) else {}
     if not progress and task.status == TaskStatus.running:
-        progress = _bootstrap_progress(workspace)
+        progress = _bootstrap_progress(workspace, artifacts)
     metrics = artifacts.get("metrics") if isinstance(artifacts.get("metrics"), dict) else {}
     workspace_path = workspace_path_from_artifacts(artifacts)
     status = codex_status(task, progress)
@@ -54,7 +60,9 @@ def build_codex_run_progress_response(task: TaskRecord, artifacts: dict[str, Any
         task=task,
         output_dir=workspace_path,
         status=response_status,
-        progress_percent=percent,
+        progress_percent=percent.percent,
+        progress_source=percent.source,
+        progress_unavailable_reason=percent.unavailable_reason,
         current_stage=current_stage,
         current_activity=current_activity,
         observer_status="Codex",
@@ -125,16 +133,21 @@ def has_completed_codex_artifacts(artifacts: dict[str, Any]) -> bool:
     return bool(report.get("exists") and predict.get("exists") and isinstance(artifacts.get("metrics"), dict))
 
 
-def _bootstrap_progress(workspace: Any) -> dict[str, Any]:
+def _bootstrap_progress(workspace: Any, artifacts: dict[str, Any]) -> dict[str, Any]:
     has_workspace = isinstance(workspace, dict) and bool(workspace.get("path"))
+    progress_file = artifacts.get("progress_file") if isinstance(artifacts.get("progress_file"), dict) else {}
     current_step = "dataset_analysis" if has_workspace else "environment_creation"
     title = "正在分析数据集" if has_workspace else "正在创建环境"
-    detail = "Codex 已创建任务工作区，正在读取数据并生成计划。" if has_workspace else "Codex 正在初始化运行环境并准备任务工作区。"
+    if progress_file.get("exists") and not progress_file.get("readable"):
+        detail = "Codex 进度文件存在但无法解析，当前没有可用的真实进度百分比。"
+    elif has_workspace:
+        detail = "Codex 已创建任务工作区，正在等待 output/progress.json 写入真实进度。"
+    else:
+        detail = "Codex 正在初始化运行环境，当前没有可用的真实进度百分比。"
     return {
         "status": "running",
         "current_step": current_step,
         "summary": detail,
-        "percent": 18 if has_workspace else 8,
         "steps": [
             {
                 "id": "environment_creation",
@@ -193,50 +206,70 @@ def _progress_percent(
     progress: dict[str, Any],
     codex_status_value: str,
     artifacts: dict[str, Any],
-) -> int:
-    raw_percent = progress.get("percent") or progress.get("progress_percent")
-    try:
-        percent = int(raw_percent)
-    except (TypeError, ValueError):
-        percent = 0
+) -> ProgressPercentResult:
     if codex_status_value == "completed" or task.status == TaskStatus.completed or has_completed_codex_artifacts(artifacts):
-        return 100
-    step_percent = _progress_percent_from_steps(progress.get("steps"))
-    percent = max(percent, step_percent)
+        return ProgressPercentResult(100, "completed", None)
+    if task.status in {TaskStatus.draft, TaskStatus.uploaded, TaskStatus.planning}:
+        return ProgressPercentResult(0, "not_started", None)
+    percent = _explicit_progress_percent(progress)
+    if percent is not None:
+        source = str(
+            progress.get("percent_source")
+            or ("progress_json_percent" if "percent" in progress else "progress_json_progress_percent")
+        )
+        if task.status in {TaskStatus.failed, TaskStatus.cancelled}:
+            return ProgressPercentResult(min(99, max(0, percent)), source, None)
+        if codex_status_value == "interrupted" and task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
+            return ProgressPercentResult(min(99, max(0, percent)), source, None)
+        if codex_status_value in CODEX_FAILED_STATUSES:
+            return ProgressPercentResult(min(99, max(0, percent)), source, None)
+        return ProgressPercentResult(max(0, min(99, percent)), source, None)
+
+    reason = _progress_unavailable_reason(task, progress, artifacts)
     if task.status in {TaskStatus.failed, TaskStatus.cancelled}:
-        return min(99, max(0, percent))
+        return ProgressPercentResult(None, None, reason)
     if codex_status_value == "interrupted" and task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-        return 25
+        return ProgressPercentResult(None, None, reason)
     if codex_status_value in CODEX_FAILED_STATUSES:
-        return min(99, max(0, percent))
-    if percent:
-        return max(0, min(99, percent))
-    if codex_status_value in CODEX_WAITING_STATUSES:
-        return 25
-    if codex_status_value in CODEX_ACTIVE_STATUSES:
-        return 65
-    return 0
+        return ProgressPercentResult(None, None, reason)
+    return ProgressPercentResult(None, None, reason)
 
 
-def _progress_percent_from_steps(steps: Any) -> int:
-    if not isinstance(steps, list) or not steps:
-        return 0
+def _explicit_progress_percent(progress: dict[str, Any]) -> int | None:
+    if "percent" in progress:
+        raw_percent = progress.get("percent")
+    elif "progress_percent" in progress:
+        raw_percent = progress.get("progress_percent")
+    else:
+        return None
+    try:
+        return int(raw_percent)
+    except (TypeError, ValueError):
+        return None
 
-    completed_weight = 0.0
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        status = str(step.get("status") or "").strip().lower()
-        if status in {"completed", "done", "success"}:
-            completed_weight += 1.0
-        elif status in {"running", "in_progress", "executing"}:
-            completed_weight += 0.55
-        elif status in {"waiting", "waiting_human", "waiting_plan_approval", "plan_ready", "waiting_improvement_review", "blocked"}:
-            completed_weight += 0.35
 
-    if completed_weight <= 0:
-        return 0
-    return int(round((completed_weight / len(steps)) * 100))
+def _progress_unavailable_reason(
+    task: TaskRecord,
+    progress: dict[str, Any],
+    artifacts: dict[str, Any],
+) -> str:
+    progress_file = artifacts.get("progress_file") if isinstance(artifacts.get("progress_file"), dict) else {}
+    if progress_file.get("exists") and not progress_file.get("readable"):
+        return "progress_file_unreadable"
+    if artifacts.get("workspace") and progress_file and not progress_file.get("exists"):
+        return "progress_file_missing"
+    if not progress:
+        if artifacts.get("workspace"):
+            return "progress_file_missing"
+        if task.status == TaskStatus.running:
+            return "workspace_not_ready"
+        return "progress_not_available"
+    if "percent" in progress or "progress_percent" in progress:
+        raw_percent = progress.get("percent") if "percent" in progress else progress.get("progress_percent")
+        if raw_percent is None or raw_percent == "":
+            return "progress_percent_missing"
+        return "progress_percent_invalid"
+    return "progress_percent_missing"
 
 
 def _artifact_summary(
@@ -275,6 +308,25 @@ def _artifact_summary(
 
 def _codex_events(progress: dict[str, Any], artifacts: dict[str, Any]) -> list[TaskRunProgressEvent]:
     events: list[TaskRunProgressEvent] = []
+    progress_events = artifacts.get("progress_events") if isinstance(artifacts.get("progress_events"), list) else []
+    for item in progress_events:
+        if not isinstance(item, dict):
+            continue
+        event_type = str(item.get("event") or "progress_event")
+        step = str(item.get("step") or item.get("current_step") or event_type)
+        message = str(item.get("message") or item.get("summary") or event_type)
+        events.append(
+            TaskRunProgressEvent(
+                time=_parse_event_time(item.get("ts")),
+                stage=_stage_from_step(step),
+                event_type=event_type,
+                message=message,
+                source="codex_progress_event",
+            )
+        )
+    if events:
+        return events[-80:]
+
     for step in progress.get("steps") if isinstance(progress.get("steps"), list) else []:
         if not isinstance(step, dict):
             continue
@@ -298,6 +350,15 @@ def _codex_events(progress: dict[str, Any], artifacts: dict[str, Any]) -> list[T
             )
         )
     return events[-80:]
+
+
+def _parse_event_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _codex_insights(progress: dict[str, Any], artifacts: dict[str, Any]) -> list[TaskRunProgressInsight]:

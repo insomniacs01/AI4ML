@@ -9,6 +9,7 @@ import {
   validateAi4mlDataPath,
   writeLatestAi4mlTokenUsage
 } from './ai4ml-artifacts.js';
+import { appendAi4mlProgressEvent } from './ai4ml-progress.js';
 import {
   buildAi4mlApprovePlanPrompt,
   buildAi4mlResumeTaskPrompt,
@@ -241,7 +242,7 @@ class PersistentWebSession {
     sendJson(socket, {
       type: 'replay_done',
       sessionId: this.sessionId,
-      running: taskIsActive && Boolean(this.runner.currentTurnId),
+      running: taskIsActive && this.runner.hasActiveOrQueuedTurn(),
       activity: replayActivity
     });
 
@@ -268,7 +269,7 @@ class PersistentWebSession {
   }
 
   reloadCodexConfig() {
-    if (this.runner.currentTurnId) {
+    if (this.runner.hasActiveOrQueuedTurn()) {
       return {
         sessionId: this.sessionId,
         restarted: false,
@@ -440,6 +441,14 @@ class PersistentWebSession {
           workspaceName: workspace.name
         });
       await this.runner.sendPrompt(promptText);
+      if (approvedPlanText) {
+        await this.recordProgressEvent(workspace.path, {
+          event: 'plan_approved',
+          actor: 'ai4ml_backend',
+          message: '用户创建任务时已选择并确认社区执行方案，开始执行建模流程。',
+          evidence: ['output/plan.md']
+        });
+      }
       await this.saveActiveTaskThread(taskId);
       return {
         accepted: true,
@@ -495,13 +504,33 @@ class PersistentWebSession {
       this.activeTaskId = taskId;
       this.applyTokenBudget(tokenBudget);
       const planText = requireApprovedPlanText(message);
+      const workspacePath = resolveRequestedWorkspacePath(message) || this.activeWorkspacePath;
+
+      this.taskStarted = true;
+      this.taskCompleted = false;
+      this.activeWorkspacePath = workspacePath;
+      this.reportedTaskStates.add('workspace_ready');
+      this.reportedTaskStates.add('plan_written');
+      this.reportedTaskStates.add('plan_approval_ready');
 
       for (const event of buildApprovePlanEvents()) {
         this.publish(event);
       }
 
       const promptText = await buildAi4mlApprovePlanPrompt(planText);
-      await this.runner.sendPrompt(promptText);
+      this.startTaskStatePolling();
+      const promptResult = await this.runner.sendPrompt(promptText, { queueIfBusy: true });
+      if (!promptResult) {
+        throw new Error('Codex did not accept the approved plan prompt.');
+      }
+      if (workspacePath) {
+        await this.recordProgressEvent(workspacePath, {
+          event: 'plan_approved',
+          actor: 'ai4ml_backend',
+          message: '用户已确认 Codex 建模计划，开始执行建模流程。',
+          evidence: ['output/plan.md']
+        });
+      }
       await this.saveActiveTaskThread(taskId);
       return {
         accepted: true,
@@ -544,6 +573,12 @@ class PersistentWebSession {
       });
       this.startTaskStatePolling();
       await this.runner.sendPrompt(promptText);
+      await this.recordProgressEvent(resolvedWorkspacePath, {
+        event: 'resume_requested',
+        actor: 'ai4ml_backend',
+        message: '用户已要求继续运行，Codex 正在从现有工作区恢复任务。',
+        evidence: ['output/progress.json']
+      });
       await this.saveActiveTaskThread(taskId);
       return {
         accepted: true,
@@ -569,7 +604,7 @@ class PersistentWebSession {
     let artifacts = workspacePath
       ? await getLatestAi4mlWorkspaceArtifacts({ workspacePath })
       : { workspace: null };
-    const running = taskIsActive && Boolean(this.runner.currentTurnId);
+    const running = taskIsActive && this.runner.hasActiveOrQueuedTurn();
     const progressStatus = typeof artifacts.progress?.status === 'string'
       ? artifacts.progress.status
       : '';
@@ -757,6 +792,7 @@ class PersistentWebSession {
     });
 
     const transition = buildTaskStatePollTransition(artifacts, this.reportedTaskStates);
+    await this.recordProgressTransition(transition, artifacts);
     for (const state of transition.reportedStates) {
       this.reportedTaskStates.add(state);
     }
@@ -827,6 +863,48 @@ class PersistentWebSession {
       timestamp,
       persistOnly: true
     });
+  }
+
+  async recordProgressTransition(transition, artifacts) {
+    const workspacePath = artifacts?.workspace?.path;
+    if (!workspacePath) {
+      return;
+    }
+    if (transition.reportedStates.includes('plan_approval_ready')) {
+      await this.recordProgressEvent(workspacePath, {
+        event: 'plan_generated',
+        actor: 'codex_use',
+        message: 'Codex 已写入执行计划，等待用户确认。',
+        evidence: ['output/plan.md']
+      });
+    }
+    if (transition.taskCompleted) {
+      const completionEvidence = ['output/progress.json'];
+      if (artifacts?.metrics && typeof artifacts.metrics === 'object') {
+        completionEvidence.push('output/metrics.json');
+      }
+      if (artifacts?.report?.exists) {
+        completionEvidence.push('output/report.md');
+      }
+      if (artifacts?.predict?.exists) {
+        completionEvidence.push('output/predict.py');
+      }
+      await this.recordProgressEvent(workspacePath, {
+        event: 'completed',
+        actor: 'codex_use',
+        message: 'Codex 建模任务已完成，最终产物已可读取。',
+        evidence: completionEvidence
+      });
+    }
+  }
+
+  async recordProgressEvent(workspacePath, payload) {
+    try {
+      return await appendAi4mlProgressEvent(workspacePath, payload);
+    } catch (error) {
+      console.warn(`Could not write AI4ML progress event for ${workspacePath}: ${error.message}`);
+      return null;
+    }
   }
 
   async markTaskInterrupted(reason, options = {}) {

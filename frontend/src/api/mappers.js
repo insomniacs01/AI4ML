@@ -246,7 +246,9 @@ export function metricsFromTask(task, progress = null) {
 
 export function detailFromTask(task, progress = null, collaboration = null) {
   const mapped = mapTask(progress?.task || task)
-  const progressPercent = Number(progress?.progress_percent)
+  const rawProgressPercent = progress?.progress_percent
+  const progressPercent = Number(rawProgressPercent)
+  const hasProgressPercent = rawProgressPercent !== null && rawProgressPercent !== undefined && rawProgressPercent !== ''
   const codexSteps = buildCodexSteps(progress?.codex)
   return {
     task: mapped,
@@ -255,7 +257,11 @@ export function detailFromTask(task, progress = null, collaboration = null) {
       steps: codexSteps.length ? codexSteps : buildSteps(mapped, progress, collaboration),
       leaderboard: progress?.leaderboard || mapped?.leaderboard || [],
       metrics: metricsFromTask(mapped, progress).values,
-      progress_percent: Number.isFinite(progressPercent) ? Math.max(0, Math.min(100, Math.round(progressPercent))) : null,
+      progress_percent: hasProgressPercent && Number.isFinite(progressPercent)
+        ? Math.max(0, Math.min(100, Math.round(progressPercent)))
+        : null,
+      progress_source: progress?.progress_source || null,
+      progress_unavailable_reason: progress?.progress_unavailable_reason || null,
       current_stage: progress?.current_stage || null,
       current_activity: progress?.current_activity || '',
       progress_status: progress?.status || '',

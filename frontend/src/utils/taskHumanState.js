@@ -50,6 +50,16 @@ function taskRunHasHumanWaitingStatus(taskRun) {
   return values.some(isHumanWaitingStatus)
 }
 
+function taskHasHumanWaitingStatus(task) {
+  const values = [
+    task?.codex_status,
+    task?.structured_requirements?.codex?.status,
+    task?.structured_requirements?.codex?.progress?.status,
+    task?.structured_requirements?.codex?.progress?.current_step,
+  ]
+  return values.some(isHumanWaitingStatus)
+}
+
 function taskRunSteps(taskRun) {
   return [
     ...(Array.isArray(taskRun?.steps) ? taskRun.steps : []),
@@ -66,6 +76,7 @@ export function hasPendingHumanConfirmation(task, taskRun = null, steps = []) {
   return (
     isHumanWaitingStatus(taskStatus)
     || hasOpenRequest
+    || taskHasHumanWaitingStatus(task)
     || taskRunHasHumanWaitingStatus(taskRun)
     || Boolean(firstWaitingHumanStep(steps))
     || Boolean(firstWaitingHumanStep(taskRunSteps(taskRun)))

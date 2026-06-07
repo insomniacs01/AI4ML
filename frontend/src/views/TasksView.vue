@@ -8,6 +8,7 @@ import LoadingBlock from '@/components/LoadingBlock.vue'
 import { deleteTask, getTasks, pauseTask } from '@/api/client'
 import { formatDateTime } from '@/utils/formatters'
 import { displayTaskTitle, taskTypeLabel } from '@/utils/labels'
+import { taskProgressPercent } from '@/utils/progress'
 
 const tasks = ref([])
 const loading = ref(false)
@@ -138,16 +139,16 @@ function statusMeta(task) {
 }
 
 function taskProgress(task) {
-  if (task.status === 'completed') return 100
-  if (['failed', 'cancelled'].includes(task.status)) return 0
-  if (['waiting_human', 'paused_for_review'].includes(task.status)) return 25
-  if (task.status === 'running') return 30
-  return 0
+  return taskProgressPercent({
+    status: task.status,
+    progressPercent: task.progress_percent,
+  })
 }
 
 function ringStyle(task) {
   const percent = taskProgress(task)
-  return { background: `conic-gradient(var(--accent) ${percent * 3.6}deg, var(--surface-soft) 0deg)` }
+  const degrees = (percent ?? 0) * 3.6
+  return { background: `conic-gradient(var(--accent) ${degrees}deg, var(--surface-soft) 0deg)` }
 }
 
 onMounted(load)
@@ -206,7 +207,7 @@ onMounted(load)
         </RouterLink>
 
         <div class="task-record-progress" :style="ringStyle(task)">
-          <strong>{{ taskProgress(task) }}%</strong>
+          <strong>{{ taskProgress(task) === null ? '—' : `${taskProgress(task)}%` }}</strong>
         </div>
 
         <div class="task-record-actions">

@@ -174,7 +174,10 @@ The initial `project_rules.md` must define these rules:
 - If repeated changes fail and `advisor_after_failed_rounds` is reached, Codex may request one independent read-only advisor diagnosis before writing the improvement decision plan. The advisor input must be `output/advisor_request.json`, and the advisor output must be `output/advisor_diagnosis.json`. The advisor cannot directly modify final artifacts or expand the confirmed strategy.
 - If the user revises the plan, update `output/plan.md`, update `output/run_strategy.json` if the execution boundary changed, and keep waiting for approval unless the user explicitly asks to execute.
 - If the user asks to regenerate the plan, regenerate both `output/plan.md` and `output/run_strategy.json`, then keep waiting for approval.
-- `output/progress.json` must reflect the current task state.
+- `state/progress_events.jsonl` is the append-only progress event log. When task progress changes, append one JSON line before updating the snapshot.
+- `output/progress.json` is the current progress snapshot derived from `state/progress_events.jsonl`; it must reflect the current task state and include `schema_version: "ai4ml-progress-v1"` and `events_path: "state/progress_events.jsonl"`.
+- Progress percent may only come from an explicit `percent` / `progress_percent` value written by the Codex/AIOUR execution body, the initial workspace `percent: 0`, or completed task status. Do not infer percent from task state, milestones, step counts, evidence files, or UI position.
+- Waiting, interrupted, or paused states must preserve the latest existing real percent. If no real percent exists, omit `percent` / `progress_percent` or set it to `null`; never write fixed fallback values such as 25, 65, 72, or 82.
 - `output/metrics.json` is required only after a real modeling result exists.
 - `output/overview.json` is required after a real modeling result or clear terminal failure exists. This file is the structured source for the Web Console overview page; `output/report.md` is not a substitute for it.
 - `output/report.md` is required only after there is a meaningful result or a clear failure explanation.
@@ -273,14 +276,17 @@ The initial `project_rules.md` must define these rules:
 - `output/predict.py` may exist only when a real reusable prediction entrypoint is available.
 - Only write a blocker and wait for user input when the selected path cannot be read, contains no usable files or usable structured/unstructured content, contains no usable modeling or analysis target after inspection, or the user's explicit instruction conflicts with the data. Missing single target column, metric, or business objective alone is not a blocker; infer defaults and produce a complete plan for review.
 
-The initial `progress.json` must use this shape:
+The initial progress snapshot must use this shape, and the corresponding `workspace_initialized` event must be appended to `state/progress_events.jsonl`:
 
 ```json
 {
-  "status": "waiting_human",
+  "schema_version": "ai4ml-progress-v1",
+  "status": "running",
   "current_step": "workspace_initialized",
-  "percent": 5,
+  "percent": 0,
+  "percent_source": "workspace_initialized",
   "summary": "AI4ML 工作区已创建，正在解析数据路径和任务目标。",
+  "events_path": "state/progress_events.jsonl",
   "steps": [
     {
       "id": "workspace_initialized",
