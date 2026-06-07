@@ -23,6 +23,7 @@ from backend.app.services.task_human_policy import (
     _get_current_policy_cycle,
     _load_team_members_for_human,
 )
+from backend.app.services.task_human_request_status import human_request_is_active
 from backend.app.services.task_routing import (
     _build_runtime_context,
     _build_stage_selection_map,
@@ -54,8 +55,10 @@ def _refresh_codex_task_for_human_snapshot(task: TaskRecord, team_access: TeamAc
             access_token=team_access.access_token,
         ):
             payload = request.payload if isinstance(request.payload, dict) else {}
-            request_status = str(request.status.value if hasattr(request.status, "value") else request.status)
-            if payload.get("request_type") in {"codex_plan_approval", "codex_improvement_review"} and request_status in {"pending", "open"}:
+            if (
+                payload.get("request_type") in {"codex_plan_approval", "codex_improvement_review"}
+                and human_request_is_active(request)
+            ):
                 request.status = HumanInteractionRequestStatus.resolved
                 request.decision = {
                     "action": "auto_resolved",

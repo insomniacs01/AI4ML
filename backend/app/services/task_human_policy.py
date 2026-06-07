@@ -23,23 +23,18 @@ from backend.app.services.service_registry import (
     get_task_human_collaboration_service,
     get_task_store,
 )
+from backend.app.services.task_human_request_status import (
+    ACTIVE_HUMAN_REQUEST_STATUSES,
+    COMPLETED_HUMAN_REQUEST_STATUSES,
+)
 
 
 from backend.app.services.task_routing import _raise_governance_http_error
 
 STAGE_CHECKPOINT_REQUEST_TYPE = "stage_checkpoint"
 STAGE_CHECKPOINT_POLICY_PREFIX = "stage-checkpoint:"
-STAGE_CHECKPOINT_ACTIVE_STATUSES = {
-    HumanInteractionRequestStatus.pending,
-    HumanInteractionRequestStatus.open,
-}
-STAGE_CHECKPOINT_COMPLETED_STATUSES = {
-    HumanInteractionRequestStatus.confirmed,
-    HumanInteractionRequestStatus.modified,
-    HumanInteractionRequestStatus.rejected,
-    HumanInteractionRequestStatus.skipped,
-    HumanInteractionRequestStatus.resolved,
-}
+STAGE_CHECKPOINT_ACTIVE_STATUSES = ACTIVE_HUMAN_REQUEST_STATUSES
+STAGE_CHECKPOINT_COMPLETED_STATUSES = COMPLETED_HUMAN_REQUEST_STATUSES
 
 def _load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMemberRecord]:
     try:

@@ -31,6 +31,7 @@ from backend.app.services.task_agent_sanitization import (
     sanitize_agent_record as _sanitize_agent_record,
     sanitize_stage_record as _sanitize_stage_record,
 )
+from backend.app.services.task_human_request_status import human_request_is_active, human_request_status_value
 
 
 def build_task_agent_collaboration_response(
@@ -47,7 +48,7 @@ def build_task_agent_collaboration_response(
     open_request_stages = {
         normalize_workflow_stage(request.stage).value
         for request in requests
-        if str(request.status.value if hasattr(request.status, "value") else request.status) in {"pending", "open"}
+        if human_request_is_active(request)
     }
 
     agents: list[TaskAgentRecord] = []
@@ -256,7 +257,7 @@ def _human_request_events(requests: list[TaskHumanRequestRecord]) -> list[TaskAg
 
 def _human_request_event(request: TaskHumanRequestRecord) -> TaskAgentEventRecord:
     stage = normalize_workflow_stage(request.stage)
-    request_status = request.status.value if hasattr(request.status, "value") else str(request.status)
+    request_status = human_request_status_value(request.status)
     title = _human_request_event_title(request, stage)
     return TaskAgentEventRecord(
         id=f"request-{request.id}",

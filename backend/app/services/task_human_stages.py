@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from backend.app.models.task import (
-    HumanInteractionRequestStatus,
     PRIMARY_WORKFLOW_STAGES,
     TaskHumanRequestRecord,
     TaskRecord,
@@ -16,13 +15,11 @@ from backend.app.models.task import (
     normalize_workflow_stage,
 )
 from backend.app.services.task_human_context import get_task_human_loop
+from backend.app.services.task_human_request_status import ACTIVE_HUMAN_REQUEST_STATUSES
 
 
 STAGE_ORDER = list(PRIMARY_WORKFLOW_STAGES)
-ACTIVE_REQUEST_STATUSES = {
-    HumanInteractionRequestStatus.pending,
-    HumanInteractionRequestStatus.open,
-}
+ACTIVE_REQUEST_STATUSES = ACTIVE_HUMAN_REQUEST_STATUSES
 
 
 @dataclass(frozen=True)

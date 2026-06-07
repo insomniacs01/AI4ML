@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from backend.app.models.task import HumanInteractionRequestStatus, TaskHumanRequestRecord, TaskRecord
+from backend.app.models.task import TaskHumanRequestRecord, TaskRecord
+from backend.app.services.task_human_request_status import human_request_is_active
 
 
 CODEX_INTERRUPTED_STATUSES = {"interrupted"}
@@ -12,11 +13,6 @@ CODEX_IMPROVEMENT_REVIEW_STATUSES = {
     "improvement_review",
     "waiting_improvement_approval",
 }
-OPEN_HUMAN_REQUEST_STATUSES = {
-    HumanInteractionRequestStatus.pending.value,
-    HumanInteractionRequestStatus.open.value,
-}
-
 
 def codex_interrupted(task: TaskRecord, progress: dict[str, object]) -> bool:
     return any(
@@ -34,7 +30,7 @@ def codex_waiting_improvement_review(task: TaskRecord, progress: dict[str, objec
 
 
 def has_open_human_confirmation_requests(requests: Iterable[TaskHumanRequestRecord]) -> bool:
-    return any(status_value(item.status) in OPEN_HUMAN_REQUEST_STATUSES for item in requests)
+    return any(human_request_is_active(item) for item in requests)
 
 
 def resume_note_for_improvement_decision(improvement_decision: str | None) -> str:

@@ -19,6 +19,7 @@ from backend.app.services.task_agent_collaboration import (
     agent_runtime_spec_for_stage,
 )
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
+from backend.app.services.task_human_request_status import human_request_is_active
 
 
 from backend.app.services.task_routing import _ResolvedStageSelection
@@ -188,7 +189,7 @@ def _ensure_agent_runtime_records(
     open_request_stages = {
         normalize_workflow_stage(request.stage).value
         for request in human_requests
-        if str(request.status.value if hasattr(request.status, "value") else request.status) in {"pending", "open"}
+        if human_request_is_active(request)
     }
 
     created_records: list[TaskAgentRuntimeRecord] = []

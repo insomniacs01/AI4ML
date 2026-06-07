@@ -21,6 +21,11 @@ from backend.app.services.task_artifacts import (
     collect_stage_artifacts_by_stage,
     read_run_log_excerpt,
 )
+from backend.app.services.task_human_request_status import (
+    human_request_is_active,
+    human_request_is_completed,
+    human_request_status_value,
+)
 from backend.app.services.task_runtime_resume import CODEX_IMPROVEMENT_REVIEW_STATUSES
 from backend.app.services.task_workflow_tracking import _record_stage_selection_map
 
@@ -127,7 +132,7 @@ def has_confirmed_codex_plan_request(task: TaskRecord, requests: list[object]) -
         if getattr(request, "version_id", None) != "codex-plan-approval":
             continue
         status_value = getattr(request, "status", "")
-        status_text = str(status_value.value if hasattr(status_value, "value") else status_value)
+        status_text = human_request_status_value(status_value)
         decision = getattr(request, "decision", None)
         if (
             status_text in {HumanInteractionRequestStatus.confirmed.value, HumanInteractionRequestStatus.skipped.value}
@@ -386,7 +391,7 @@ def ensure_codex_plan_request(
     existing = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
     if any(
         request.version_id == "codex-plan-approval"
-        and str(request.status.value if hasattr(request.status, "value") else request.status) in {"pending", "open"}
+        and human_request_is_active(request)
         for request in existing
     ):
         return
@@ -435,18 +440,11 @@ def ensure_codex_improvement_request(
     version_id = _codex_improvement_review_version_id(improvement_plan_path)
     for request in existing:
         payload = request.payload if isinstance(request.payload, dict) else {}
-        status_value = str(request.status.value if hasattr(request.status, "value") else request.status)
         if payload.get("request_type") != "codex_improvement_review":
             continue
-        if status_value in {"pending", "open"}:
+        if human_request_is_active(request):
             return
-        if request.version_id == version_id and status_value in {
-            HumanInteractionRequestStatus.confirmed.value,
-            HumanInteractionRequestStatus.skipped.value,
-            HumanInteractionRequestStatus.modified.value,
-            HumanInteractionRequestStatus.rejected.value,
-            HumanInteractionRequestStatus.resolved.value,
-        }:
+        if request.version_id == version_id and human_request_is_completed(request):
             return
 
     request_payload = {

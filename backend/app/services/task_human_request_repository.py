@@ -16,6 +16,7 @@ from backend.app.models.task import (
     WorkflowStageStatus,
     normalize_workflow_stage,
 )
+from backend.app.services.task_human_request_status import ACTIVE_HUMAN_REQUEST_STATUSES
 from backend.app.services.task_store_payloads import TaskPayloadMapper
 
 
@@ -44,7 +45,7 @@ class TaskHumanRequestRepository(TaskPayloadMapper):
         return sorted(
             requests,
             key=lambda item: (
-                0 if item.status in {HumanInteractionRequestStatus.pending, HumanInteractionRequestStatus.open} else 1,
+                0 if item.status in ACTIVE_HUMAN_REQUEST_STATUSES else 1,
                 -item.updated_at.timestamp(),
             ),
         )
