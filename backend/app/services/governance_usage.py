@@ -10,9 +10,9 @@ from backend.app.models.governance import (
     TeamQuotaRecord,
     TokenLedgerRecord,
 )
+from backend.app.services.governance_http import unwrap_single_record
 from backend.app.services.governance_quota_records import (
     QuotaScope,
-    quota_map,
     quota_record_from_payload,
     quota_scope,
 )
@@ -31,10 +31,6 @@ _QUOTA_SELECT = (
 
 
 class GovernanceUsageRepository:
-    _quota_map = staticmethod(quota_map)
-    _quota_record_from_payload = staticmethod(quota_record_from_payload)
-    _token_ledger_from_payload = staticmethod(token_ledger_from_payload)
-
     def __init__(
         self,
         *,
@@ -97,7 +93,7 @@ class GovernanceUsageRepository:
             (item for item in self._list_members(team_id, access_token=access_token) if item.user_id == user_id),
             None,
         )
-        return self._quota_record_from_payload(team_id, row, member=member)
+        return quota_record_from_payload(team_id, row, member=member)
 
     def adjust_quota_scope(
         self,
@@ -130,7 +126,7 @@ class GovernanceUsageRepository:
             access_token=access_token,
             action="quota scope adjust",
         )
-        return self._quota_record_from_payload(team_id, row)
+        return quota_record_from_payload(team_id, row)
 
     def get_member_quota(self, team_id: str, user_id: str, *, access_token: str) -> TeamQuotaRecord | None:
         items = self.list_quotas(team_id, access_token=access_token)
@@ -179,7 +175,7 @@ class GovernanceUsageRepository:
         )
 
         return [
-            self._token_ledger_from_payload(
+            token_ledger_from_payload(
                 item,
                 profile_map=profile_map,
                 task_map=task_map,
@@ -238,7 +234,7 @@ class GovernanceUsageRepository:
                 method="POST",
                 body=payload,
             )
-        return _unwrap_single_record(updated, action)
+        return unwrap_single_record(updated, action)
 
     def _connector_map(self, team_id: str, *, access_token: str) -> dict[str, str]:
         payload = self._request_json(
@@ -302,11 +298,3 @@ class GovernanceUsageRepository:
 def _quoted_in_list(values: list[str]) -> str:
     in_list = ",".join(f'"{item}"' for item in values)
     return quote(in_list, safe='(),"')
-
-
-def _unwrap_single_record(payload: Any, action: str) -> dict[str, Any]:
-    if isinstance(payload, dict):
-        return payload
-    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
-        return payload[0]
-    raise ConnectionError(f"Unexpected Supabase response shape during {action}.")

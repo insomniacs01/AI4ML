@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.app.models.governance import TeamMemberRecord, TeamProfileRecord
+from backend.app.services.governance_quota_records import quota_record_from_payload
 from backend.app.services.governance_usage import GovernanceUsageRepository
 
 
@@ -130,7 +131,7 @@ def test_list_quotas_enriches_members_connectors_team_and_unhandled_scopes() -> 
 
 
 def test_quota_record_projection_preserves_payload_identity_and_status_defaults() -> None:
-    quota = GovernanceUsageRepository._quota_record_from_payload(
+    quota = quota_record_from_payload(
         "team-1",
         {
             "user_id": "user-payload",
