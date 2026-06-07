@@ -262,7 +262,7 @@ def test_runtime_snapshot_returns_cached_state_when_codex_sync_fails(monkeypatch
     monkeypatch.setattr("backend.app.services.task_runtime_snapshot.get_task_store", lambda: Store())
     monkeypatch.setattr("backend.app.services.task_runtime_snapshot.get_settings", lambda: object())
     monkeypatch.setattr("backend.app.services.task_runtime_snapshot.is_codex_task", lambda task_arg, settings: True)
-    monkeypatch.setattr("backend.app.services.task_runtime_snapshot._sync_codex_runtime_snapshot", raise_sync_error)
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.sync_codex_runtime_snapshot", raise_sync_error)
     monkeypatch.setattr(
         "backend.app.services.task_runtime_snapshot.safe_reconcile_codex_runtime_activity",
         lambda task_store, task_arg, team_access, settings: task_arg,
