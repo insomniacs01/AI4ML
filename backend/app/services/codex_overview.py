@@ -13,6 +13,7 @@ from backend.app.services.codex_common import (
 )
 from backend.app.services.codex_metrics import selected_model_metrics
 from backend.app.services.codex_overview_checks import derive_result_checks
+from backend.app.services.codex_overview_factors import derive_key_factors
 from backend.app.services.codex_overview_metrics import overview_baseline_metric, overview_primary_metric
 from backend.app.services.codex_overview_optimization import derive_optimization_records
 
@@ -87,7 +88,7 @@ def _derive_overview_from_metrics(metrics: dict[str, Any], workspace_path: str |
         "confidence": _derive_confidence(metric_name, metric_value, baseline_value, diagnostics),
         "target_columns": _target_columns_from_metrics(metrics),
         "target_metrics": _target_metrics_from_metrics(metrics),
-        "key_factors": _derive_key_factors(metrics),
+        "key_factors": derive_key_factors(metrics),
         "result_checks": derive_result_checks(
             metrics,
             metric_name,
@@ -201,70 +202,6 @@ def _derive_confidence(
         "rationale": "可信度根据主指标、baseline 对比和诊断风险综合估计。",
         "warnings": warnings,
     }
-
-
-def _derive_key_factors(metrics: dict[str, Any]) -> list[dict[str, Any]]:
-    selected = metrics.get("selected_model") if isinstance(metrics.get("selected_model"), dict) else {}
-    factors = _feature_importance_factors(selected.get("feature_importance"))
-    if factors:
-        return factors
-    return _error_analysis_factors(metrics)
-
-
-def _feature_importance_factors(raw_importance: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_importance, dict):
-        return []
-    factors: list[dict[str, Any]] = []
-    items = sorted(raw_importance.items(), key=lambda item: abs(coerce_float(item[1]) or 0), reverse=True)
-    for name, value in items[:8]:
-        numeric = coerce_float(value)
-        if not isinstance(name, str) or numeric is None:
-            continue
-        factors.append(
-            {
-                "name": name,
-                "importance": numeric,
-                "display": name,
-                "source": "model_feature_importance",
-                "is_model_feature_importance": True,
-                "direction": _factor_direction(numeric),
-                "evidence": "来自 metrics.json selected_model.feature_importance。",
-            }
-        )
-    return factors
-
-
-def _factor_direction(value: float) -> str:
-    return "positive" if value > 0 else "negative" if value < 0 else "unknown"
-
-
-def _error_analysis_factors(metrics: dict[str, Any]) -> list[dict[str, Any]]:
-    error_analysis = metrics.get("error_analysis") if isinstance(metrics.get("error_analysis"), dict) else {}
-    source_rows = error_analysis.get("by_source_category_test")
-    factors: list[dict[str, Any]] = []
-    if isinstance(source_rows, list):
-        sorted_rows = sorted(
-            [row for row in source_rows if isinstance(row, dict)],
-            key=lambda row: coerce_float(row.get("signed_log_mae")) or -1,
-            reverse=True,
-        )
-        for row in sorted_rows[:5]:
-            name = row.get("Source_Category")
-            value = coerce_float(row.get("signed_log_mae"))
-            if not name or value is None:
-                continue
-            factors.append(
-                {
-                    "name": str(name),
-                    "importance": value,
-                    "display": str(name),
-                    "source": "error_analysis",
-                    "is_model_feature_importance": False,
-                    "direction": "unknown",
-                    "evidence": f"测试集该来源分组 signed_log_mae = {format_metric(value)}，表示该分组误差较高。",
-                }
-            )
-    return factors
 
 
 def _sample_actual_vs_predicted(metrics: dict[str, Any]) -> list[dict[str, Any]]:
