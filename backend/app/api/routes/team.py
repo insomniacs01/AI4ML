@@ -55,6 +55,7 @@ from backend.app.services.team_admin_user_update import (
     update_admin_user_record,
 )
 from backend.app.services.team_invite import build_team_invite_response
+from backend.app.services.team_member_role_rules import assert_member_role_update_allowed
 from backend.app.services.team_quota_enforcement import pause_member_tasks_if_quota_exhausted
 from backend.app.services.team_quota_scope import resolve_quota_scope_key
 from backend.app.services.team_routing_policy_validation import validate_routing_update
@@ -164,16 +165,15 @@ def update_team_member_role(
     payload: TeamMemberRoleUpdateRequest,
     team_access: TeamAccessContext = Depends(require_team_admin_access),
 ) -> TeamMemberRoleUpdateResponse:
-    if payload.role == "team_owner":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="team_owner must be assigned through the ownership transfer endpoint.",
+    try:
+        assert_member_role_update_allowed(
+            target_member_id=member_id,
+            requested_role=payload.role,
+            actor_user_id=team_access.user.id,
+            actor_role=team_access.role,
         )
-    if member_id == team_access.user.id and team_access.role == "team_owner":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="team_owner cannot demote themselves through member role update. Use ownership transfer instead.",
-        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     store = get_governance_store()
     try:
         member = store.update_member_role(
