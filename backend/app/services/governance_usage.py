@@ -10,7 +10,6 @@ from backend.app.models.governance import (
     TeamQuotaRecord,
     TokenLedgerRecord,
 )
-from backend.app.services.governance_payload_values import coerce_non_negative_int
 from backend.app.services.governance_quota_records import (
     ConnectorSummary,
     QuotaScope,
@@ -18,6 +17,7 @@ from backend.app.services.governance_quota_records import (
     quota_record_from_payload,
     quota_scope,
 )
+from backend.app.services.governance_quota_writes import build_quota_account_payload
 from backend.app.services.governance_token_ledgers import normalize_ledger_limit, token_ledger_from_payload
 
 RequestJson = Callable[..., Any]
@@ -236,33 +236,14 @@ class GovernanceUsageRepository:
         access_token: str,
         action: str,
     ) -> dict[str, Any]:
-        resolved_token_quota = (
-            token_quota
-            if token_quota is not None
-            else coerce_non_negative_int(existing_row.get("token_quota"))
+        payload = build_quota_account_payload(
+            team_id,
+            scope,
+            token_quota=token_quota,
+            status=status,
+            warning_threshold=warning_threshold,
+            existing_row=existing_row,
         )
-        resolved_status = status or str(existing_row.get("status") or "active")
-        if (
-            status is None
-            and token_quota is not None
-            and resolved_status == "exhausted"
-            and resolved_token_quota > coerce_non_negative_int(existing_row.get("token_used"))
-        ):
-            resolved_status = "active"
-        payload = {
-            "team_id": team_id,
-            "user_id": scope.user_id,
-            "connector_id": scope.connector_id,
-            "scope_type": scope.scope_type,
-            "scope_key": scope.scope_key,
-            "token_quota": resolved_token_quota,
-            "status": resolved_status,
-            "warning_threshold": (
-                warning_threshold
-                if warning_threshold is not None
-                else coerce_non_negative_int(existing_row.get("warning_threshold"))
-            ),
-        }
         if existing_row:
             updated = self._request_json(
                 path=(
