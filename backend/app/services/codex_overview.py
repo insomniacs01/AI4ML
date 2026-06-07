@@ -13,6 +13,7 @@ from backend.app.services.codex_common import (
 from backend.app.services.codex_metrics import selected_model_metrics
 from backend.app.services.codex_overview_charts import actual_vs_predicted_points, metric_series
 from backend.app.services.codex_overview_checks import derive_result_checks
+from backend.app.services.codex_overview_confidence import derive_confidence
 from backend.app.services.codex_overview_factors import derive_key_factors
 from backend.app.services.codex_overview_metrics import overview_baseline_metric, overview_primary_metric
 from backend.app.services.codex_overview_optimization import derive_optimization_records
@@ -92,7 +93,7 @@ def _derive_overview_from_metrics(metrics: dict[str, Any], workspace_path: str |
             "baseline_name": baseline_name,
             "interpretation": error_interpretation,
         },
-        "confidence": _derive_confidence(metric_name, metric_value, baseline_value, diagnostics),
+        "confidence": derive_confidence(metric_name, metric_value, baseline_value, diagnostics),
         "target_columns": target_columns,
         "target_metrics": metrics_target_metrics(metrics),
         "key_factors": derive_key_factors(metrics),
@@ -116,53 +117,4 @@ def _derive_overview_from_metrics(metrics: dict[str, Any], workspace_path: str |
             "prediction_csv": prediction_csv,
             "feature_importance": feature_importance_path,
         },
-    }
-
-
-def _derive_confidence(
-    metric_name: str | None,
-    metric_value: float | None,
-    baseline_value: float | None,
-    diagnostics: dict[str, Any],
-) -> dict[str, Any]:
-    warnings: list[str] = []
-    score_parts: list[float] = []
-    if metric_name and metric_value is not None:
-        if baseline_value is not None and baseline_value != 0:
-            if lower_is_better(metric_name):
-                improvement = (baseline_value - metric_value) / abs(baseline_value)
-            else:
-                improvement = (metric_value - baseline_value) / abs(baseline_value)
-            score_parts.append(max(0.0, min(1.0, 0.5 + improvement)))
-        elif metric_name in {"accuracy", "macro_f1", "r2", "within_relative_error_25pct"}:
-            score_parts.append(max(0.0, min(1.0, metric_value)))
-    else:
-        warnings.append("未找到真实主评估指标，无法评估可信度。")
-
-    leakage = diagnostics.get("leakage") if isinstance(diagnostics.get("leakage"), dict) else {}
-    if leakage:
-        warnings.append(str(leakage.get("interpretation") or "存在需要复核的切分或泄漏风险。"))
-        score_parts.append(0.35)
-    if isinstance(diagnostics.get("target_distribution_note"), str):
-        warnings.append(diagnostics["target_distribution_note"])
-        score_parts.append(0.55)
-
-    if not score_parts:
-        return {
-            "score": None,
-            "level": "unknown",
-            "display": "未知",
-            "rationale": "当前任务没有足够结构化证据计算可信度。",
-            "warnings": warnings,
-        }
-
-    score = sum(score_parts) / len(score_parts)
-    level = "high" if score >= 0.75 else "medium" if score >= 0.45 else "low"
-    display = {"high": "高", "medium": "中", "low": "低"}[level]
-    return {
-        "score": round(score, 3),
-        "level": level,
-        "display": display,
-        "rationale": "可信度根据主指标、baseline 对比和诊断风险综合估计。",
-        "warnings": warnings,
     }
