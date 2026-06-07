@@ -21,14 +21,16 @@ from backend.app.services.task_artifacts import (
     collect_stage_artifacts_by_stage,
     read_run_log_excerpt,
 )
+from backend.app.services.task_codex_human_gates import (
+    CODEX_PLAN_APPROVAL_VERSION_ID,
+    codex_improvement_review_version_id,
+    has_confirmed_codex_plan_request,
+    has_existing_codex_improvement_review_request,
+    has_open_codex_plan_request,
+)
 from backend.app.services.task_codex_human_payloads import (
     build_codex_improvement_review_payload,
     build_codex_plan_approval_payload,
-)
-from backend.app.services.task_human_request_status import (
-    human_request_is_active,
-    human_request_is_completed,
-    human_request_status_value,
 )
 from backend.app.services.task_runtime_resume import CODEX_IMPROVEMENT_REVIEW_STATUSES
 from backend.app.services.task_workflow_tracking import _record_stage_selection_map
@@ -117,34 +119,6 @@ def write_codex_resume_progress(task: TaskRecord) -> None:
             }
         ],
     )
-
-
-def has_confirmed_codex_plan_request(task: TaskRecord, requests: list[object]) -> bool:
-    structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
-    human_loop = structured.get("human_loop") if isinstance(structured.get("human_loop"), dict) else {}
-    decision_history = human_loop.get("decision_history") if isinstance(human_loop.get("decision_history"), list) else []
-    latest_decision = human_loop.get("latest_decision") if isinstance(human_loop.get("latest_decision"), dict) else None
-    decisions = [item for item in [latest_decision, *decision_history] if isinstance(item, dict)]
-    if any(
-        item.get("request_type") == "codex_plan_approval"
-        and item.get("action") in {"approve", "skip"}
-        and item.get("resume_task") is not False
-        for item in decisions
-    ):
-        return True
-    for request in requests:
-        if getattr(request, "version_id", None) != "codex-plan-approval":
-            continue
-        status_value = getattr(request, "status", "")
-        status_text = human_request_status_value(status_value)
-        decision = getattr(request, "decision", None)
-        if (
-            status_text in {HumanInteractionRequestStatus.confirmed.value, HumanInteractionRequestStatus.skipped.value}
-            and isinstance(decision, dict)
-            and decision.get("action") in {"approve", "skip"}
-        ):
-            return True
-    return False
 
 
 def record_codex_running_stages(task: TaskRecord, team_access: TeamAccessContext) -> None:
@@ -393,11 +367,7 @@ def ensure_codex_plan_request(
     if plan_path is None:
         plan_path = codex_workspace_plan_path(task, get_settings())
     existing = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
-    if any(
-        request.version_id == "codex-plan-approval"
-        and human_request_is_active(request)
-        for request in existing
-    ):
+    if has_open_codex_plan_request(existing):
         return
     if has_confirmed_codex_plan_request(task, existing):
         return
@@ -414,7 +384,7 @@ def ensure_codex_plan_request(
         assigned_to=team_access.user.id,
         assignee_type="member",
         assignee_value=team_access.user.id,
-        version_id="codex-plan-approval",
+        version_id=CODEX_PLAN_APPROVAL_VERSION_ID,
         payload=request_payload,
         access_token=team_access.access_token,
     )
@@ -437,15 +407,9 @@ def ensure_codex_improvement_request(
         return
 
     existing = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
-    version_id = _codex_improvement_review_version_id(improvement_plan_path)
-    for request in existing:
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        if payload.get("request_type") != "codex_improvement_review":
-            continue
-        if human_request_is_active(request):
-            return
-        if request.version_id == version_id and human_request_is_completed(request):
-            return
+    version_id = codex_improvement_review_version_id(improvement_plan_path)
+    if has_existing_codex_improvement_review_request(existing, version_id=version_id):
+        return
 
     request_payload = build_codex_improvement_review_payload(
         task,
@@ -468,13 +432,3 @@ def ensure_codex_improvement_request(
     )
     request.status = HumanInteractionRequestStatus.open
     task_store.update_human_request(request, access_token=team_access.access_token)
-
-
-def _codex_improvement_review_version_id(improvement_plan_path: str | None) -> str:
-    if not improvement_plan_path:
-        return "codex-improvement-review"
-    try:
-        fingerprint = Path(improvement_plan_path).stat().st_mtime_ns
-    except OSError:
-        fingerprint = abs(hash(improvement_plan_path))
-    return f"codex-improvement-review:{fingerprint}"
