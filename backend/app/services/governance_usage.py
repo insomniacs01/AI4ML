@@ -11,12 +11,12 @@ from backend.app.models.governance import (
     TokenLedgerRecord,
 )
 from backend.app.services.governance_quota_records import (
-    ConnectorSummary,
     QuotaScope,
     quota_map,
     quota_record_from_payload,
     quota_scope,
 )
+from backend.app.services.governance_quota_listing import build_quota_records
 from backend.app.services.governance_quota_writes import build_quota_account_payload
 from backend.app.services.governance_token_ledgers import normalize_ledger_limit, token_ledger_from_payload
 
@@ -59,35 +59,12 @@ class GovernanceUsageRepository:
             raise ConnectionError("Unexpected quota response from Supabase.")
 
         connector_map = self._connector_map(team_id, access_token=access_token)
-        quota_rows = self._quota_map(quota_payload)
-
-        items: list[TeamQuotaRecord] = []
-        handled_keys: set[tuple[str, str]] = set()
-
-        for member in members:
-            key = ("member", member.user_id)
-            items.append(self._quota_record_from_payload(team_id, quota_rows.get(key, {}), member=member))
-            handled_keys.add(key)
-
-        for connector_id, connector_name in connector_map.items():
-            key = ("connector", connector_id)
-            items.append(
-                self._quota_record_from_payload(
-                    team_id,
-                    quota_rows.get(key, {}),
-                    connector=ConnectorSummary(id=connector_id, display_name=connector_name),
-                )
-            )
-            handled_keys.add(key)
-
-        team_key = ("team", team_id)
-        items.append(self._quota_record_from_payload(team_id, quota_rows.get(team_key, {})))
-        handled_keys.add(team_key)
-
-        for key, quota_row in quota_rows.items():
-            if key not in handled_keys:
-                items.append(self._quota_record_from_payload(team_id, quota_row))
-        return items
+        return build_quota_records(
+            team_id,
+            members=members,
+            connector_map=connector_map,
+            quota_payload=quota_payload,
+        )
 
     def adjust_quota(
         self,

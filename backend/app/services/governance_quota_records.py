@@ -142,5 +142,6 @@ def quota_subject(
         connector_display_name=optional_payload_str(payload.get("connector_display_name")),
     )
 
+
 def quota_status(payload: dict[str, Any], resolved_quota: int, remaining: int) -> str:
     return str(payload.get("status") or ("exhausted" if resolved_quota and remaining == 0 else "active"))
