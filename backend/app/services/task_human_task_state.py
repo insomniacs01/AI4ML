@@ -4,7 +4,7 @@ from datetime import datetime
 
 from backend.app.models.task import TaskRecord, TaskStatus
 from backend.app.services.task_human_context import ensure_task_human_loop
-from backend.app.services.task_human_stages import get_previous_status
+from backend.app.services.task_human_stage_blueprints import get_previous_status
 
 
 def apply_task_waiting_for_human(

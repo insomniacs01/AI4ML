@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from backend.app.models.task import RunAttempt, RunSummary, TaskRecord, TaskStatus, WorkflowStage, WorkflowStageStatus
-from backend.app.services.task_human_stages import HumanStageSnapshotBuilder, StageBlueprint
+from backend.app.services.task_human_stage_blueprints import StageBlueprint
+from backend.app.services.task_human_stages import HumanStageSnapshotBuilder
 
 
 def _task(status: TaskStatus = TaskStatus.uploaded) -> TaskRecord:
