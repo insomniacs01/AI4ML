@@ -48,19 +48,22 @@ from backend.app.services.task_runtime_activity import (
     ensure_task_controls_current_codex_activity,
 )
 from backend.app.services.task_runtime_progress import (
-    CODEX_IMPROVEMENT_REVIEW_STATUSES,
     ensure_codex_plan_request,
     record_codex_running_stages,
     record_codex_status_stages,
     record_user_paused_stages,
     update_codex_structured_metadata,
 )
+from backend.app.services.task_runtime_resume import (
+    codex_interrupted,
+    codex_waiting_improvement_review,
+    codex_waiting_plan_approval,
+    has_open_human_confirmation_requests,
+    resume_note_for_improvement_decision,
+)
 from backend.app.services.task_workflow_tracking import _record_stage_selection_map
 
 router = APIRouter(tags=["task-runtime"])
-
-CODEX_INTERRUPTED_STATUSES = {"interrupted"}
-CODEX_PLAN_APPROVAL_STATUSES = {"waiting_plan_approval", "plan_ready", "awaiting_plan_approval"}
 
 
 def _task_requested_time_limit(task: TaskRecord, payload: TaskRunRequest) -> int | None:
@@ -412,7 +415,7 @@ def _resume_interrupted_codex_task(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex workspace is not available.")
     task, artifacts = sync_codex_task_state(task, settings)
     progress = artifacts.get("progress") if isinstance(artifacts.get("progress"), dict) else {}
-    if _codex_waiting_plan_approval(task, progress):
+    if codex_waiting_plan_approval(task, progress):
         return _approve_codex_plan_and_save(
             task,
             payload,
@@ -420,7 +423,7 @@ def _resume_interrupted_codex_task(
             settings,
             token_budget=token_budget,
         )
-    if _codex_waiting_improvement_review(task, progress):
+    if codex_waiting_improvement_review(task, progress):
         return _resume_codex_task_and_save(
             task,
             team_access,
@@ -428,7 +431,7 @@ def _resume_interrupted_codex_task(
             token_budget=token_budget,
             improvement_decision=payload.improvement_decision or "continue_improvement",
         )
-    if not _codex_interrupted(task, progress):
+    if not codex_interrupted(task, progress):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前任务不是已暂停状态，不能按中断恢复。")
     return _resume_codex_task_and_save(
         task,
@@ -437,52 +440,6 @@ def _resume_interrupted_codex_task(
         token_budget=token_budget,
         improvement_decision=payload.improvement_decision,
     )
-
-
-def _codex_interrupted(task: TaskRecord, progress: dict[str, object]) -> bool:
-    return any(_status_value(value) in CODEX_INTERRUPTED_STATUSES for value in (task.codex_status, progress.get("status")))
-
-
-def _codex_waiting_plan_approval(task: TaskRecord, progress: dict[str, object]) -> bool:
-    values = [
-        task.codex_status,
-        progress.get("status"),
-        progress.get("current_step"),
-    ]
-    if any(_status_value(value) in CODEX_PLAN_APPROVAL_STATUSES for value in values):
-        return True
-    steps = progress.get("steps")
-    if isinstance(steps, list):
-        for item in steps:
-            if not isinstance(item, dict):
-                continue
-            step_values = (item.get("id"), item.get("name"), item.get("status"))
-            if any(_status_value(value) in CODEX_PLAN_APPROVAL_STATUSES for value in step_values):
-                return True
-    return False
-
-
-def _codex_waiting_improvement_review(task: TaskRecord, progress: dict[str, object]) -> bool:
-    values = [
-        task.codex_status,
-        progress.get("status"),
-        progress.get("current_step"),
-    ]
-    if any(_status_value(value) in CODEX_IMPROVEMENT_REVIEW_STATUSES for value in values):
-        return True
-    steps = progress.get("steps")
-    if isinstance(steps, list):
-        for item in steps:
-            if not isinstance(item, dict):
-                continue
-            step_values = (item.get("id"), item.get("name"), item.get("status"))
-            if any(_status_value(value) in CODEX_IMPROVEMENT_REVIEW_STATUSES for value in step_values):
-                return True
-    return False
-
-
-def _status_value(value: object) -> str:
-    return str(value.value if hasattr(value, "value") else value or "").strip().lower()
 
 
 def _resume_codex_task_and_save(
@@ -496,7 +453,7 @@ def _resume_codex_task_and_save(
     task_store = get_task_store()
     if improvement_decision:
         requests = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
-        if any(str(item.status.value if hasattr(item.status, "value") else item.status) in {"pending", "open"} for item in requests):
+        if has_open_human_confirmation_requests(requests):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="There are open human confirmation requests.")
     try:
         response = resume_codex_task(
@@ -514,19 +471,11 @@ def _resume_codex_task_and_save(
     task.codex_status = "running"
     task.codex_finished_at = None
     task.status = TaskStatus.running
-    task.notes = _resume_note_for_improvement_decision(improvement_decision)
+    task.notes = resume_note_for_improvement_decision(improvement_decision)
     task = update_codex_structured_metadata(task)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     record_codex_running_stages(saved_task, team_access)
     return saved_task
-
-
-def _resume_note_for_improvement_decision(improvement_decision: str | None) -> str:
-    if improvement_decision == "continue_improvement":
-        return "Codex 已按用户选择继续执行改进方案。"
-    if improvement_decision == "stop_and_report":
-        return "Codex 已按用户选择停止继续改进，正在生成当前结果报告。"
-    return "Codex 已从暂停位置继续执行。"
 
 
 def _approve_codex_plan_and_save(
@@ -539,7 +488,7 @@ def _approve_codex_plan_and_save(
 ) -> TaskRecord:
     task_store = get_task_store()
     requests = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
-    if any(str(item.status.value if hasattr(item.status, "value") else item.status) in {"pending", "open"} for item in requests):
+    if has_open_human_confirmation_requests(requests):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="There are open human confirmation requests.")
     plan_text = payload.plan_text or codex_plan_text(task, settings)
     if not plan_text.strip():

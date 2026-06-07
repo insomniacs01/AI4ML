@@ -21,14 +21,8 @@ from backend.app.services.task_artifacts import (
     collect_stage_artifacts_by_stage,
     read_run_log_excerpt,
 )
+from backend.app.services.task_runtime_resume import CODEX_IMPROVEMENT_REVIEW_STATUSES
 from backend.app.services.task_workflow_tracking import _record_stage_selection_map
-
-
-CODEX_IMPROVEMENT_REVIEW_STATUSES = {
-    "waiting_improvement_review",
-    "improvement_review",
-    "waiting_improvement_approval",
-}
 
 
 def update_codex_structured_metadata(task: TaskRecord) -> TaskRecord:
