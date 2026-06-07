@@ -23,6 +23,13 @@ from backend.app.models.governance import (
     TokenLedgerRecord,
 )
 from backend.app.services.governance_assets import PlatformAssetRepository
+from backend.app.services.governance_routing_policies import (
+    connector_display_names,
+    routing_policy_has_value,
+    routing_policy_records_from_payload,
+    routing_policy_stage,
+    routing_policy_upsert_body,
+)
 from backend.app.services.governance_team_records import (
     profile_records_from_payload,
     team_member_from_payload,
@@ -35,6 +42,11 @@ class GovernanceStore:
     _team_settings_from_payload = staticmethod(team_settings_from_payload)
     _member_record_from_payload = staticmethod(team_member_from_payload)
     _profile_records_from_payload = staticmethod(profile_records_from_payload)
+    _connector_display_names = staticmethod(connector_display_names)
+    _routing_policy_records_from_payload = staticmethod(routing_policy_records_from_payload)
+    _routing_policy_has_value = staticmethod(routing_policy_has_value)
+    _routing_policy_stage = staticmethod(routing_policy_stage)
+    _routing_policy_upsert_body = staticmethod(routing_policy_upsert_body)
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -300,28 +312,9 @@ class GovernanceStore:
             ),
             access_token=access_token,
         )
-        connector_map = {
-            str(item.get("id")): str(item.get("display_name"))
-            for item in connector_payload
-            if isinstance(item, dict) and item.get("id")
-        } if isinstance(connector_payload, list) else {}
+        connector_map = self._connector_display_names(connector_payload)
 
-        return [
-            AIRoutingPolicyRecord(
-                id=str(item.get("id")) if item.get("id") else None,
-                team_id=str(item.get("team_id")),
-                stage=str(item.get("stage")),
-                connector_id=str(item.get("connector_id")) if item.get("connector_id") else None,
-                connector_display_name=connector_map.get(str(item.get("connector_id"))) if item.get("connector_id") else None,
-                model_name=str(item.get("model_name")) if item.get("model_name") else None,
-                config=item.get("config") if isinstance(item.get("config"), dict) else None,
-                created_by=str(item.get("created_by")) if item.get("created_by") else None,
-                created_at=item.get("created_at"),
-                updated_at=item.get("updated_at"),
-            )
-            for item in payload
-            if isinstance(item, dict)
-        ]
+        return self._routing_policy_records_from_payload(payload, connector_map=connector_map)
 
     def save_routing_policies(
         self,
@@ -332,13 +325,8 @@ class GovernanceStore:
         access_token: str,
     ) -> list[AIRoutingPolicyRecord]:
         for item in payload.items:
-            has_any_value = bool(
-                item.connector_id
-                or item.model_name
-                or item.config
-            )
-            stage = item.stage.strip()
-            if not has_any_value:
+            stage = self._routing_policy_stage(item)
+            if not self._routing_policy_has_value(item):
                 self._request_json(
                     path=(
                         "ai_routing_policies"
@@ -353,14 +341,7 @@ class GovernanceStore:
                 path="ai_routing_policies?on_conflict=team_id,stage",
                 access_token=access_token,
                 method="POST",
-                body={
-                    "team_id": team_id,
-                    "stage": stage,
-                    "connector_id": item.connector_id,
-                    "model_name": item.model_name,
-                    "config": item.config,
-                    "created_by": created_by,
-                },
+                body=self._routing_policy_upsert_body(team_id, created_by, item),
                 prefer="resolution=merge-duplicates,return=representation",
             )
         return self.list_routing_policies(team_id, access_token=access_token)
