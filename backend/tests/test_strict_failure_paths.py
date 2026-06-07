@@ -6,7 +6,6 @@ from unittest import TestCase
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from backend.app.api.routes import team as team_routes
 from backend.app.core.supabase_auth import SupabaseUser, TeamAccessContext
 from backend.app.models.connector import ConnectorTestStatus, ConnectorWireApi, StoredConnectorRecord
 from backend.app.models.governance import AIRoutingPoliciesUpdateRequest, AIRoutingPolicyRecord, AIRoutingPolicyUpsertRequest
