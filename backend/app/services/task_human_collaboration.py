@@ -14,14 +14,12 @@ from backend.app.models.task import (
     TaskRecord,
     TaskStageRoutingRecord,
     TaskStatus,
-    WorkflowStage,
     WorkflowStageRecord,
     normalize_workflow_stage,
 )
 from backend.app.services.task_human_access import (
     ResolvedHumanAssignee,
     assert_actor_can_decide_human_request,
-    parse_candidate_pool,
     resolve_human_request_assignee,
 )
 from backend.app.services.task_human_context import (
@@ -83,7 +81,7 @@ class TaskHumanCollaborationService:
     ) -> TaskHumanCollaborationResponse:
         requests = expire_overdue_human_requests(self.task_store, task, access_token=access_token)
         existing_records = {
-            self._stage_key(record.stage): record
+            stage_key(record.stage): record
             for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
         }
         stages = self._stage_builder.build_stage_snapshot(
@@ -108,13 +106,13 @@ class TaskHumanCollaborationService:
     ) -> list[WorkflowStageRecord]:
         expire_overdue_human_requests(self.task_store, task, access_token=access_token)
         existing_records = {
-            self._stage_key(record.stage): record
+            stage_key(record.stage): record
             for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
         }
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         normalized_selection_map = {
-            self._stage_key(stage_key): value
-            for stage_key, value in (stage_selection_map or {}).items()
+            stage_key(selection_stage): value
+            for selection_stage, value in (stage_selection_map or {}).items()
         }
 
         synced_records: list[WorkflowStageRecord] = []
@@ -139,7 +137,7 @@ class TaskHumanCollaborationService:
                 )
             )
 
-        return self._sort_stages(synced_records)
+        return sort_stages(synced_records)
 
     def create_request(
         self,
@@ -205,10 +203,10 @@ class TaskHumanCollaborationService:
             expire_human_request(request, expired_at=now)
             self.task_store.update_human_request(request, access_token=access_token)
             raise RuntimeError("human request has expired")
-        if not self._is_active_request(request):
+        if not is_active_request(request):
             raise RuntimeError("human request has already been closed")
 
-        self._assert_actor_can_decide(request, actor_id=decided_by, actor_role=actor_role)
+        assert_actor_can_decide_human_request(request, actor_id=decided_by, actor_role=actor_role)
 
         if payload.action == HumanInteractionDecisionAction.reassign:
             return self._reassign_request(
@@ -223,7 +221,7 @@ class TaskHumanCollaborationService:
 
         request.status = status_for_human_decision_action(payload.action)
         requires_rerun = is_rerun_decision_action(payload.action)
-        rerun_from_stage = self._stage_key(request.stage) if requires_rerun else None
+        rerun_from_stage = stage_key(request.stage) if requires_rerun else None
         request.decision = build_human_decision_payload(
             payload,
             decided_by=decided_by,
@@ -337,22 +335,6 @@ class TaskHumanCollaborationService:
         )
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
 
-    @staticmethod
-    def _sort_stages(stages: list[WorkflowStageRecord]) -> list[WorkflowStageRecord]:
-        return sort_stages(stages)
-
-    @staticmethod
-    def _is_active_request(request: TaskHumanRequestRecord) -> bool:
-        return is_active_request(request)
-
-    @staticmethod
-    def _parse_candidate_pool(value: str | None) -> list[str]:
-        return parse_candidate_pool(value)
-
-    @staticmethod
-    def _assert_actor_can_decide(request: TaskHumanRequestRecord, *, actor_id: str, actor_role: str) -> None:
-        assert_actor_can_decide_human_request(request, actor_id=actor_id, actor_role=actor_role)
-
     def _record_latest_decision(
         self,
         task: TaskRecord,
@@ -367,7 +349,3 @@ class TaskHumanCollaborationService:
         )
         append_task_human_decision(task, decision_entry)
         return task
-
-    @staticmethod
-    def _stage_key(stage: WorkflowStage | str) -> str:
-        return stage_key(stage)
