@@ -31,6 +31,7 @@ from backend.app.services.codex_progress import (
 from backend.app.services.codex_usage import token_usage_from_artifacts
 from backend.app.services.codex_overview import build_codex_overview_from_artifacts
 from backend.app.services.codex_workspace import CodexWorkspaceReader, read_workspace_overview_artifacts
+from backend.app.services.task_codex_metadata import update_codex_structured_metadata
 from backend.app.services.task_human_context import ensure_task_human_loop
 
 
@@ -122,12 +123,12 @@ def sync_task_from_codex_artifacts(task: TaskRecord, settings: Settings) -> tupl
     task.executor_type = "codex"
     if is_quota_guard_paused(task.status, task.structured_requirements):
         task.codex_status = "interrupted"
-        _set_codex_structured_metadata(task)
+        update_codex_structured_metadata(task)
         return task, artifacts
 
     task.codex_status = context.status
     _apply_codex_sync_status(task, artifacts, context, now)
-    _set_codex_structured_metadata(task)
+    update_codex_structured_metadata(task)
     return task, artifacts
 
 
@@ -244,22 +245,6 @@ def codex_plan_text(task: TaskRecord, settings: Settings) -> str:
 
 def codex_workspace_plan_path(task: TaskRecord, settings: Settings) -> str | None:
     return CodexWorkspaceReader(settings).plan_path(task)
-
-
-def _set_codex_structured_metadata(task: TaskRecord) -> None:
-    structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
-    codex = structured.get("codex") if isinstance(structured.get("codex"), dict) else {}
-    structured["executor_type"] = "codex"
-    structured["codex"] = {
-        **codex,
-        "workspace_path": task.codex_workspace_path,
-        "session_id": task.codex_session_id,
-        "thread_id": task.codex_thread_id,
-        "status": task.codex_status,
-        "started_at": task.codex_started_at.isoformat() if task.codex_started_at else None,
-        "finished_at": task.codex_finished_at.isoformat() if task.codex_finished_at else None,
-    }
-    task.structured_requirements = structured
 
 
 def _set_human_loop_previous_status(task: TaskRecord, *, previous_status: TaskStatus) -> None:
