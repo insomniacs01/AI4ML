@@ -4,11 +4,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.app.models.task import TaskRecord
-from backend.app.services.task_agent_baseline import (
-    baseline_completed as _baseline_completed,
-    compute_baseline as _compute_baseline,
-    pending_baseline as _baseline_pending,
-)
+from backend.app.services.task_agent_baseline import compute_baseline as _compute_baseline, pending_baseline as _baseline_pending
+from backend.app.services.task_agent_baseline_metrics import baseline_completed as _baseline_completed
 from backend.app.services.task_agent_checklist import build_checklist as _build_checklist
 from backend.app.services.task_agent_quality import (
     build_next_improvement as _build_next_improvement,

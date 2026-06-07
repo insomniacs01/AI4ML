@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.models.task import TaskRecord, TaskStatus
-from backend.app.services.task_agent_baseline import baseline_completed
+from backend.app.services.task_agent_baseline_metrics import baseline_completed
 from backend.app.services.task_agent_checklist import profile_summary
 from backend.app.services.task_agent_quality import quality_detail, quality_status
 

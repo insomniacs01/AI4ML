@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.models.task import DatasetProfile, TaskRecord
-from backend.app.services.task_agent_baseline import resolve_metric_name
+from backend.app.services.task_agent_baseline_metrics import resolve_metric_name
 from backend.app.services.task_targets import target_columns_display, target_columns_from_task
 
 

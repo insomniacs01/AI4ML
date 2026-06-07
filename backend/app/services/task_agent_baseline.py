@@ -8,24 +8,32 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import TaskRecord
+from backend.app.services.task_agent_baseline_metrics import (
+    baseline_completed,
+    baseline_metric_name,
+    compare_metric,
+    is_lower_better,
+    metric_snapshot,
+    normalize_metric,
+    resolve_classification_metric,
+    resolve_metric_name,
+    resolve_regression_metric,
+    validation_score,
+)
 from backend.app.services.task_targets import target_columns_from_task
 
 
 MAX_BASELINE_ROWS = 50_000
 MAX_PREVIEW_DISTINCT_VALUES = 200
-LOWER_IS_BETTER_METRICS = {
-    "rmse",
-    "root_mean_squared_error",
-    "mse",
-    "mean_squared_error",
-    "mae",
-    "mean_absolute_error",
-    "median_absolute_error",
-    "log_loss",
-    "pinball_loss",
-}
-CLASSIFICATION_METRICS = {"accuracy", "balanced_accuracy", "f1"}
-REGRESSION_METRICS = {"rmse", "root_mean_squared_error", "mse", "mean_squared_error", "mae", "mean_absolute_error", "r2"}
+__all__ = [
+    "baseline_completed",
+    "compare_metric",
+    "compute_baseline",
+    "metric_snapshot",
+    "normalize_metric",
+    "pending_baseline",
+    "resolve_metric_name",
+]
 
 
 def compute_baseline(task: TaskRecord) -> dict[str, Any]:
@@ -46,7 +54,7 @@ def compute_baseline(task: TaskRecord) -> dict[str, Any]:
         return _baseline_blocked(f"读取 CSV 失败，无法计算简单对照：{exc}")
     if len(rows) < 5:
         return _baseline_blocked("可用于基线验证的目标值少于 5 行。")
-    metric_name = _baseline_metric_name(task)
+    metric_name = baseline_metric_name(task)
     if task.problem_type == "regression":
         return _compute_regression_baseline(task, rows, metric_name, target_column)
     return _compute_classification_baseline(task, rows, metric_name, target_column)
@@ -54,63 +62,6 @@ def compute_baseline(task: TaskRecord) -> dict[str, Any]:
 
 def pending_baseline(detail: str) -> dict[str, Any]:
     return {"status": "pending", "detail": detail, "generated_at": _now_iso()}
-
-
-def baseline_completed(value: Any) -> bool:
-    return isinstance(value, dict) and value.get("status") == "completed" and isinstance(value.get("metric_value"), (int, float))
-
-
-def resolve_metric_name(task: TaskRecord) -> str:
-    requirements = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
-    metric_name = requirements.get("metric_name")
-    if isinstance(metric_name, str) and metric_name.strip():
-        return metric_name.strip().lower()
-    if task.last_run and task.last_run.metric_name:
-        return task.last_run.metric_name
-    return ""
-
-
-def metric_snapshot(payload: Any) -> dict[str, Any] | None:
-    if not baseline_completed(payload):
-        return None
-    return {
-        "metric_name": payload.get("metric_name"),
-        "metric_value": payload.get("metric_value"),
-        "validation_score": payload.get("validation_score"),
-    }
-
-
-def compare_metric(
-    model_metric_name: str,
-    model_value: float,
-    baseline_metric_name: str,
-    baseline_value: float,
-) -> dict[str, Any] | None:
-    model_key = normalize_metric(model_metric_name)
-    baseline_key = normalize_metric(baseline_metric_name)
-    if model_key != baseline_key:
-        return None
-    lower_better = _is_lower_better(model_key)
-    if lower_better:
-        delta = baseline_value - model_value
-        denominator = abs(baseline_value) if abs(baseline_value) > 1e-12 else 1.0
-        better = delta > max(denominator * 0.01, 1e-12)
-    else:
-        delta = model_value - baseline_value
-        denominator = abs(baseline_value) if abs(baseline_value) > 1e-12 else 1.0
-        better = delta > max(denominator * 0.01, 1e-12)
-    return {
-        "model_value": model_value,
-        "baseline_value": baseline_value,
-        "delta": delta,
-        "relative_delta": delta / denominator,
-        "better": better,
-        "direction": "lower" if lower_better else "higher",
-    }
-
-
-def normalize_metric(metric_name: str | None) -> str:
-    return str(metric_name or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _read_target_rows(dataset_path: Path, target_column: str) -> list[str]:
@@ -142,7 +93,7 @@ def _compute_regression_baseline(
         return _baseline_blocked("样本划分后训练集或验证集为空。")
     prediction = sum(train) / len(train)
     scores = _regression_scores(validation, prediction)
-    resolved_metric, metric_value = _resolve_regression_metric(metric_name, scores)
+    resolved_metric, metric_value = resolve_regression_metric(metric_name, scores)
     return {
         "status": "completed",
         "method": "mean_target_baseline",
@@ -152,8 +103,8 @@ def _compute_regression_baseline(
         "requested_metric_name": metric_name,
         "metric_name": resolved_metric,
         "metric_value": metric_value,
-        "validation_score": _validation_score(resolved_metric, metric_value),
-        "direction": "lower" if _is_lower_better(resolved_metric) else "higher",
+        "validation_score": validation_score(resolved_metric, metric_value),
+        "direction": "lower" if is_lower_better(resolved_metric) else "higher",
         "sample_count": len(numeric_values),
         "train_count": len(train),
         "validation_count": len(validation),
@@ -192,17 +143,6 @@ def _regression_scores(validation: list[float], prediction: float) -> dict[str, 
     }
 
 
-def _resolve_regression_metric(metric_name: str, scores: dict[str, float]) -> tuple[str, float]:
-    metric_key = normalize_metric(metric_name)
-    if metric_key in {"mae", "mean_absolute_error"}:
-        return "mae", scores["mae"]
-    if metric_key in {"mse", "mean_squared_error"}:
-        return "mse", scores["mse"]
-    if metric_key == "r2":
-        return "r2", scores["r2"]
-    return "rmse", scores["rmse"]
-
-
 def _compute_classification_baseline(
     task: TaskRecord,
     raw_values: list[str],
@@ -215,7 +155,7 @@ def _compute_classification_baseline(
     counts = Counter(train)
     majority_label, majority_count = counts.most_common(1)[0]
     scores = _classification_scores(train, validation, majority_label)
-    resolved_metric, metric_value = _resolve_classification_metric(metric_name, scores)
+    resolved_metric, metric_value = resolve_classification_metric(metric_name, scores)
     distribution = _class_distribution(counts)
     return {
         "status": "completed",
@@ -226,8 +166,8 @@ def _compute_classification_baseline(
         "requested_metric_name": metric_name,
         "metric_name": resolved_metric,
         "metric_value": metric_value,
-        "validation_score": _validation_score(resolved_metric, metric_value),
-        "direction": "lower" if _is_lower_better(resolved_metric) else "higher",
+        "validation_score": validation_score(resolved_metric, metric_value),
+        "direction": "lower" if is_lower_better(resolved_metric) else "higher",
         "sample_count": len(raw_values),
         "train_count": len(train),
         "validation_count": len(validation),
@@ -276,15 +216,6 @@ def _binary_f1(predictions: list[str], validation: list[str], positive: str) -> 
     return 2 * precision * recall / (precision + recall) if precision + recall else 0.0
 
 
-def _resolve_classification_metric(metric_name: str, scores: dict[str, float]) -> tuple[str, float]:
-    metric_key = normalize_metric(metric_name)
-    if metric_key == "balanced_accuracy":
-        return "balanced_accuracy", scores["balanced_accuracy"]
-    if metric_key == "f1" and "f1" in scores:
-        return "f1", scores["f1"]
-    return "accuracy", scores["accuracy"]
-
-
 def _class_distribution(counts: Counter[str]) -> dict[str, int]:
     return {str(label): count for label, count in counts.most_common(MAX_PREVIEW_DISTINCT_VALUES)}
 
@@ -300,22 +231,6 @@ def _deterministic_split(values: list[Any]) -> tuple[list[Any], list[Any]]:
 
 def _baseline_blocked(detail: str) -> dict[str, Any]:
     return {"status": "blocked", "detail": detail, "generated_at": _now_iso()}
-
-
-def _baseline_metric_name(task: TaskRecord) -> str:
-    metric_name = resolve_metric_name(task)
-    metric_key = normalize_metric(metric_name)
-    if task.problem_type == "regression":
-        return metric_key if metric_key in REGRESSION_METRICS else "rmse"
-    return metric_key if metric_key in CLASSIFICATION_METRICS else "accuracy"
-
-
-def _validation_score(metric_name: str, value: float) -> float:
-    return -value if _is_lower_better(metric_name) else value
-
-
-def _is_lower_better(metric_name: str) -> bool:
-    return normalize_metric(metric_name) in LOWER_IS_BETTER_METRICS
 
 
 def _now_iso() -> str:

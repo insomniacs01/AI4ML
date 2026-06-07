@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.app.models.task import TaskRecord
-from backend.app.services.task_agent_baseline import baseline_completed, compare_metric, metric_snapshot
+from backend.app.services.task_agent_baseline_metrics import baseline_completed, compare_metric, metric_snapshot
 from backend.app.services.task_agent_quality import build_next_improvement
 
 
