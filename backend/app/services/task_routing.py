@@ -108,7 +108,7 @@ def _validate_task_stage_routing_overrides(items: list[TaskStageRoutingOverrideI
         stage = normalize_workflow_stage(item.stage)
         if item.model_name and item.model_name.strip() and not item.connector_id:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"{stage.value} 阶段只填写了模型名但没有 connector_id。请显式选择连接器。",
             )
 

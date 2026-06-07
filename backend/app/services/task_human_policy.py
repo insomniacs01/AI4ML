@@ -67,7 +67,7 @@ def _validate_interaction_policy_assignees(
                 team_members=team_members,
             )
         except RuntimeError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
 def _next_policy_cycle(task: TaskRecord) -> int:
     human_loop = ensure_task_human_loop(task)
@@ -321,7 +321,7 @@ def _resolve_policy_assignee(
             team_members=team_members,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
 
 def _create_policy_human_request(

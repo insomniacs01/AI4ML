@@ -53,6 +53,7 @@ from backend.app.services.admin_user_management import (
 from backend.app.services.platform_limits import read_platform_limits, save_platform_limits
 from backend.app.services.quota_runtime_guard import pause_member_tasks_for_quota, quota_is_exhausted
 from backend.app.services.service_registry import get_governance_store, get_task_store
+from backend.app.services.team_quota_scope import resolve_quota_scope_key
 
 
 router = APIRouter(tags=["team"])
@@ -67,7 +68,7 @@ def _validate_routing_update(payload: AIRoutingPoliciesUpdateRequest) -> None:
         stage = item.stage.strip()
         if item.model_name and item.model_name.strip() and not item.connector_id:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"{stage} 阶段只填写了模型名但没有 connector_id。请显式选择连接器。",
             )
 
@@ -130,7 +131,7 @@ def transfer_team_ownership(
             access_token=team_access.access_token,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return TeamOwnershipTransferResponse(
@@ -177,12 +178,12 @@ def update_team_member_role(
 ) -> TeamMemberRoleUpdateResponse:
     if payload.role == "team_owner":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="team_owner must be assigned through the ownership transfer endpoint.",
         )
     if member_id == team_access.user.id and team_access.role == "team_owner":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="team_owner cannot demote themselves through member role update. Use ownership transfer instead.",
         )
     store = get_governance_store()
@@ -232,15 +233,9 @@ def adjust_team_quota_scope(
     team_access: TeamAccessContext = Depends(require_team_admin_access),
 ) -> TeamQuotaAdjustResponse:
     scope_type = payload.scope_type
-    scope_key = payload.scope_key
-    if scope_type == "member":
-        scope_key = payload.user_id or scope_key
-    elif scope_type == "connector":
-        scope_key = payload.connector_id or scope_key
-    elif scope_type == "team":
-        scope_key = scope_key or team_access.team_id
+    scope_key = resolve_quota_scope_key(payload, team_id=team_access.team_id)
     if not scope_key:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="quota scope_key is required.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="quota scope_key is required.")
 
     store = get_governance_store()
     try:
@@ -355,12 +350,12 @@ def _update_admin_member_record(
 def _assert_admin_role_update_allowed(existing_member: TeamMemberRecord, next_role: str) -> None:
     if next_role == "team_owner":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="team_owner must be assigned through the ownership transfer endpoint.",
         )
     if existing_member.role == "team_owner" and next_role != "team_owner":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="team_owner cannot be changed through this endpoint. Use ownership transfer instead.",
         )
 

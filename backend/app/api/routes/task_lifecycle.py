@@ -252,7 +252,7 @@ def update_task_semantic_analysis(
             corrected_by=team_access.user.id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     saved_task = task_store.save_task(updated_task, access_token=team_access.access_token)
     runtime_context = _build_runtime_context(team_access)
