@@ -66,7 +66,7 @@ from backend.app.services.task_human_context import (
     build_task_human_guidance_lines,
     build_task_human_guidance_preview,
 )
-from backend.app.services.task_human_parameters import resolve_task_run_time_limit
+from backend.app.services.task_human_parameter_guidance import resolve_task_run_time_limit
 
 
 def _utcnow() -> datetime:

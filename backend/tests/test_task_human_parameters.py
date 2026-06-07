@@ -17,7 +17,8 @@ from backend.app.models.task import (
     WorkflowStage,
 )
 from backend.app.services.task_human_parameter_values import HUMAN_PARAMETERS_KEY, PARAMETER_HISTORY_KEY
-from backend.app.services.task_human_parameters import _column_names, apply_human_decision_parameters
+from backend.app.services.task_human_parameter_application import column_names
+from backend.app.services.task_human_parameters import apply_human_decision_parameters
 
 
 def _task(*, dataset_path: str | None = None, profile: DatasetProfile | None = None) -> TaskRecord:
@@ -113,7 +114,7 @@ def test_apply_training_parameters_invalidates_existing_run_for_rerun() -> None:
 
 
 def test_column_names_prefers_task_dataset_profile() -> None:
-    names = _column_names(
+    names = column_names(
         _task(profile=_profile(["profile_a", "profile_target"])),
         {"column_names": ["requirement_a", "requirement_target"]},
     )
@@ -122,7 +123,7 @@ def test_column_names_prefers_task_dataset_profile() -> None:
 
 
 def test_column_names_reads_serialized_profile_columns_with_existing_coercion() -> None:
-    names = _column_names(
+    names = column_names(
         _task(),
         {
             "dataset_profile": {
@@ -143,6 +144,6 @@ def test_column_names_falls_back_to_csv_header(tmp_path: Path) -> None:
     dataset_path = tmp_path / "train.csv"
     dataset_path.write_text("age,income,target\n18,2000,yes\n", encoding="utf-8")
 
-    names = _column_names(_task(dataset_path=str(dataset_path)), {})
+    names = column_names(_task(dataset_path=str(dataset_path)), {})
 
     assert names == ["age", "income", "target"]
