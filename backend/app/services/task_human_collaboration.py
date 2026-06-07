@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from typing import Any
 
 from backend.app.models.governance import TeamMemberRecord
@@ -51,39 +50,17 @@ from backend.app.services.task_human_stages import (
     sort_stages,
     stage_key,
 )
+from backend.app.services.task_human_transitions import (
+    READY_FOR_RERUN_ACTION,
+    REQUEST_RERUN_AND_WAIT_ACTION,
+    RESUME_TASK_ACTION,
+    WAIT_FOR_HUMAN_ACTION,
+    PostDecisionTaskAction,
+    build_expired_human_decision_payload,
+    resolve_human_decision_task_action,
+    status_for_human_decision_action,
+)
 from backend.app.services.task_store import TaskStore
-
-
-class PostDecisionTaskAction(str, Enum):
-    wait_for_human = "wait_for_human"
-    ready_for_rerun = "ready_for_rerun"
-    request_rerun_and_wait = "request_rerun_and_wait"
-    resume_task = "resume_task"
-
-
-WAIT_FOR_HUMAN_ACTION = PostDecisionTaskAction.wait_for_human
-READY_FOR_RERUN_ACTION = PostDecisionTaskAction.ready_for_rerun
-REQUEST_RERUN_AND_WAIT_ACTION = PostDecisionTaskAction.request_rerun_and_wait
-RESUME_TASK_ACTION = PostDecisionTaskAction.resume_task
-
-
-def resolve_human_decision_task_action(
-    action: HumanInteractionDecisionAction,
-    *,
-    open_request_count: int,
-    resume_task: bool,
-) -> PostDecisionTaskAction:
-    if open_request_count > 0:
-        return WAIT_FOR_HUMAN_ACTION
-    if action == HumanInteractionDecisionAction.block:
-        return WAIT_FOR_HUMAN_ACTION
-    if is_rerun_decision_action(action) and resume_task:
-        return READY_FOR_RERUN_ACTION
-    if is_rerun_decision_action(action):
-        return REQUEST_RERUN_AND_WAIT_ACTION
-    if resume_task:
-        return RESUME_TASK_ACTION
-    return WAIT_FOR_HUMAN_ACTION
 
 
 class TaskHumanCollaborationService:
@@ -221,12 +198,9 @@ class TaskHumanCollaborationService:
         if request is None:
             raise ValueError("human request not found")
         if self._is_overdue(request):
+            expired_at = datetime.now(timezone.utc)
             request.status = HumanInteractionRequestStatus.expired
-            request.decision = {
-                "action": "expired",
-                "summary": "Request expired before a human decision was submitted.",
-                "decided_at": datetime.now(timezone.utc).isoformat(),
-            }
+            request.decision = build_expired_human_decision_payload(expired_at=expired_at)
             self.task_store.update_human_request(request, access_token=access_token)
             raise RuntimeError("human request has expired")
         if not self._is_active_request(request):
@@ -245,7 +219,7 @@ class TaskHumanCollaborationService:
                 access_token=access_token,
             )
 
-        request.status = self._status_for_decision_action(payload.action)
+        request.status = status_for_human_decision_action(payload.action)
         requires_rerun = is_rerun_decision_action(payload.action)
         rerun_from_stage = self._stage_key(request.stage) if requires_rerun else None
         request.decision = build_human_decision_payload(
@@ -384,11 +358,7 @@ class TaskHumanCollaborationService:
             if request.timeout_at > now:
                 continue
             request.status = HumanInteractionRequestStatus.expired
-            request.decision = {
-                "action": "expired",
-                "summary": "Request expired before a human decision was submitted.",
-                "decided_at": now.isoformat(),
-            }
+            request.decision = build_expired_human_decision_payload(expired_at=now)
             self.task_store.update_human_request(request, access_token=access_token)
             expired_any = True
         if not expired_any:
@@ -450,18 +420,6 @@ class TaskHumanCollaborationService:
     @staticmethod
     def _assert_actor_can_decide(request: TaskHumanRequestRecord, *, actor_id: str, actor_role: str) -> None:
         assert_actor_can_decide_human_request(request, actor_id=actor_id, actor_role=actor_role)
-
-    @staticmethod
-    def _status_for_decision_action(action: HumanInteractionDecisionAction) -> HumanInteractionRequestStatus:
-        if action == HumanInteractionDecisionAction.approve:
-            return HumanInteractionRequestStatus.confirmed
-        if action == HumanInteractionDecisionAction.revise:
-            return HumanInteractionRequestStatus.modified
-        if action in {HumanInteractionDecisionAction.block, HumanInteractionDecisionAction.reject}:
-            return HumanInteractionRequestStatus.rejected
-        if action == HumanInteractionDecisionAction.skip:
-            return HumanInteractionRequestStatus.skipped
-        raise RuntimeError(f"unsupported human decision action: {action}")
 
     def _mark_task_waiting(
         self,

@@ -35,12 +35,16 @@ from backend.app.services.task_human_access import (
     resolve_human_request_assignee,
 )
 from backend.app.services.task_human_collaboration import (
+    TaskHumanCollaborationService,
+)
+from backend.app.services.task_human_transitions import (
     READY_FOR_RERUN_ACTION,
     REQUEST_RERUN_AND_WAIT_ACTION,
     RESUME_TASK_ACTION,
     WAIT_FOR_HUMAN_ACTION,
-    TaskHumanCollaborationService,
+    build_expired_human_decision_payload,
     resolve_human_decision_task_action,
+    status_for_human_decision_action,
 )
 from backend.app.services.task_human_payloads import (
     build_human_decision_history_entry,
@@ -263,6 +267,37 @@ class TaskHumanCollaborationServiceTests(TestCase):
             ),
             WAIT_FOR_HUMAN_ACTION,
         )
+
+    def test_human_decision_request_status_and_expiration_payloads_are_explicit(self) -> None:
+        self.assertEqual(
+            status_for_human_decision_action(HumanInteractionDecisionAction.approve),
+            HumanInteractionRequestStatus.confirmed,
+        )
+        self.assertEqual(
+            status_for_human_decision_action(HumanInteractionDecisionAction.revise),
+            HumanInteractionRequestStatus.modified,
+        )
+        self.assertEqual(
+            status_for_human_decision_action(HumanInteractionDecisionAction.block),
+            HumanInteractionRequestStatus.rejected,
+        )
+        self.assertEqual(
+            status_for_human_decision_action(HumanInteractionDecisionAction.reject),
+            HumanInteractionRequestStatus.rejected,
+        )
+        self.assertEqual(
+            status_for_human_decision_action(HumanInteractionDecisionAction.skip),
+            HumanInteractionRequestStatus.skipped,
+        )
+        with self.assertRaisesRegex(RuntimeError, "unsupported human decision action"):
+            status_for_human_decision_action(HumanInteractionDecisionAction.reassign)
+
+        expired_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        self.assertEqual(build_expired_human_decision_payload(expired_at=expired_at), {
+            "action": "expired",
+            "summary": "Request expired before a human decision was submitted.",
+            "decided_at": "2026-01-02T03:04:05+00:00",
+        })
 
     def test_human_assignee_resolution_rules_are_explicit(self) -> None:
         team_members = [
