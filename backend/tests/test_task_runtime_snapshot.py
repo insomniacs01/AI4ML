@@ -16,9 +16,9 @@ from backend.app.models.task import (
 from backend.app.services.task_runtime_snapshot import (
     TaskRuntimeSnapshotSyncError,
     _build_task_run_payload,
-    _reconcile_codex_runtime_activity,
     build_task_runtime_snapshot_response,
 )
+from backend.app.services.task_codex_runtime_activity import reconcile_codex_runtime_activity
 
 
 def _task() -> TaskRecord:
@@ -148,15 +148,15 @@ def test_reconcile_codex_runtime_activity_pauses_inactive_running_task(monkeypat
 
     team_access = type("TeamAccess", (), {"access_token": "token"})()
     monkeypatch.setattr(
-        "backend.app.services.task_runtime_snapshot.fetch_codex_task_status",
+        "backend.app.services.task_codex_runtime_activity.fetch_codex_task_status",
         lambda task_arg, settings: {"running": False, "progressStatus": "interrupted"},
     )
     monkeypatch.setattr(
-        "backend.app.services.task_runtime_snapshot.sync_codex_task_state",
+        "backend.app.services.task_codex_runtime_activity.sync_codex_task_state",
         lambda task_arg, settings, **kwargs: (task_arg, {}),
     )
 
-    reconciled = _reconcile_codex_runtime_activity(Store(), task, team_access, object())
+    reconciled = reconcile_codex_runtime_activity(Store(), task, team_access, object())
 
     assert reconciled.status == TaskStatus.paused_for_review
     assert reconciled.codex_status == "interrupted"
@@ -176,15 +176,15 @@ def test_reconcile_codex_runtime_activity_returns_display_state_when_save_fails(
 
     team_access = type("TeamAccess", (), {"access_token": "token"})()
     monkeypatch.setattr(
-        "backend.app.services.task_runtime_snapshot.fetch_codex_task_status",
+        "backend.app.services.task_codex_runtime_activity.fetch_codex_task_status",
         lambda task_arg, settings: {"running": False, "progressStatus": "interrupted"},
     )
     monkeypatch.setattr(
-        "backend.app.services.task_runtime_snapshot.sync_codex_task_state",
+        "backend.app.services.task_codex_runtime_activity.sync_codex_task_state",
         lambda task_arg, settings, **kwargs: (task_arg, {}),
     )
 
-    reconciled = _reconcile_codex_runtime_activity(Store(), task, team_access, object())
+    reconciled = reconcile_codex_runtime_activity(Store(), task, team_access, object())
 
     assert reconciled.status == TaskStatus.paused_for_review
     assert reconciled.codex_status == "interrupted"
@@ -203,11 +203,11 @@ def test_reconcile_codex_runtime_activity_keeps_verified_running_task(monkeypatc
 
     team_access = type("TeamAccess", (), {"access_token": "token"})()
     monkeypatch.setattr(
-        "backend.app.services.task_runtime_snapshot.fetch_codex_task_status",
+        "backend.app.services.task_codex_runtime_activity.fetch_codex_task_status",
         lambda task_arg, settings: {"running": True, "progressStatus": "running"},
     )
 
-    reconciled = _reconcile_codex_runtime_activity(Store(), task, team_access, object())
+    reconciled = reconcile_codex_runtime_activity(Store(), task, team_access, object())
 
     assert reconciled.status == TaskStatus.running
     assert reconciled.codex_status == "running"
@@ -233,7 +233,7 @@ def test_runtime_snapshot_returns_cached_state_when_codex_sync_fails(monkeypatch
     monkeypatch.setattr("backend.app.services.task_runtime_snapshot.is_codex_task", lambda task_arg, settings: True)
     monkeypatch.setattr("backend.app.services.task_runtime_snapshot._sync_codex_runtime_snapshot", raise_sync_error)
     monkeypatch.setattr(
-        "backend.app.services.task_runtime_snapshot._reconcile_codex_runtime_activity",
+        "backend.app.services.task_runtime_snapshot.safe_reconcile_codex_runtime_activity",
         lambda task_store, task_arg, team_access, settings: task_arg,
     )
     monkeypatch.setattr("backend.app.services.task_runtime_snapshot.build_codex_run_progress", lambda task_arg, settings: None)
