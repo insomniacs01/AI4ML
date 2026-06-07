@@ -28,6 +28,7 @@ def _stage(
     *,
     status: WorkflowStageStatus = WorkflowStageStatus.running,
     updated_at: datetime | None = None,
+    summary: str = "cached stage",
 ) -> WorkflowStageRecord:
     now = updated_at or datetime.now(timezone.utc)
     return WorkflowStageRecord(
@@ -36,7 +37,7 @@ def _stage(
         task_id="task-1",
         stage=stage,
         status=status,
-        summary="cached stage",
+        summary=summary,
         created_at=now,
         updated_at=now,
     )
@@ -112,6 +113,19 @@ class TaskCacheTests(TestCase):
             cache.delete_task("team-1", "task-1")
 
             self.assertEqual(cache.list_stage_records("team-1", "task-1"), [])
+
+    def test_older_stage_payload_does_not_overwrite_newer_cache(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            cache = TaskCache(Path(temp_dir) / "task_cache.sqlite3", ttl_seconds=60)
+            newer = datetime.now(timezone.utc)
+            older = newer - timedelta(minutes=5)
+
+            self.assertEqual(cache.upsert_stage_records([_stage(updated_at=newer, summary="newer")]), 1)
+            self.assertEqual(cache.upsert_stage_records([_stage(updated_at=older, summary="older")]), 0)
+
+            records = cache.list_stage_records("team-1", "task-1")
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].summary, "newer")
 
     def test_older_payload_does_not_overwrite_newer_cache(self) -> None:
         with TemporaryDirectory() as temp_dir:

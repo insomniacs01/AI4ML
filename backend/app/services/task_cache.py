@@ -5,10 +5,15 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any
 
 from backend.app.models.task import TaskRecord, WorkflowStageRecord
 from backend.app.services.task_cache_schema import ensure_task_cache_schema
+from backend.app.services.task_cache_stage_upsert import (
+    CachedStageState,
+    StageUpsertPlan,
+    build_stage_upsert_plan,
+    stage_key,
+)
 from backend.app.services.task_cache_upsert import CachedTaskState, TaskUpsertPlan, build_task_upsert_plan
 
 
@@ -128,58 +133,11 @@ class TaskCache:
         with self._lock, self._connect() as conn:
             changed = 0
             for record in records:
-                stage_key = self._stage_key(record.stage)
-                existing = conn.execute(
-                    """
-                    SELECT updated_at
-                    FROM stage_cache
-                    WHERE team_id = ? AND task_id = ? AND stage = ?
-                    LIMIT 1
-                    """,
-                    (record.team_id, record.task_id, stage_key),
-                ).fetchone()
-                if existing is not None:
-                    existing_updated_at = self._parse_datetime(str(existing["updated_at"]))
-                    incoming_updated_at = self._parse_datetime(record.updated_at.isoformat())
-                    if (
-                        existing_updated_at is not None
-                        and incoming_updated_at is not None
-                        and existing_updated_at >= incoming_updated_at
-                    ):
-                        self._mark_stage_synced(
-                            conn,
-                            record.team_id,
-                            record.task_id,
-                            stage_key,
-                            synced_at=synced_at,
-                        )
-                        continue
-
-                conn.execute(
-                    """
-                    INSERT INTO stage_cache (
-                        team_id,
-                        task_id,
-                        stage,
-                        payload,
-                        updated_at,
-                        synced_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(team_id, task_id, stage) DO UPDATE SET
-                        payload = excluded.payload,
-                        updated_at = excluded.updated_at,
-                        synced_at = excluded.synced_at
-                    """,
-                    (
-                        record.team_id,
-                        record.task_id,
-                        stage_key,
-                        json.dumps(record.model_dump(mode="json"), ensure_ascii=False),
-                        record.updated_at.isoformat(),
-                        synced_at,
-                    ),
-                )
+                plan = self._stage_upsert_plan(conn, record)
+                if not plan.should_write:
+                    self._mark_stage_synced(conn, record.team_id, record.task_id, plan.stage, synced_at=synced_at)
+                    continue
+                self._write_stage_cache(conn, record, synced_at=synced_at, stage=plan.stage)
                 changed += 1
         return changed
 
@@ -272,6 +230,24 @@ class TaskCache:
             is_detail=int(row["is_detail"] or 0) == 1,
         )
 
+    def _stage_upsert_plan(self, conn: sqlite3.Connection, record: WorkflowStageRecord) -> StageUpsertPlan:
+        existing = self._cached_stage_state(conn, record)
+        return build_stage_upsert_plan(existing, record.stage, record.updated_at)
+
+    def _cached_stage_state(self, conn: sqlite3.Connection, record: WorkflowStageRecord) -> CachedStageState | None:
+        row = conn.execute(
+            """
+            SELECT updated_at
+            FROM stage_cache
+            WHERE team_id = ? AND task_id = ? AND stage = ?
+            LIMIT 1
+            """,
+            (record.team_id, record.task_id, stage_key(record.stage)),
+        ).fetchone()
+        if row is None:
+            return None
+        return CachedStageState(updated_at=self._parse_datetime(str(row["updated_at"])))
+
     @staticmethod
     def _write_task_cache(
         conn: sqlite3.Connection,
@@ -311,6 +287,40 @@ class TaskCache:
         )
 
     @staticmethod
+    def _write_stage_cache(
+        conn: sqlite3.Connection,
+        record: WorkflowStageRecord,
+        *,
+        synced_at: str,
+        stage: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO stage_cache (
+                team_id,
+                task_id,
+                stage,
+                payload,
+                updated_at,
+                synced_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(team_id, task_id, stage) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at,
+                synced_at = excluded.synced_at
+            """,
+            (
+                record.team_id,
+                record.task_id,
+                stage,
+                json.dumps(record.model_dump(mode="json"), ensure_ascii=False),
+                record.updated_at.isoformat(),
+                synced_at,
+            ),
+        )
+
+    @staticmethod
     def _mark_stage_synced(
         conn: sqlite3.Connection,
         team_id: str,
@@ -341,10 +351,6 @@ class TaskCache:
             return WorkflowStageRecord.model_validate(json.loads(payload))
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
-
-    @staticmethod
-    def _stage_key(value: Any) -> str:
-        return value.value if hasattr(value, "value") else str(value)
 
     @staticmethod
     def _now_iso() -> str:
