@@ -2,20 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from backend.app.models.task import TaskRecord, WorkflowStageRecord
-
-
-@dataclass(frozen=True)
-class _CachedTaskState:
-    payload: str
-    updated_at: datetime | None
-    is_detail: bool
+from backend.app.services.task_cache_upsert import CachedTaskState, TaskUpsertPlan, build_task_upsert_plan
 
 
 class TaskCache:
@@ -68,11 +61,11 @@ class TaskCache:
         with self._lock, self._connect() as conn:
             changed = 0
             for task in tasks:
-                task, incoming_is_detail, should_write = self._task_upsert_plan(conn, task, detail=detail)
-                if not should_write:
+                plan = self._task_upsert_plan(conn, task, detail=detail)
+                if not plan.should_write:
                     self._mark_synced(conn, task.team_id, task.id, synced_at=synced_at)
                     continue
-                self._write_task_cache(conn, task, synced_at=synced_at, is_detail=incoming_is_detail)
+                self._write_task_cache(conn, plan.task, synced_at=synced_at, is_detail=plan.is_detail)
                 changed += 1
         return changed
 
@@ -300,28 +293,10 @@ class TaskCache:
         task: TaskRecord,
         *,
         detail: bool,
-    ) -> tuple[TaskRecord, bool, bool]:
-        existing = self._cached_task_state(conn, task)
-        if existing is None:
-            return task, detail, True
+    ) -> TaskUpsertPlan:
+        return build_task_upsert_plan(self._cached_task_state(conn, task), task, detail=detail)
 
-        incoming_updated_at = self._parse_datetime(task.updated_at.isoformat())
-        if existing.is_detail and not detail:
-            if self._existing_is_newer_or_equal(existing.updated_at, incoming_updated_at):
-                return task, detail, False
-            existing_task = self._task_from_payload(existing.payload)
-            if existing_task is not None:
-                task = self._merge_summary_into_detail(existing_task, task)
-
-        incoming_is_detail = detail or existing.is_detail
-        if (
-            self._existing_is_newer_or_equal(existing.updated_at, incoming_updated_at)
-            and existing.is_detail == incoming_is_detail
-        ):
-            return task, incoming_is_detail, False
-        return task, incoming_is_detail, True
-
-    def _cached_task_state(self, conn: sqlite3.Connection, task: TaskRecord) -> _CachedTaskState | None:
+    def _cached_task_state(self, conn: sqlite3.Connection, task: TaskRecord) -> CachedTaskState | None:
         row = conn.execute(
             """
             SELECT payload, updated_at, is_detail
@@ -333,21 +308,10 @@ class TaskCache:
         ).fetchone()
         if row is None:
             return None
-        return _CachedTaskState(
-            payload=str(row["payload"]),
+        return CachedTaskState(
+            task=self._task_from_payload(str(row["payload"])),
             updated_at=self._parse_datetime(str(row["updated_at"])),
             is_detail=int(row["is_detail"] or 0) == 1,
-        )
-
-    @staticmethod
-    def _existing_is_newer_or_equal(
-        existing_updated_at: datetime | None,
-        incoming_updated_at: datetime | None,
-    ) -> bool:
-        return (
-            existing_updated_at is not None
-            and incoming_updated_at is not None
-            and existing_updated_at >= incoming_updated_at
         )
 
     @staticmethod
@@ -412,29 +376,6 @@ class TaskCache:
             return TaskRecord.model_validate(json.loads(payload))
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
-
-    @staticmethod
-    def _merge_summary_into_detail(detail_task: TaskRecord, summary_task: TaskRecord) -> TaskRecord:
-        payload = detail_task.model_dump(mode="json")
-        for key in (
-            "created_by",
-            "creator_user_id",
-            "name",
-            "description",
-            "workflow_id",
-            "label_column",
-            "problem_type",
-            "status",
-            "dataset_filename",
-            "dataset_path",
-            "notes",
-            "routing_policy_id",
-            "routing_source",
-            "created_at",
-            "updated_at",
-        ):
-            payload[key] = summary_task.model_dump(mode="json").get(key)
-        return TaskRecord.model_validate(payload)
 
     @staticmethod
     def _stage_from_payload(payload: str) -> WorkflowStageRecord | None:
