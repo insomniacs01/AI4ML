@@ -14,9 +14,6 @@ from backend.app.models.governance import (
     AdminPasswordResetResponse,
     AdminUserUpdateRequest,
     AdminUserUpdateResponse,
-    AIRoutingPoliciesResponse,
-    AIRoutingPoliciesUpdateRequest,
-    AIRoutingPoliciesUpdateResponse,
     PlatformLimitsRecord,
     PlatformLimitsResponse,
     TeamInviteRequest,
@@ -45,7 +42,6 @@ from backend.app.services.team_admin_user_update import (
 from backend.app.services.team_invite import build_team_invite_response
 from backend.app.services.team_member_role_rules import assert_member_role_update_allowed
 from backend.app.services.team_quota_enforcement import pause_member_tasks_if_quota_exhausted
-from backend.app.services.team_routing_policy_validation import validate_routing_update
 
 
 router = APIRouter(tags=["team"])
@@ -247,41 +243,3 @@ def update_admin_platform_limits(
 ) -> PlatformLimitsResponse:
     limits = save_platform_limits(get_governance_store().settings, payload)
     return PlatformLimitsResponse(**limits.model_dump())
-
-
-@router.get("/routing", response_model=AIRoutingPoliciesResponse)
-def list_team_routing(team_access: TeamAccessContext = Depends(require_team_access)) -> AIRoutingPoliciesResponse:
-    try:
-        items = get_governance_store().list_routing_policies(
-            team_access.team_id,
-            access_token=team_access.access_token,
-        )
-    except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
-    return AIRoutingPoliciesResponse(team_id=team_access.team_id, items=items)
-
-
-@router.put("/routing", response_model=AIRoutingPoliciesUpdateResponse)
-def save_team_routing(
-    payload: AIRoutingPoliciesUpdateRequest,
-    team_access: TeamAccessContext = Depends(require_team_admin_access),
-) -> AIRoutingPoliciesUpdateResponse:
-    try:
-        validate_routing_update(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    store = get_governance_store()
-    try:
-        items = store.save_routing_policies(
-            team_access.team_id,
-            team_access.user.id,
-            payload,
-            access_token=team_access.access_token,
-        )
-    except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
-    return AIRoutingPoliciesUpdateResponse(
-        detail="默认 AI 路由已更新。",
-        team_id=team_access.team_id,
-        items=items,
-    )
