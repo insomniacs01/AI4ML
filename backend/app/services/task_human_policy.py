@@ -16,8 +16,8 @@ from backend.app.models.task import (
     TaskStageRoutingRecord,
     normalize_workflow_stage,
 )
+from backend.app.services.task_human_access import resolve_human_request_assignee
 from backend.app.services.task_human_context import ensure_task_human_loop, get_task_human_loop
-from backend.app.services.task_human_collaboration import resolve_human_request_assignee
 from backend.app.services.service_registry import (
     get_governance_store,
     get_task_human_collaboration_service,
