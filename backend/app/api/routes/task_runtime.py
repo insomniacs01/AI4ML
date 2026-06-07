@@ -53,9 +53,9 @@ from backend.app.services.task_runtime_codex_state import (
     apply_codex_resume_response,
     apply_codex_start_response,
 )
+from backend.app.services.task_codex_human_requests import ensure_codex_plan_request
 from backend.app.services.task_codex_metadata import update_codex_structured_metadata
 from backend.app.services.task_runtime_progress import (
-    ensure_codex_plan_request,
     record_codex_running_stages,
     record_codex_status_stages,
     record_user_paused_stages,
