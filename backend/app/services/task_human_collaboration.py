@@ -37,11 +37,9 @@ from backend.app.services.task_human_payloads import (
     build_human_decision_history_entry,
     build_human_decision_payload,
     build_human_request_payload,
-    build_reassigned_decision_payload,
-    build_reassigned_request_payload,
     is_rerun_decision_action,
-    resolve_reassign_timeout,
 )
+from backend.app.services.task_human_reassignment import reassign_human_request
 from backend.app.services.task_human_stages import (
     HumanStageSnapshotBuilder,
     is_active_request,
@@ -313,52 +311,24 @@ class TaskHumanCollaborationService:
         team_members: list[TeamMemberRecord],
         access_token: str,
     ) -> TaskHumanCollaborationResponse:
-        assignee_type, assignee_value, assigned_to = self.resolve_assignee(
+        assignee = self.resolve_assignee(
             assignee_type=payload.reassign_assignee_type or request.assignee_type,
             assignee_value=payload.reassign_assignee_value,
             assigned_to=payload.reassign_assigned_to,
             default_member_id=decided_by,
             team_members=team_members,
         )
-        now = datetime.now(timezone.utc)
-        request.status = HumanInteractionRequestStatus.reassigned
-        request.decision = build_reassigned_decision_payload(
-            payload,
-            decided_by=decided_by,
-            actor_role=actor_role,
-            decided_at=now,
-            assignee_type=assignee_type,
-            assignee_value=assignee_value,
-            assigned_to=assigned_to,
-        )
-        self.task_store.update_human_request(request, access_token=access_token)
-
-        timeout_at = resolve_reassign_timeout(
-            request,
-            reassign_timeout_minutes=payload.reassign_timeout_minutes,
-            now=now,
-        )
-        reassigned_payload = build_reassigned_request_payload(
+        updated_request = reassign_human_request(
+            self.task_store,
+            task,
             request,
             payload,
+            assignee=assignee,
             decided_by=decided_by,
             actor_role=actor_role,
-        )
-        version_seed = request.version_id or request.id
-        self.task_store.create_human_request(
-            team_id=task.team_id,
-            task_id=task.id,
-            stage=normalize_workflow_stage(request.stage),
-            requested_by=decided_by,
-            assigned_to=assigned_to,
-            assignee_type=assignee_type.value,
-            assignee_value=assignee_value,
-            timeout_at=timeout_at,
-            version_id=f"{version_seed}:reassigned:{int(now.timestamp())}",
-            payload=reassigned_payload,
             access_token=access_token,
         )
-        task = self._record_latest_decision(task, request=request, payload=payload)
+        task = self._record_latest_decision(task, request=updated_request, payload=payload)
         saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
 
