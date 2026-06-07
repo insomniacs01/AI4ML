@@ -13,7 +13,7 @@ from backend.app.models.governance import (
     PlatformAssetReviewRequest,
     PlatformAssetsResponse,
 )
-from backend.app.services.governance_assets import SUPPORTED_PLATFORM_ASSET_TYPES
+from backend.app.services.governance_asset_payloads import SUPPORTED_PLATFORM_ASSET_TYPES
 from backend.app.services.service_registry import get_governance_store
 
 
