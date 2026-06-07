@@ -82,3 +82,49 @@ export function buildTaskStatePollTransition(artifacts, reportedTaskStates, opti
 
   return transition;
 }
+
+export function buildProgressRecordsForTaskStateTransition(transition, artifacts) {
+  const workspacePath = artifacts?.workspace?.path;
+  if (!workspacePath || !transition || typeof transition !== 'object') {
+    return [];
+  }
+
+  const records = [];
+  if (Array.isArray(transition.reportedStates) && transition.reportedStates.includes('plan_approval_ready')) {
+    records.push({
+      workspacePath,
+      payload: {
+        event: 'plan_generated',
+        actor: 'codex_use',
+        message: 'Codex 已写入执行计划，等待用户确认。',
+        evidence: ['output/plan.md']
+      }
+    });
+  }
+  if (transition.taskCompleted) {
+    records.push({
+      workspacePath,
+      payload: {
+        event: 'completed',
+        actor: 'codex_use',
+        message: 'Codex 建模任务已完成，最终产物已可读取。',
+        evidence: completionEvidenceForArtifacts(artifacts)
+      }
+    });
+  }
+  return records;
+}
+
+function completionEvidenceForArtifacts(artifacts) {
+  const evidence = ['output/progress.json'];
+  if (artifacts?.metrics && typeof artifacts.metrics === 'object') {
+    evidence.push('output/metrics.json');
+  }
+  if (artifacts?.report?.exists) {
+    evidence.push('output/report.md');
+  }
+  if (artifacts?.predict?.exists) {
+    evidence.push('output/predict.py');
+  }
+  return evidence;
+}

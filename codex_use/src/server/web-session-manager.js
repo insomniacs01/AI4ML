@@ -33,12 +33,19 @@ import {
   resolveTaskResumeWorkspacePath,
   resolveRequestedWorkspacePath
 } from './web-session-task-commands.js';
-import { buildTaskStatePollTransition } from './web-session-task-state.js';
+import {
+  buildProgressRecordsForTaskStateTransition,
+  buildTaskStatePollTransition
+} from './web-session-task-state.js';
 import {
   compactReplayEvents,
   hasUnclosedTurn,
   interruptionReasonForPayload,
   isInternalAi4mlUserMessage,
+  lastActivityEvent,
+  lastTaskId,
+  lastTaskStartTimestamp,
+  lastWorkspacePath,
   shouldPersistEvent
 } from './web-session-events.js';
 
@@ -185,12 +192,12 @@ class PersistentWebSession {
       this.persistedEvents = persistedEvents.slice(-maxReplaySourceEvents);
       this.events = compactReplayEvents(persistedEvents).slice(-maxReplayEvents);
       this.taskStarted = this.events.some((event) => event.type === 'task_input_submitted');
-      this.taskStartedAtMs = this.lastTaskStartTimestamp();
+      this.taskStartedAtMs = lastTaskStartTimestamp(this.events);
       this.taskCompleted = this.events.some((event) => event.type === 'task_completed');
-      this.activeWorkspacePath = this.lastWorkspacePath();
-      this.activeTaskId = this.lastTaskId();
+      this.activeWorkspacePath = lastWorkspacePath(this.events);
+      this.activeTaskId = lastTaskId(this.events);
       await this.closeStaleRunningTurn();
-      const activity = [...this.events].reverse().find((event) => event.type === 'activity');
+      const activity = lastActivityEvent(this.events);
       if (activity) {
         this.lastActivity = activity;
       }
@@ -821,30 +828,6 @@ class PersistentWebSession {
     }
   }
 
-  lastTaskStartTimestamp() {
-    const taskEvent = [...this.events]
-      .reverse()
-      .find((event) => event.type === 'task_session_started' || event.type === 'task_input_submitted');
-
-    return typeof taskEvent?.timestamp === 'number' ? taskEvent.timestamp : undefined;
-  }
-
-  lastWorkspacePath() {
-    const workspaceEvent = [...this.events]
-      .reverse()
-      .find((event) => typeof event.workspacePath === 'string' && event.workspacePath.trim());
-
-    return typeof workspaceEvent?.workspacePath === 'string' ? workspaceEvent.workspacePath : undefined;
-  }
-
-  lastTaskId() {
-    const taskEvent = [...this.events]
-      .reverse()
-      .find((event) => typeof event.taskId === 'string' && event.taskId.trim());
-
-    return typeof taskEvent?.taskId === 'string' ? taskEvent.taskId : undefined;
-  }
-
   replayEventsForTask(taskId) {
     if (!taskId || this.persistedEvents.length === 0) {
       return this.events;
@@ -866,35 +849,8 @@ class PersistentWebSession {
   }
 
   async recordProgressTransition(transition, artifacts) {
-    const workspacePath = artifacts?.workspace?.path;
-    if (!workspacePath) {
-      return;
-    }
-    if (transition.reportedStates.includes('plan_approval_ready')) {
-      await this.recordProgressEvent(workspacePath, {
-        event: 'plan_generated',
-        actor: 'codex_use',
-        message: 'Codex 已写入执行计划，等待用户确认。',
-        evidence: ['output/plan.md']
-      });
-    }
-    if (transition.taskCompleted) {
-      const completionEvidence = ['output/progress.json'];
-      if (artifacts?.metrics && typeof artifacts.metrics === 'object') {
-        completionEvidence.push('output/metrics.json');
-      }
-      if (artifacts?.report?.exists) {
-        completionEvidence.push('output/report.md');
-      }
-      if (artifacts?.predict?.exists) {
-        completionEvidence.push('output/predict.py');
-      }
-      await this.recordProgressEvent(workspacePath, {
-        event: 'completed',
-        actor: 'codex_use',
-        message: 'Codex 建模任务已完成，最终产物已可读取。',
-        evidence: completionEvidence
-      });
+    for (const record of buildProgressRecordsForTaskStateTransition(transition, artifacts)) {
+      await this.recordProgressEvent(record.workspacePath, record.payload);
     }
   }
 

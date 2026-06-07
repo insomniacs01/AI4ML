@@ -6,6 +6,7 @@ import { clearSavedThread, getSavedThread, saveThread } from '../session-store.j
 import { getCodexCommand, killProcessTree } from '../utils.js';
 import { AppServerRpcClient } from './app-server-rpc-client.js';
 import { messageEventHandlers } from './app-server-message-events.js';
+import { normalizeTokenUsageUpdate } from './app-server-token-usage.js';
 import { toolEventHandlers } from './app-server-tool-events.js';
 
 export class AppServerRunner extends AppServerRpcClient {
@@ -592,52 +593,13 @@ export class AppServerRunner extends AppServerRpcClient {
   }
 
   handleTokenUsageUpdated(params) {
-    const tokenUsage = params?.tokenUsage && typeof params.tokenUsage === 'object'
-      ? params.tokenUsage
-      : null;
-    if (!tokenUsage) {
-      return;
-    }
-
-    const total = this.normalizeTokenBucket(tokenUsage.total);
-    const last = this.normalizeTokenBucket(tokenUsage.last);
-    if (total.totalTokens <= 0) {
-      return;
-    }
-
-    this.send({
-      type: 'token_usage_updated',
-      threadId: typeof params.threadId === 'string' ? params.threadId : this.threadId,
-      turnId: typeof params.turnId === 'string' ? params.turnId : this.currentTurnId,
-      total,
-      last,
-      modelContextWindow: this.coerceNonNegativeInt(tokenUsage.modelContextWindow),
-      timestamp: Date.now()
+    const event = normalizeTokenUsageUpdate(params, {
+      threadId: this.threadId,
+      turnId: this.currentTurnId
     });
-  }
-
-  normalizeTokenBucket(bucket) {
-    const value = bucket && typeof bucket === 'object' ? bucket : {};
-    const inputTokens = this.coerceNonNegativeInt(value.inputTokens);
-    const cachedInputTokens = this.coerceNonNegativeInt(value.cachedInputTokens);
-    const outputTokens = this.coerceNonNegativeInt(value.outputTokens);
-    const reasoningOutputTokens = this.coerceNonNegativeInt(value.reasoningOutputTokens);
-    const totalTokens = this.coerceNonNegativeInt(value.totalTokens) || inputTokens + outputTokens;
-    return {
-      totalTokens,
-      inputTokens,
-      cachedInputTokens,
-      outputTokens,
-      reasoningOutputTokens
-    };
-  }
-
-  coerceNonNegativeInt(value) {
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed)) {
-      return 0;
+    if (event) {
+      this.send(event);
     }
-    return Math.max(parsed, 0);
   }
 
   hasForeignThread(params) {

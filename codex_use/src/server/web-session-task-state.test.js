@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildTaskStatePollTransition } from './web-session-task-state.js';
+import {
+  buildProgressRecordsForTaskStateTransition,
+  buildTaskStatePollTransition
+} from './web-session-task-state.js';
 
 function timestampSequence(start = 1000) {
   let value = start;
@@ -134,6 +137,52 @@ test('buildTaskStatePollTransition treats completed progress as completion witho
       type: 'activity',
       label: 'Ready',
       status: 'online'
+    }
+  ]);
+});
+
+test('buildProgressRecordsForTaskStateTransition records plan approval readiness', () => {
+  assert.deepEqual(buildProgressRecordsForTaskStateTransition({
+    reportedStates: ['plan_written', 'plan_approval_ready'],
+    taskCompleted: false
+  }, {
+    workspace: { path: 'D:\\workspace\\ai4ml-6' }
+  }), [
+    {
+      workspacePath: 'D:\\workspace\\ai4ml-6',
+      payload: {
+        event: 'plan_generated',
+        actor: 'codex_use',
+        message: 'Codex 已写入执行计划，等待用户确认。',
+        evidence: ['output/plan.md']
+      }
+    }
+  ]);
+});
+
+test('buildProgressRecordsForTaskStateTransition records completion evidence from artifacts', () => {
+  assert.deepEqual(buildProgressRecordsForTaskStateTransition({
+    reportedStates: [],
+    taskCompleted: true
+  }, {
+    workspace: { path: 'D:\\workspace\\ai4ml-7' },
+    metrics: { leaderboard: [] },
+    report: { exists: true },
+    predict: { exists: true }
+  }), [
+    {
+      workspacePath: 'D:\\workspace\\ai4ml-7',
+      payload: {
+        event: 'completed',
+        actor: 'codex_use',
+        message: 'Codex 建模任务已完成，最终产物已可读取。',
+        evidence: [
+          'output/progress.json',
+          'output/metrics.json',
+          'output/report.md',
+          'output/predict.py'
+        ]
+      }
     }
   ]);
 });

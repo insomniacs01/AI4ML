@@ -6,6 +6,10 @@ import {
   hasUnclosedTurn,
   interruptionReasonForPayload,
   isInternalAi4mlUserMessage,
+  lastActivityEvent,
+  lastTaskId,
+  lastTaskStartTimestamp,
+  lastWorkspacePath,
   safeFileName,
   shouldPersistEvent
 } from './web-session-events.js';
@@ -163,6 +167,22 @@ test('interruptionReasonForPayload preserves user-facing interruption messages',
     interruptionReasonForPayload({ type: 'error' }),
     'Codex 执行出错，当前任务已中断。'
   );
+});
+
+test('last event selectors recover active task session fields', () => {
+  const events = [
+    { type: 'task_session_started', taskId: 'task-1', timestamp: 10 },
+    { type: 'workspace_ready', taskId: 'task-1', workspacePath: 'D:\\workspace\\old', timestamp: 11 },
+    { type: 'activity', label: 'Running', status: 'busy', timestamp: 12 },
+    { type: 'task_input_submitted', taskId: 'task-2', timestamp: 20 },
+    { type: 'workspace_ready', taskId: 'task-2', workspacePath: 'D:\\workspace\\new', timestamp: 21 },
+    { type: 'activity', label: 'Ready', status: 'online', timestamp: 22 }
+  ];
+
+  assert.equal(lastTaskStartTimestamp(events), 20);
+  assert.equal(lastWorkspacePath(events), 'D:\\workspace\\new');
+  assert.equal(lastTaskId(events), 'task-2');
+  assert.deepEqual(lastActivityEvent(events), { type: 'activity', label: 'Ready', status: 'online', timestamp: 22 });
 });
 
 test('safeFileName keeps only portable session log filename characters', () => {

@@ -245,6 +245,31 @@ export function hasUnclosedTurn(events) {
   return running;
 }
 
+export function lastTaskStartTimestamp(events) {
+  const taskEvent = lastEventMatching(events, (event) => (
+    event.type === 'task_session_started' || event.type === 'task_input_submitted'
+  ));
+  return typeof taskEvent?.timestamp === 'number' ? taskEvent.timestamp : undefined;
+}
+
+export function lastWorkspacePath(events) {
+  const workspaceEvent = lastEventMatching(events, (event) => (
+    typeof event.workspacePath === 'string' && event.workspacePath.trim()
+  ));
+  return typeof workspaceEvent?.workspacePath === 'string' ? workspaceEvent.workspacePath : undefined;
+}
+
+export function lastTaskId(events) {
+  const taskEvent = lastEventMatching(events, (event) => (
+    typeof event.taskId === 'string' && event.taskId.trim()
+  ));
+  return typeof taskEvent?.taskId === 'string' ? taskEvent.taskId : undefined;
+}
+
+export function lastActivityEvent(events) {
+  return lastEventMatching(events, (event) => event.type === 'activity');
+}
+
 export function interruptionReasonForPayload(payload) {
   if (payload.type === 'exit') {
     const exitCode = payload.exitCode === null || payload.exitCode === undefined
@@ -262,4 +287,17 @@ export function interruptionReasonForPayload(payload) {
 
 export function safeFileName(value) {
   return String(value).replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+function lastEventMatching(events, predicate) {
+  if (!Array.isArray(events)) {
+    return undefined;
+  }
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event && typeof event === 'object' && predicate(event)) {
+      return event;
+    }
+  }
+  return undefined;
 }
