@@ -56,6 +56,7 @@ from backend.app.services.team_admin_user_update import (
 )
 from backend.app.services.team_quota_enforcement import pause_member_tasks_if_quota_exhausted
 from backend.app.services.team_quota_scope import resolve_quota_scope_key
+from backend.app.services.team_routing_policy_validation import validate_routing_update
 
 
 router = APIRouter(tags=["team"])
@@ -63,16 +64,6 @@ router = APIRouter(tags=["team"])
 
 def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
     raise_store_http_error(exc)
-
-
-def _validate_routing_update(payload: AIRoutingPoliciesUpdateRequest) -> None:
-    for item in payload.items:
-        stage = item.stage.strip()
-        if item.model_name and item.model_name.strip() and not item.connector_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"{stage} 阶段只填写了模型名但没有 connector_id。请显式选择连接器。",
-            )
 
 
 @router.get("/members", response_model=TeamMembersResponse)
@@ -350,7 +341,10 @@ def save_team_routing(
     payload: AIRoutingPoliciesUpdateRequest,
     team_access: TeamAccessContext = Depends(require_team_admin_access),
 ) -> AIRoutingPoliciesUpdateResponse:
-    _validate_routing_update(payload)
+    try:
+        validate_routing_update(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     store = get_governance_store()
     try:
         items = store.save_routing_policies(
