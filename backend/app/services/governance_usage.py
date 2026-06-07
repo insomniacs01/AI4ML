@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
@@ -10,6 +9,14 @@ from backend.app.models.governance import (
     TeamProfileRecord,
     TeamQuotaRecord,
     TokenLedgerRecord,
+)
+from backend.app.services.governance_quota_records import (
+    ConnectorSummary,
+    QuotaScope,
+    coerce_non_negative_int,
+    quota_map,
+    quota_record_from_payload,
+    quota_scope,
 )
 
 RequestJson = Callable[..., Any]
@@ -22,40 +29,10 @@ _QUOTA_SELECT = (
 )
 
 
-@dataclass(frozen=True)
-class _ConnectorSummary:
-    id: str
-    display_name: str
-
-
-@dataclass(frozen=True)
-class _QuotaScope:
-    scope_type: str
-    scope_key: str
-    user_id: str | None
-    connector_id: str | None
-
-
-@dataclass(frozen=True)
-class _QuotaSubject:
-    user_id: str | None = None
-    connector_id: str | None = None
-    role: str | None = None
-    member_status: str | None = None
-    display_name: str | None = None
-    email: str | None = None
-    connector_display_name: str | None = None
-
-
-def _quota_scope(scope_type: str, scope_key: str) -> _QuotaScope:
-    if scope_type == "member":
-        return _QuotaScope(scope_type=scope_type, scope_key=scope_key, user_id=scope_key, connector_id=None)
-    if scope_type == "connector":
-        return _QuotaScope(scope_type=scope_type, scope_key=scope_key, user_id=None, connector_id=scope_key)
-    return _QuotaScope(scope_type=scope_type, scope_key=scope_key, user_id=None, connector_id=None)
-
-
 class GovernanceUsageRepository:
+    _quota_map = staticmethod(quota_map)
+    _quota_record_from_payload = staticmethod(quota_record_from_payload)
+
     def __init__(
         self,
         *,
@@ -80,14 +57,14 @@ class GovernanceUsageRepository:
             raise ConnectionError("Unexpected quota response from Supabase.")
 
         connector_map = self._connector_map(team_id, access_token=access_token)
-        quota_map = self._quota_map(quota_payload)
+        quota_rows = self._quota_map(quota_payload)
 
         items: list[TeamQuotaRecord] = []
         handled_keys: set[tuple[str, str]] = set()
 
         for member in members:
             key = ("member", member.user_id)
-            items.append(self._quota_record_from_payload(team_id, quota_map.get(key, {}), member=member))
+            items.append(self._quota_record_from_payload(team_id, quota_rows.get(key, {}), member=member))
             handled_keys.add(key)
 
         for connector_id, connector_name in connector_map.items():
@@ -95,17 +72,17 @@ class GovernanceUsageRepository:
             items.append(
                 self._quota_record_from_payload(
                     team_id,
-                    quota_map.get(key, {}),
-                    connector=_ConnectorSummary(id=connector_id, display_name=connector_name),
+                    quota_rows.get(key, {}),
+                    connector=ConnectorSummary(id=connector_id, display_name=connector_name),
                 )
             )
             handled_keys.add(key)
 
         team_key = ("team", team_id)
-        items.append(self._quota_record_from_payload(team_id, quota_map.get(team_key, {})))
+        items.append(self._quota_record_from_payload(team_id, quota_rows.get(team_key, {})))
         handled_keys.add(team_key)
 
-        for key, quota_row in quota_map.items():
+        for key, quota_row in quota_rows.items():
             if key not in handled_keys:
                 items.append(self._quota_record_from_payload(team_id, quota_row))
         return items
@@ -120,7 +97,7 @@ class GovernanceUsageRepository:
         warning_threshold: int | None = None,
         access_token: str,
     ) -> TeamQuotaRecord:
-        scope = _quota_scope("member", user_id)
+        scope = quota_scope("member", user_id)
         existing_row = self._existing_quota_row(
             team_id,
             access_token=access_token,
@@ -154,7 +131,7 @@ class GovernanceUsageRepository:
         warning_threshold: int | None = None,
         access_token: str,
     ) -> TeamQuotaRecord:
-        scope = _quota_scope(scope_type, scope_key)
+        scope = quota_scope(scope_type, scope_key)
         scope_filter = (
             f"&scope_type=eq.{quote(scope.scope_type, safe='')}"
             f"&scope_key=eq.{quote(scope.scope_key, safe='')}"
@@ -247,7 +224,7 @@ class GovernanceUsageRepository:
     def _write_quota_account(
         self,
         team_id: str,
-        scope: _QuotaScope,
+        scope: QuotaScope,
         *,
         token_quota: int | None,
         status: str | None,
@@ -260,14 +237,14 @@ class GovernanceUsageRepository:
         resolved_token_quota = (
             token_quota
             if token_quota is not None
-            else _coerce_non_negative_int(existing_row.get("token_quota"))
+            else coerce_non_negative_int(existing_row.get("token_quota"))
         )
         resolved_status = status or str(existing_row.get("status") or "active")
         if (
             status is None
             and token_quota is not None
             and resolved_status == "exhausted"
-            and resolved_token_quota > _coerce_non_negative_int(existing_row.get("token_used"))
+            and resolved_token_quota > coerce_non_negative_int(existing_row.get("token_used"))
         ):
             resolved_status = "active"
         payload = {
@@ -281,7 +258,7 @@ class GovernanceUsageRepository:
             "warning_threshold": (
                 warning_threshold
                 if warning_threshold is not None
-                else _coerce_non_negative_int(existing_row.get("warning_threshold"))
+                else coerce_non_negative_int(existing_row.get("warning_threshold"))
             ),
         }
         if existing_row:
@@ -319,51 +296,6 @@ class GovernanceUsageRepository:
             if isinstance(item, dict) and item.get("id")
         }
 
-    @staticmethod
-    def _quota_map(payload: list[Any]) -> dict[tuple[str, str], dict[str, Any]]:
-        rows: dict[tuple[str, str], dict[str, Any]] = {}
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            scope_type = str(item.get("scope_type") or "member")
-            scope_key = str(item.get("scope_key") or item.get("user_id") or item.get("connector_id") or "")
-            rows[(scope_type, scope_key)] = item
-        return rows
-
-    @staticmethod
-    def _quota_record_from_payload(
-        team_id: str,
-        payload: dict[str, Any],
-        *,
-        member: TeamMemberRecord | None = None,
-        connector: _ConnectorSummary | None = None,
-    ) -> TeamQuotaRecord:
-        scope_type = _quota_scope_type(payload, member=member, connector=connector)
-        scope_key = _quota_scope_key(team_id, payload, member=member, connector=connector)
-        used = _coerce_non_negative_int(payload.get("token_used"))
-        resolved_quota = _coerce_non_negative_int(payload.get("token_quota"))
-        remaining = max(resolved_quota - used, 0)
-        subject = _quota_subject(payload, member=member, connector=connector)
-
-        return TeamQuotaRecord(
-            team_id=team_id,
-            scope_type=scope_type,
-            scope_key=scope_key,
-            user_id=subject.user_id,
-            connector_id=subject.connector_id,
-            role=subject.role,
-            member_status=subject.member_status,
-            display_name=subject.display_name,
-            email=subject.email,
-            connector_display_name=subject.connector_display_name,
-            token_quota=resolved_quota,
-            token_used=used,
-            token_remaining=remaining,
-            status=_quota_status(payload, resolved_quota, remaining),
-            warning_threshold=_coerce_non_negative_int(payload.get("warning_threshold")),
-            updated_at=payload.get("updated_at"),
-        )
-
     def _token_ledger_from_payload(
         self,
         payload: dict[str, Any],
@@ -395,9 +327,9 @@ class GovernanceUsageRepository:
             stage_key=str(payload.get("stage_key")) if payload.get("stage_key") else None,
             source_key=str(payload.get("source_key")),
             model_name=str(payload.get("model_name")) if payload.get("model_name") else None,
-            input_tokens=_coerce_non_negative_int(payload.get("input_tokens")),
-            output_tokens=_coerce_non_negative_int(payload.get("output_tokens")),
-            total_tokens=_coerce_non_negative_int(payload.get("total_tokens")),
+            input_tokens=coerce_non_negative_int(payload.get("input_tokens")),
+            output_tokens=coerce_non_negative_int(payload.get("output_tokens")),
+            total_tokens=coerce_non_negative_int(payload.get("total_tokens")),
             calculation_method=str(payload.get("calculation_method")) if payload.get("calculation_method") else None,
             raw_usage=payload.get("raw_usage") if isinstance(payload.get("raw_usage"), dict) else None,
             created_at=payload.get("created_at"),
@@ -447,72 +379,6 @@ class GovernanceUsageRepository:
         }
 
 
-def _quota_scope_type(
-    payload: dict[str, Any],
-    *,
-    member: TeamMemberRecord | None,
-    connector: _ConnectorSummary | None,
-) -> str:
-    if connector is not None:
-        default_scope_type = "connector"
-    elif member is not None:
-        default_scope_type = "member"
-    else:
-        default_scope_type = "team"
-    return str(payload.get("scope_type") or default_scope_type)
-
-
-def _quota_scope_key(
-    team_id: str,
-    payload: dict[str, Any],
-    *,
-    member: TeamMemberRecord | None,
-    connector: _ConnectorSummary | None,
-) -> str:
-    return str(
-        payload.get("scope_key")
-        or (member.user_id if member is not None else None)
-        or (connector.id if connector is not None else None)
-        or payload.get("user_id")
-        or payload.get("connector_id")
-        or team_id
-    )
-
-
-def _quota_subject(
-    payload: dict[str, Any],
-    *,
-    member: TeamMemberRecord | None,
-    connector: _ConnectorSummary | None,
-) -> _QuotaSubject:
-    if member is not None:
-        return _QuotaSubject(
-            user_id=member.user_id,
-            role=member.role,
-            member_status=member.member_status,
-            display_name=member.profile.display_name if member.profile else None,
-            email=member.profile.email if member.profile else None,
-        )
-    if connector is not None:
-        return _QuotaSubject(
-            connector_id=connector.id,
-            connector_display_name=connector.display_name,
-        )
-    return _QuotaSubject(
-        user_id=_optional_payload_str(payload.get("user_id")),
-        connector_id=_optional_payload_str(payload.get("connector_id")),
-        connector_display_name=_optional_payload_str(payload.get("connector_display_name")),
-    )
-
-
-def _optional_payload_str(value: Any) -> str | None:
-    return str(value) if value else None
-
-
-def _quota_status(payload: dict[str, Any], resolved_quota: int, remaining: int) -> str:
-    return str(payload.get("status") or ("exhausted" if resolved_quota and remaining == 0 else "active"))
-
-
 def _quoted_in_list(values: list[str]) -> str:
     in_list = ",".join(f'"{item}"' for item in values)
     return quote(in_list, safe='(),"')
@@ -524,11 +390,3 @@ def _unwrap_single_record(payload: Any, action: str) -> dict[str, Any]:
     if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
         return payload[0]
     raise ConnectionError(f"Unexpected Supabase response shape during {action}.")
-
-
-def _coerce_non_negative_int(value: Any) -> int:
-    try:
-        result = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return max(result, 0)
