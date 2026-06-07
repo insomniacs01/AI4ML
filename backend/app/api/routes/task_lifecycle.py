@@ -34,7 +34,7 @@ from backend.app.services.task_routing import (
     _validate_task_stage_routing_overrides,
 )
 from backend.app.services.platform_limits import PlatformLimitError, assert_user_can_create_task
-from backend.app.services.task_human_policy import _validate_interaction_policy_assignees
+from backend.app.services.task_human_policy import validate_interaction_policy_assignees
 from backend.app.services.task_runtime_snapshot import (
     TaskRuntimeSnapshotNotFound,
     TaskRuntimeSnapshotSyncError,
@@ -120,7 +120,7 @@ def create_task(
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> TaskRecord:
     _validate_task_stage_routing_overrides(payload.stage_routing)
-    _validate_interaction_policy_assignees(payload.interaction_policies, team_access)
+    validate_interaction_policy_assignees(payload.interaction_policies, team_access)
     task_store = get_task_store()
     try:
         tasks = task_store.list_tasks(
@@ -196,7 +196,7 @@ def update_task_workflow_config(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
 
     _validate_task_stage_routing_overrides(payload.stage_routing)
-    _validate_interaction_policy_assignees(payload.interaction_policies, team_access)
+    validate_interaction_policy_assignees(payload.interaction_policies, team_access)
     task = apply_task_workflow_config(task, payload)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     runtime_context = _build_runtime_context(team_access)

@@ -25,7 +25,7 @@ from backend.app.models.task import (
     WorkflowStageRecord,
     WorkflowStageStatus,
 )
-from backend.app.services.task_human_policy import _apply_interaction_policies
+from backend.app.services.task_human_policy import apply_interaction_policies
 from backend.app.api.routes.task_human import decide_task_human_request
 from backend.app.services.task_human_access import (
     assert_actor_can_decide_human_request,
@@ -1045,10 +1045,10 @@ class TaskHumanCollaborationServiceTests(TestCase):
         }
 
         with patch("backend.app.services.task_human_policy.get_task_store", return_value=self.store), patch(
-            "backend.app.services.task_human_policy._load_team_members_for_human",
+            "backend.app.services.task_human_policy.load_team_members_for_human",
             return_value=members,
         ):
-            paused_task, created_count = _apply_interaction_policies(
+            paused_task, created_count = apply_interaction_policies(
                 task,
                 team_access,
                 trigger_mode=InteractionTriggerMode.before_run,
@@ -1068,7 +1068,7 @@ class TaskHumanCollaborationServiceTests(TestCase):
             resumed_task = paused_task.model_copy(deep=True)
             resumed_task.status = TaskStatus.uploaded
 
-            _, second_created_count = _apply_interaction_policies(
+            _, second_created_count = apply_interaction_policies(
                 resumed_task,
                 team_access,
                 trigger_mode=InteractionTriggerMode.before_run,
@@ -1113,10 +1113,10 @@ class TaskHumanCollaborationServiceTests(TestCase):
         }
 
         with patch("backend.app.services.task_human_policy.get_task_store", return_value=self.store), patch(
-            "backend.app.services.task_human_policy._load_team_members_for_human",
+            "backend.app.services.task_human_policy.load_team_members_for_human",
             return_value=members,
         ):
-            paused_task, created_count = _apply_interaction_policies(
+            paused_task, created_count = apply_interaction_policies(
                 task,
                 team_access,
                 trigger_mode=InteractionTriggerMode.before_run,
@@ -1136,7 +1136,7 @@ class TaskHumanCollaborationServiceTests(TestCase):
             resumed_task = paused_task.model_copy(deep=True)
             resumed_task.status = TaskStatus.uploaded
 
-            _, second_created_count = _apply_interaction_policies(
+            _, second_created_count = apply_interaction_policies(
                 resumed_task,
                 team_access,
                 trigger_mode=InteractionTriggerMode.before_run,
@@ -1180,10 +1180,10 @@ class TaskHumanCollaborationServiceTests(TestCase):
         }
 
         with patch("backend.app.services.task_human_policy.get_task_store", return_value=self.store), patch(
-            "backend.app.services.task_human_policy._load_team_members_for_human",
+            "backend.app.services.task_human_policy.load_team_members_for_human",
             return_value=members,
         ):
-            paused_task, _ = _apply_interaction_policies(
+            paused_task, _ = apply_interaction_policies(
                 task,
                 team_access,
                 trigger_mode=InteractionTriggerMode.before_run,
@@ -1203,10 +1203,10 @@ class TaskHumanCollaborationServiceTests(TestCase):
             "backend.app.services.task_workflow_tracking.get_task_human_collaboration_service",
             return_value=self.service,
         ), patch(
-            "backend.app.api.routes.task_human._load_team_members_for_human",
+            "backend.app.api.routes.task_human.load_team_members_for_human",
             return_value=members,
         ), patch(
-            "backend.app.services.task_human_policy._load_team_members_for_human",
+            "backend.app.services.task_human_policy.load_team_members_for_human",
             return_value=members,
         ), patch(
             "backend.app.api.routes.task_human._build_runtime_context",

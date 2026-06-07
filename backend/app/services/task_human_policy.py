@@ -14,7 +14,7 @@ from backend.app.models.task import (
     normalize_workflow_stage,
 )
 from backend.app.services.task_human_access import resolve_human_request_assignee
-from backend.app.services.task_human_context import ensure_task_human_loop, get_task_human_loop
+from backend.app.services.task_human_context import get_task_human_loop
 from backend.app.services.service_registry import (
     get_governance_store,
     get_task_store,
@@ -29,7 +29,7 @@ from backend.app.services.task_human_policy_selection import (
 
 from backend.app.services.task_routing import _raise_governance_http_error
 
-def _load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMemberRecord]:
+def load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMemberRecord]:
     try:
         return get_governance_store().list_members(
             team_access.team_id,
@@ -38,13 +38,13 @@ def _load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMem
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
 
-def _validate_interaction_policy_assignees(
+def validate_interaction_policy_assignees(
     policies: list[TaskInteractionPolicyRecord],
     team_access: TeamAccessContext,
 ) -> None:
     if not policies:
         return
-    team_members = _load_team_members_for_human(team_access)
+    team_members = load_team_members_for_human(team_access)
     for policy in policies:
         try:
             resolve_human_request_assignee(
@@ -57,15 +57,7 @@ def _validate_interaction_policy_assignees(
         except RuntimeError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
-def _next_policy_cycle(task: TaskRecord) -> int:
-    human_loop = ensure_task_human_loop(task)
-    current_value = human_loop.get("policy_cycle")
-    next_value = int(current_value) + 1 if isinstance(current_value, int) else 1
-    human_loop["policy_cycle"] = next_value
-    human_loop["current_run_cycle"] = next_value
-    return next_value
-
-def _get_current_policy_cycle(task: TaskRecord) -> int:
+def get_current_policy_cycle(task: TaskRecord) -> int:
     human_loop = get_task_human_loop(task)
     current_value = human_loop.get("current_run_cycle")
     if isinstance(current_value, int) and current_value > 0:
@@ -93,7 +85,7 @@ def _build_policy_request_payload(
         "checkpoint_mode": "sequential_stage_gate" if is_stage_checkpoint_policy(policy) else None,
     }
 
-def _apply_interaction_policies(
+def apply_interaction_policies(
     task: TaskRecord,
     team_access: TeamAccessContext,
     *,
@@ -123,7 +115,7 @@ def _apply_interaction_policies(
 
         selection = stage_selection_map.get(normalized_stage.value)
         if team_members is None:
-            team_members = _load_team_members_for_human(team_access)
+            team_members = load_team_members_for_human(team_access)
         assignee_type, assignee_value, assigned_to = _resolve_policy_assignee(
             policy,
             team_access,

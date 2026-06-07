@@ -19,9 +19,9 @@ from backend.app.services.task_agent_collaboration import build_task_agent_colla
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
 from backend.app.services.task_codex_sync import sync_codex_task_state
 from backend.app.services.task_human_policy import (
-    _apply_interaction_policies,
-    _get_current_policy_cycle,
-    _load_team_members_for_human,
+    apply_interaction_policies,
+    get_current_policy_cycle,
+    load_team_members_for_human,
 )
 from backend.app.services.task_human_request_status import human_request_is_active
 from backend.app.services.task_routing import (
@@ -137,7 +137,7 @@ def create_task_human_request(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     try:
-        team_members = _load_team_members_for_human(team_access)
+        team_members = load_team_members_for_human(team_access)
         snapshot = get_task_human_collaboration_service().create_request(
             task,
             payload,
@@ -171,7 +171,7 @@ def decide_task_human_request(
         )
         original_request_payload = original_request.payload if original_request and isinstance(original_request.payload, dict) else {}
         is_codex_plan_approval = original_request_payload.get("request_type") == "codex_plan_approval"
-        team_members = _load_team_members_for_human(team_access)
+        team_members = load_team_members_for_human(team_access)
         snapshot = get_task_human_collaboration_service().submit_decision(
             task,
             request_id,
@@ -190,11 +190,11 @@ def decide_task_human_request(
         if should_advance_checkpoint:
             runtime_context = _build_runtime_context(team_access)
             stage_selection_map = _build_stage_selection_map(snapshot.task, team_access, runtime_context)
-            next_task, created_checkpoint_count = _apply_interaction_policies(
+            next_task, created_checkpoint_count = apply_interaction_policies(
                 snapshot.task,
                 team_access,
                 trigger_mode=InteractionTriggerMode.before_run,
-                cycle_id=_get_current_policy_cycle(snapshot.task),
+                cycle_id=get_current_policy_cycle(snapshot.task),
                 stage_selection_map=stage_selection_map,
                 checkpoint_only=True,
             )
