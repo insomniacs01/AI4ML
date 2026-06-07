@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from backend.app.models.task import RunAttempt, RunSummary, TaskRecord, TaskStatus
-from backend.app.services.task_artifacts import resolve_task_output_dir
+from backend.app.services.task_output_resolution import resolve_task_output_dir
 
 
 def _task(*, updated_at: datetime | None = None) -> TaskRecord:

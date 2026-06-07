@@ -26,7 +26,8 @@ from backend.app.services.task_code_artifact_descriptors import (
     detect_artifact_language,
     is_editable_artifact,
 )
-from backend.app.services.task_artifacts import build_run_artifact_index, recent_node_dirs
+from backend.app.services.task_artifacts import build_run_artifact_index
+from backend.app.services.task_output_resolution import recent_node_dirs
 
 
 MAX_ARTIFACT_SIZE_BYTES = 2 * 1024 * 1024
