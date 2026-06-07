@@ -54,6 +54,7 @@ from backend.app.services.team_admin_user_update import (
     AdminTargetMemberNotFoundError,
     update_admin_user_record,
 )
+from backend.app.services.team_invite import build_team_invite_response
 from backend.app.services.team_quota_enforcement import pause_member_tasks_if_quota_exhausted
 from backend.app.services.team_quota_scope import resolve_quota_scope_key
 from backend.app.services.team_routing_policy_validation import validate_routing_update
@@ -150,16 +151,10 @@ def get_team_invite_details(
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
 
-    team_name = str(team.get("name", team_access.team_id))
-    invite_code = str(team.get("invite_code", ""))
-    email_hint = f"发送给 {payload.email}。" if payload.email else "复制给需要加入团队的成员。"
-    share_text = f"团队“{team_name}”的邀请码是：{invite_code}。{email_hint}"
-    return TeamInviteResponse(
+    return build_team_invite_response(
         team_id=team_access.team_id,
-        team_name=team_name,
-        invite_code=invite_code,
-        share_text=share_text,
-        detail="邀请码已准备好，可以直接复制分享。",
+        team=team,
+        email=payload.email,
     )
 
 
