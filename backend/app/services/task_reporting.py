@@ -23,6 +23,8 @@ from backend.app.services.task_report_formatting import (
 from backend.app.services.task_report_relationships import collect_feature_relationships
 from backend.app.services.task_report_sections import (
     build_report_markdown as _build_report_markdown,
+)
+from backend.app.services.task_report_narrative import (
     format_top_features as _format_top_features,
 )
 

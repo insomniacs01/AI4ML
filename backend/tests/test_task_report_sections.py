@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from backend.app.models.task import DatasetColumnProfile, DatasetProfile, FeatureImportanceEntry, RunSummary, TaskRecord, TaskStatus
-from backend.app.services.task_report_sections import _abstract_lines, build_report_markdown
+from backend.app.services.task_report_narrative import abstract_lines
+from backend.app.services.task_report_sections import build_report_markdown
 
 
 def test_abstract_lines_preserve_summary_sentence_format() -> None:
@@ -48,7 +49,7 @@ def test_abstract_lines_preserve_summary_sentence_format() -> None:
         FeatureImportanceEntry(feature="income", importance=0.32, source="model"),
     ]
 
-    lines = _abstract_lines(task, profile, agent_loop, feature_importance, candidate_count=2)
+    lines = abstract_lines(task, profile, agent_loop, feature_importance, candidate_count=2)
 
     assert lines == [
         "本报告围绕任务“Report Task”整理自动建模全过程。数据集包含 5 行、2 列，目标列为 `target`，任务类型为 regression。",
