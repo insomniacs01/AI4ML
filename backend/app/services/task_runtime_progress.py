@@ -21,6 +21,10 @@ from backend.app.services.task_artifacts import (
     collect_stage_artifacts_by_stage,
     read_run_log_excerpt,
 )
+from backend.app.services.task_codex_human_payloads import (
+    build_codex_improvement_review_payload,
+    build_codex_plan_approval_payload,
+)
 from backend.app.services.task_human_request_status import (
     human_request_is_active,
     human_request_is_completed,
@@ -397,15 +401,11 @@ def ensure_codex_plan_request(
         return
     if has_confirmed_codex_plan_request(task, existing):
         return
-    request_payload = {
-        "request_type": "codex_plan_approval",
-        "title": "确认 Codex 建模计划",
-        "summary": "Codex 已写入 output/plan.md。确认后将按该计划继续执行训练、验证和交付。",
-        "suggested_action": "确认并继续 Codex 执行。",
-        "plan_text": codex_plan_text(task, get_settings()),
-        "artifact_paths": [path for path in [plan_path, task.codex_workspace_path] if path],
-        "checkpoint_mode": "codex_plan_gate",
-    }
+    request_payload = build_codex_plan_approval_payload(
+        task,
+        plan_path=plan_path,
+        plan_text=codex_plan_text(task, get_settings()),
+    )
     request = task_store.create_human_request(
         team_id=task.team_id,
         task_id=task.id,
@@ -447,22 +447,12 @@ def ensure_codex_improvement_request(
         if request.version_id == version_id and human_request_is_completed(request):
             return
 
-    request_payload = {
-        "request_type": "codex_improvement_review",
-        "title": "确认是否继续改进",
-        "summary": "Codex 已写入 output/improvement_plan.md。当前结果未满足验收或继续改进需要人工确认。",
-        "suggested_action": "选择继续改进，或停止改进并直接生成当前结果报告。",
-        "improvement_plan_text": improvement_plan_text,
-        "artifact_paths": [path for path in [improvement_plan_path, task.codex_workspace_path] if path],
-        "checkpoint_mode": "codex_improvement_gate",
-        "options": [
-            {"id": "continue_improvement", "label": "继续改进"},
-            {"id": "stop_and_report", "label": "停止并生成报告"},
-        ],
-    }
-    advisor_diagnosis = artifacts.get("advisor_diagnosis") if isinstance(artifacts, dict) else None
-    if isinstance(advisor_diagnosis, dict):
-        request_payload["advisor_diagnosis"] = advisor_diagnosis
+    request_payload = build_codex_improvement_review_payload(
+        task,
+        improvement_plan_path=improvement_plan_path,
+        improvement_plan_text=improvement_plan_text,
+        artifacts=artifacts,
+    )
 
     request = task_store.create_human_request(
         team_id=task.team_id,
