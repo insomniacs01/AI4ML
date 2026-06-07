@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import ast
 import csv
-import importlib.util
 import json
-import logging
 import subprocess
 import sys
 import tempfile
@@ -15,9 +12,13 @@ from backend.app.core.config import get_settings
 from backend.app.models.task import TaskPredictionDemoRequest, TaskPredictionDemoResponse, TaskRecord
 from backend.app.services.codex_backend import resolve_codex_workspace
 from backend.app.services.task_artifacts import build_run_artifact_index
+from backend.app.services.task_prediction_generated_code import (
+    GeneratedCodePrediction,
+    GeneratedCodePredictionFailure,
+    call_generated_code_prediction,
+    generated_code_has_predict_contract,
+)
 from backend.app.services.task_targets import target_columns_from_task
-
-logger = logging.getLogger(__name__)
 
 
 def build_prediction_demo_response(task: TaskRecord, payload: TaskPredictionDemoRequest) -> TaskPredictionDemoResponse:
@@ -136,7 +137,7 @@ def _build_generated_code_prediction_response(
     payload: TaskPredictionDemoRequest,
     generated_code: Path,
 ) -> TaskPredictionDemoResponse | None:
-    if not _generated_code_has_predict_contract(generated_code):
+    if not generated_code_has_predict_contract(generated_code):
         return None
 
     features = _clean_prediction_features(task, payload)
@@ -148,158 +149,55 @@ def _build_generated_code_prediction_response(
             command_hint=f"Generated code path: {generated_code}",
         )
 
-    module, import_error = _load_generated_code_module(task, generated_code)
-    if import_error is not None:
-        return import_error
-    if module is None:
+    prediction, failure = call_generated_code_prediction(
+        generated_code,
+        task_id=task.id,
+        features=features,
+        fallback_features=payload.features,
+    )
+    if failure is not None:
+        return _generated_code_failure_response(task, generated_code, failure)
+    if prediction is None:
         return None
 
-    predict = getattr(module, "predict", None)
-    if not callable(predict):
-        return None
-
-    prediction, prediction_error = _call_generated_predict(task, payload, generated_code, predict, features)
-    if prediction_error is not None:
-        return prediction_error
-
-    probabilities = _call_generated_predict_proba(task, module, features)
-    return _generated_code_prediction_success(task, generated_code, features, prediction, probabilities)
+    return _generated_code_prediction_success(task, generated_code, features, prediction)
 
 
-def _load_generated_code_module(
+def _generated_code_failure_response(
     task: TaskRecord,
     generated_code: Path,
-) -> tuple[Any | None, TaskPredictionDemoResponse | None]:
-    module_name = f"_ai4ml_generated_predict_{task.id}_{abs(hash(str(generated_code)))}"
-    spec = importlib.util.spec_from_file_location(module_name, generated_code)
-    if spec is None or spec.loader is None:
-        return None, None
-
-    previous_path = list(sys.path)
-    sys.path.insert(0, str(generated_code.parent))
-    try:
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    except Exception as exc:  # noqa: BLE001
-        return None, _generated_code_import_error(task, generated_code, exc)
-    finally:
-        sys.path[:] = previous_path
-    return module, None
-
-
-def _generated_code_import_error(
-    task: TaskRecord,
-    generated_code: Path,
-    exc: Exception,
+    failure: GeneratedCodePredictionFailure,
 ) -> TaskPredictionDemoResponse:
+    if failure.kind == "import":
+        detail = f"已找到 generated_code.py，但导入生成代码失败，不能安全调用在线预测：{failure.detail}"
+    else:
+        detail = f"generated_code.py 暴露了 predict 函数，但本次调用失败：{failure.detail}"
     return TaskPredictionDemoResponse(
         task_id=task.id,
         supported=False,
-        detail=f"已找到 generated_code.py，但导入生成代码失败，不能安全调用在线预测：{exc}",
+        detail=detail,
         command_hint=f"Generated code path: {generated_code}",
     )
-
-
-def _call_generated_predict(
-    task: TaskRecord,
-    payload: TaskPredictionDemoRequest,
-    generated_code: Path,
-    predict: Any,
-    features: dict[str, Any],
-) -> tuple[Any, TaskPredictionDemoResponse | None]:
-    try:
-        prediction = predict(features)
-    except TypeError:
-        try:
-            prediction = predict(payload.features)
-        except Exception as exc:  # noqa: BLE001
-            return None, _generated_code_prediction_error(task, generated_code, exc)
-    except Exception as exc:  # noqa: BLE001
-        return None, _generated_code_prediction_error(task, generated_code, exc)
-    return prediction, None
-
-
-def _call_generated_predict_proba(task: TaskRecord, module: Any, features: dict[str, Any]) -> Any | None:
-    predict_proba = getattr(module, "predict_proba", None)
-    if not callable(predict_proba):
-        return None
-    try:
-        return predict_proba(features)
-    except Exception as exc:
-        logger.debug("Generated predict_proba failed for task %s: %s", task.id, exc)
-        return None
 
 
 def _generated_code_prediction_success(
     task: TaskRecord,
     generated_code: Path,
     features: dict[str, Any],
-    prediction: Any,
-    probabilities: Any | None,
+    prediction: GeneratedCodePrediction,
 ) -> TaskPredictionDemoResponse:
     result: dict[str, Any] = {
-        "label": _json_safe_value(prediction),
+        "label": prediction.label,
         "features": features,
         "code_path": str(generated_code),
     }
-    if probabilities is not None:
-        result["probabilities"] = _json_safe_value(probabilities)
+    if prediction.probabilities is not None:
+        result["probabilities"] = prediction.probabilities
     return TaskPredictionDemoResponse(
         task_id=task.id,
         supported=True,
         detail="已调用 generated_code.py 中的真实 predict 函数完成单行在线预测。",
         prediction=result,
-        command_hint=f"Generated code path: {generated_code}",
-    )
-
-
-def _generated_code_has_predict_contract(generated_code: Path) -> bool:
-    try:
-        tree = ast.parse(generated_code.read_text(encoding="utf-8", errors="replace"))
-    except SyntaxError:
-        return False
-    has_predict = False
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            has_predict = has_predict or node.name == "predict"
-            continue
-        if isinstance(node, (ast.Import, ast.ImportFrom, ast.ClassDef)):
-            continue
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            continue
-        if _is_guarded_main_block(node):
-            continue
-        return False
-    return has_predict
-
-
-def _is_guarded_main_block(node: ast.AST) -> bool:
-    if not isinstance(node, ast.If):
-        return False
-    test = node.test
-    if not isinstance(test, ast.Compare) or len(test.ops) != 1 or len(test.comparators) != 1:
-        return False
-    if not isinstance(test.ops[0], ast.Eq):
-        return False
-    left = test.left
-    right = test.comparators[0]
-    return (
-        isinstance(left, ast.Name)
-        and left.id == "__name__"
-        and isinstance(right, ast.Constant)
-        and right.value == "__main__"
-    )
-
-
-def _generated_code_prediction_error(
-    task: TaskRecord,
-    generated_code: Path,
-    exc: Exception,
-) -> TaskPredictionDemoResponse:
-    return TaskPredictionDemoResponse(
-        task_id=task.id,
-        supported=False,
-        detail=f"generated_code.py 暴露了 predict 函数，但本次调用失败：{exc}",
         command_hint=f"Generated code path: {generated_code}",
     )
 
@@ -319,19 +217,3 @@ def _read_prediction_output(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         rows = list(csv.DictReader(handle))
     return rows[0] if rows else {}
-
-
-def _json_safe_value(value: Any) -> Any:
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception as exc:
-            logger.debug("Could not coerce scalar JSON value %r: %s", value, exc)
-            pass
-    if isinstance(value, dict):
-        return {str(key): _json_safe_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe_value(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
