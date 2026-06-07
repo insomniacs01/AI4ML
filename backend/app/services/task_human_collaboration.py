@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from backend.app.models.governance import TeamMemberRecord
 from backend.app.models.task import (
@@ -29,9 +28,7 @@ from backend.app.services.task_human_access import (
 from backend.app.services.task_human_context import (
     append_task_human_decision,
     build_task_human_guidance_preview,
-    ensure_task_human_loop,
     get_task_human_decision_history,
-    get_task_human_loop,
 )
 from backend.app.services.task_human_parameters import apply_human_decision_parameters
 from backend.app.services.task_human_payloads import (
@@ -45,10 +42,15 @@ from backend.app.services.task_human_payloads import (
 )
 from backend.app.services.task_human_stages import (
     HumanStageSnapshotBuilder,
-    get_previous_status,
     is_active_request,
     sort_stages,
     stage_key,
+)
+from backend.app.services.task_human_task_state import (
+    apply_task_ready_for_human_rerun,
+    apply_task_rerun_request,
+    apply_task_resume_after_human,
+    apply_task_waiting_for_human,
 )
 from backend.app.services.task_human_transitions import (
     READY_FOR_RERUN_ACTION,
@@ -428,23 +430,20 @@ class TaskHumanCollaborationService:
         access_token: str,
         manual_hold: bool,
     ) -> TaskRecord:
-        human_loop = self._ensure_human_loop(task)
-        if task.status not in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-            human_loop["previous_status"] = task.status.value
-        human_loop["manual_hold"] = manual_hold
-        human_loop["updated_at"] = datetime.now(timezone.utc).isoformat()
-        task.status = TaskStatus.paused_for_review
+        apply_task_waiting_for_human(
+            task,
+            manual_hold=manual_hold,
+            updated_at=datetime.now(timezone.utc),
+        )
         return self.task_store.save_task(task, access_token=access_token)
 
     def _mark_task_rerun_requested(self, task: TaskRecord, *, reason: str, rerun_from_stage: str | None = None) -> None:
-        human_loop = self._ensure_human_loop(task)
-        human_loop["rerun_requested"] = True
-        human_loop["rerun_reason"] = reason
-        if rerun_from_stage:
-            human_loop["rerun_from_stage"] = rerun_from_stage
-        human_loop["rerun_requested_at"] = datetime.now(timezone.utc).isoformat()
-        human_loop["manual_hold"] = False
-        human_loop["updated_at"] = datetime.now(timezone.utc).isoformat()
+        apply_task_rerun_request(
+            task,
+            reason=reason,
+            rerun_from_stage=rerun_from_stage,
+            requested_at=datetime.now(timezone.utc),
+        )
 
     def _mark_task_ready_for_rerun(
         self,
@@ -454,9 +453,12 @@ class TaskHumanCollaborationService:
         reason: str,
         rerun_from_stage: str | None = None,
     ) -> TaskRecord:
-        self._mark_task_rerun_requested(task, reason=reason, rerun_from_stage=rerun_from_stage)
-        task.status = TaskStatus.uploaded if task.dataset_filename else TaskStatus.draft
-        task.notes = f"人工协同要求重新运行：{reason}"
+        apply_task_ready_for_human_rerun(
+            task,
+            reason=reason,
+            rerun_from_stage=rerun_from_stage,
+            updated_at=datetime.now(timezone.utc),
+        )
         return self.task_store.save_task(task, access_token=access_token)
 
     def _apply_post_decision_task_action(
@@ -485,14 +487,8 @@ class TaskHumanCollaborationService:
         raise RuntimeError(f"unsupported post decision task action: {action}")
 
     def _resume_task_record(self, task: TaskRecord, *, access_token: str) -> TaskRecord:
-        human_loop = self._ensure_human_loop(task)
-        human_loop["manual_hold"] = False
-        human_loop["resumed_at"] = datetime.now(timezone.utc).isoformat()
-        task.status = self._get_previous_status(task)
+        apply_task_resume_after_human(task, resumed_at=datetime.now(timezone.utc))
         return self.task_store.save_task(task, access_token=access_token)
-
-    def _get_previous_status(self, task: TaskRecord) -> TaskStatus:
-        return get_previous_status(task)
 
     def _record_latest_decision(
         self,
@@ -512,11 +508,3 @@ class TaskHumanCollaborationService:
     @staticmethod
     def _stage_key(stage: WorkflowStage | str) -> str:
         return stage_key(stage)
-
-    @staticmethod
-    def _read_human_loop(task: TaskRecord) -> dict[str, Any]:
-        return get_task_human_loop(task)
-
-    @staticmethod
-    def _ensure_human_loop(task: TaskRecord) -> dict[str, Any]:
-        return ensure_task_human_loop(task)

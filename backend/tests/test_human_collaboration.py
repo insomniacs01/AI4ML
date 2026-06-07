@@ -54,6 +54,12 @@ from backend.app.services.task_human_payloads import (
     build_reassigned_request_payload,
     resolve_reassign_timeout,
 )
+from backend.app.services.task_human_task_state import (
+    apply_task_ready_for_human_rerun,
+    apply_task_rerun_request,
+    apply_task_resume_after_human,
+    apply_task_waiting_for_human,
+)
 from backend.app.services.task_human_context import (
     HUMAN_LOOP_KEY,
     build_task_human_context_block,
@@ -298,6 +304,59 @@ class TaskHumanCollaborationServiceTests(TestCase):
             "summary": "Request expired before a human decision was submitted.",
             "decided_at": "2026-01-02T03:04:05+00:00",
         })
+
+    def test_human_task_state_transitions_are_explicit(self) -> None:
+        waiting_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        rerun_at = datetime(2026, 1, 2, 3, 5, 6, tzinfo=timezone.utc)
+        resumed_at = datetime(2026, 1, 2, 3, 6, 7, tzinfo=timezone.utc)
+
+        task = _build_task(status=TaskStatus.planning)
+        apply_task_waiting_for_human(task, manual_hold=True, updated_at=waiting_at)
+        human_loop = task.structured_requirements[HUMAN_LOOP_KEY]
+        self.assertEqual(task.status, TaskStatus.paused_for_review)
+        self.assertEqual(human_loop["previous_status"], "planning")
+        self.assertTrue(human_loop["manual_hold"])
+        self.assertEqual(human_loop["updated_at"], "2026-01-02T03:04:05+00:00")
+
+        apply_task_waiting_for_human(task, manual_hold=False, updated_at=rerun_at)
+        self.assertEqual(human_loop["previous_status"], "planning")
+        self.assertFalse(human_loop["manual_hold"])
+
+        apply_task_rerun_request(
+            task,
+            reason="Metric changed.",
+            rerun_from_stage="training_validation",
+            requested_at=rerun_at,
+        )
+        self.assertTrue(human_loop["rerun_requested"])
+        self.assertEqual(human_loop["rerun_reason"], "Metric changed.")
+        self.assertEqual(human_loop["rerun_from_stage"], "training_validation")
+        self.assertEqual(human_loop["rerun_requested_at"], "2026-01-02T03:05:06+00:00")
+        self.assertFalse(human_loop["manual_hold"])
+
+        apply_task_resume_after_human(task, resumed_at=resumed_at)
+        self.assertEqual(task.status, TaskStatus.uploaded)
+        self.assertEqual(human_loop["resumed_at"], "2026-01-02T03:06:07+00:00")
+        self.assertFalse(human_loop["manual_hold"])
+
+    def test_human_task_ready_for_rerun_state_is_explicit(self) -> None:
+        updated_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        task = _build_task(status=TaskStatus.paused_for_review)
+
+        apply_task_ready_for_human_rerun(
+            task,
+            reason="Use F1.",
+            rerun_from_stage="training_validation",
+            updated_at=updated_at,
+        )
+
+        human_loop = task.structured_requirements[HUMAN_LOOP_KEY]
+        self.assertEqual(task.status, TaskStatus.uploaded)
+        self.assertEqual(task.notes, "人工协同要求重新运行：Use F1.")
+        self.assertTrue(human_loop["rerun_requested"])
+        self.assertEqual(human_loop["rerun_reason"], "Use F1.")
+        self.assertEqual(human_loop["rerun_from_stage"], "training_validation")
+        self.assertEqual(human_loop["updated_at"], "2026-01-02T03:04:05+00:00")
 
     def test_human_assignee_resolution_rules_are_explicit(self) -> None:
         team_members = [
