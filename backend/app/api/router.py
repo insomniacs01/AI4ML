@@ -8,6 +8,7 @@ from backend.app.api.routes.model_config import router as model_config_router
 from backend.app.api.routes.task_artifacts import router as task_artifact_router
 from backend.app.api.routes.tasks import router as task_router
 from backend.app.api.routes.team import router as team_router
+from backend.app.api.routes.team_assets import router as team_asset_router
 from backend.app.api.routes.usage import router as usage_router
 from backend.app.core.config import Settings
 
@@ -19,5 +20,6 @@ def register_api_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(task_artifact_router, prefix=team_prefix)
     app.include_router(connector_router, prefix=team_prefix)
     app.include_router(model_config_router, prefix=team_prefix)
+    app.include_router(team_asset_router, prefix=team_prefix)
     app.include_router(team_router, prefix=team_prefix)
     app.include_router(usage_router, prefix=team_prefix)
