@@ -9,6 +9,7 @@ from backend.app.api.routes.task_human import router as task_human_router
 from backend.app.api.routes.task_lifecycle import router as task_lifecycle_router
 from backend.app.api.routes.task_run import router as task_run_router
 from backend.app.api.routes.task_runtime import router as task_runtime_router
+from backend.app.api.routes.task_snapshot import router as task_snapshot_router
 
 router = APIRouter(tags=["tasks"])
 router.include_router(task_lifecycle_router, prefix="/tasks")
@@ -17,4 +18,5 @@ router.include_router(task_dataset_router, prefix="/tasks")
 router.include_router(task_runtime_router, prefix="/tasks")
 router.include_router(task_chat_router, prefix="/tasks")
 router.include_router(task_run_router, prefix="/tasks")
+router.include_router(task_snapshot_router, prefix="/tasks")
 router.include_router(task_human_router, prefix="/tasks")

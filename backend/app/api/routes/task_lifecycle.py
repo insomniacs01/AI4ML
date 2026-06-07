@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
@@ -10,7 +10,6 @@ from backend.app.models.task import (
     TaskDeleteResponse,
     TaskListResponse,
     TaskRecord,
-    TaskRuntimeSnapshotResponse,
     TaskStatus,
 )
 from backend.app.services.task_codex_sync import sync_codex_task_state
@@ -18,11 +17,6 @@ from backend.app.services.service_registry import get_task_store
 from backend.app.services.task_routing import _validate_task_stage_routing_overrides
 from backend.app.services.platform_limits import PlatformLimitError, assert_user_can_create_task
 from backend.app.services.task_human_policy import validate_interaction_policy_assignees
-from backend.app.services.task_runtime_snapshot import (
-    TaskRuntimeSnapshotNotFound,
-    TaskRuntimeSnapshotSyncError,
-    build_task_runtime_snapshot_response,
-)
 from backend.app.services.task_workflow_tracking import _sync_task_human_collaboration
 
 router = APIRouter(tags=["task-lifecycle"])
@@ -134,22 +128,6 @@ def get_task(task_id: str, team_access: TeamAccessContext = Depends(require_team
         fail_on_error=False,
     )
     return task
-
-
-@router.get("/{task_id}/runtime-snapshot", response_model=TaskRuntimeSnapshotResponse)
-def get_task_runtime_snapshot(
-    task_id: str,
-    sync: bool = Query(True),
-    team_access: TeamAccessContext = Depends(require_team_access),
-) -> TaskRuntimeSnapshotResponse:
-    try:
-        return build_task_runtime_snapshot_response(task_id, team_access, sync_runtime=sync)
-    except TaskRuntimeSnapshotNotFound as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except TaskRuntimeSnapshotSyncError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_task_store_http_error(exc)
 
 
 @router.post("/{task_id}/analyze", response_model=TaskRecord)
