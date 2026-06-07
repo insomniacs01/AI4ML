@@ -40,12 +40,15 @@ from backend.app.services.task_human_collaboration import (
     RESUME_TASK_ACTION,
     WAIT_FOR_HUMAN_ACTION,
     TaskHumanCollaborationService,
+    resolve_human_decision_task_action,
+)
+from backend.app.services.task_human_payloads import (
+    build_human_decision_history_entry,
     build_human_decision_payload,
     build_human_request_payload,
     build_reassigned_decision_payload,
     build_reassigned_request_payload,
     resolve_reassign_timeout,
-    resolve_human_decision_task_action,
 )
 from backend.app.services.task_human_context import (
     HUMAN_LOOP_KEY,
@@ -496,6 +499,61 @@ class TaskHumanCollaborationServiceTests(TestCase):
             datetime(2026, 1, 2, 3, 34, 5, tzinfo=timezone.utc),
         )
         self.assertEqual(resolve_reassign_timeout(request, reassign_timeout_minutes=None, now=now), request.timeout_at)
+
+    def test_human_decision_history_entry_builder_uses_request_payload_fallbacks(self) -> None:
+        decided_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        updated_at = datetime(2026, 1, 2, 3, 5, 6, tzinfo=timezone.utc)
+        request = TaskHumanRequestRecord(
+            id="req-1",
+            team_id="team-1",
+            task_id="task-1",
+            stage=WorkflowStage.training_validation,
+            status=HumanInteractionRequestStatus.modified,
+            requested_by="user-1",
+            assigned_to="reviewer-1",
+            assignee_type=InteractionAssigneeType.member,
+            assignee_value="reviewer-1",
+            payload={
+                "request_type": "result_review",
+                "title": "Confirm validation",
+                "summary": "Accuracy hides minority class errors.",
+                "suggested_action": "Switch to F1.",
+                "artifact_paths": [" results.csv ", "", "node_0/generated_code.py"],
+            },
+            decision={
+                "decided_by": "reviewer-1",
+                "decided_at": decided_at.isoformat(),
+            },
+            created_at=decided_at,
+            updated_at=decided_at,
+        )
+        payload = TaskHumanRequestDecisionRequest(
+            action=HumanInteractionDecisionAction.revise,
+            decision_summary="Use F1 for the next run.",
+            details={"metric": "f1"},
+            resume_task=True,
+        )
+
+        self.assertEqual(build_human_decision_history_entry(request, payload, updated_at=updated_at), {
+            "request_id": "req-1",
+            "stage": "training_validation",
+            "action": "revise",
+            "title": "Confirm validation",
+            "request_type": "result_review",
+            "request_summary": "Accuracy hides minority class errors.",
+            "suggested_action": "Switch to F1.",
+            "decision_summary": "Use F1 for the next run.",
+            "artifact_paths": ["results.csv", "node_0/generated_code.py"],
+            "decision_details": {"metric": "f1"},
+            "resume_task": True,
+            "requires_rerun": True,
+            "reassign_assignee_type": None,
+            "reassign_assignee_value": None,
+            "reassign_assigned_to": None,
+            "decided_by": "reviewer-1",
+            "decided_at": "2026-01-02T03:04:05+00:00",
+            "updated_at": "2026-01-02T03:05:06+00:00",
+        })
 
     def test_create_request_moves_task_into_waiting_human(self) -> None:
         task = _build_task()
