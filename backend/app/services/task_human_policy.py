@@ -17,6 +17,7 @@ from backend.app.models.task import (
     normalize_workflow_stage,
 )
 from backend.app.services.task_human_context import ensure_task_human_loop, get_task_human_loop
+from backend.app.services.task_human_collaboration import resolve_human_request_assignee
 from backend.app.services.service_registry import (
     get_governance_store,
     get_task_human_collaboration_service,
@@ -56,10 +57,9 @@ def _validate_interaction_policy_assignees(
     if not policies:
         return
     team_members = _load_team_members_for_human(team_access)
-    service = get_task_human_collaboration_service()
     for policy in policies:
         try:
-            service.resolve_assignee(
+            resolve_human_request_assignee(
                 assignee_type=policy.assignee_type,
                 assignee_value=policy.assignee_value,
                 assigned_to=policy.assignee_value if policy.assignee_type.value == "member" else None,
@@ -194,7 +194,6 @@ def _apply_interaction_policies(
     existing_requests = task_store.list_human_requests(task.team_id, task.id, access_token=team_access.access_token)
     existing_version_ids = {item.version_id for item in existing_requests if item.version_id}
     team_members: list[TeamMemberRecord] | None = None
-    collaboration_service = None
 
     created_count = 0
     for policy in _applicable_policies(
@@ -212,10 +211,7 @@ def _apply_interaction_policies(
         selection = stage_selection_map.get(normalized_stage.value)
         if team_members is None:
             team_members = _load_team_members_for_human(team_access)
-        if collaboration_service is None:
-            collaboration_service = get_task_human_collaboration_service()
         assignee_type, assignee_value, assigned_to = _resolve_policy_assignee(
-            collaboration_service,
             policy,
             team_access,
             team_members,
@@ -242,7 +238,7 @@ def _apply_interaction_policies(
         f"已根据任务的人机协同策略自动创建 {created_count} 个待处理节点，"
         f"当前阶段为 {trigger_mode.value}。"
     )
-    collaboration_service = collaboration_service or get_task_human_collaboration_service()
+    collaboration_service = get_task_human_collaboration_service()
     paused_task = collaboration_service._mark_task_waiting(  # noqa: SLF001
         task,
         access_token=team_access.access_token,
@@ -312,13 +308,12 @@ def _policy_version_id(
 
 
 def _resolve_policy_assignee(
-    collaboration_service,
     policy: TaskInteractionPolicyRecord,
     team_access: TeamAccessContext,
     team_members: list[TeamMemberRecord],
 ):
     try:
-        return collaboration_service.resolve_assignee(
+        return resolve_human_request_assignee(
             assignee_type=policy.assignee_type,
             assignee_value=policy.assignee_value,
             assigned_to=policy.assignee_value if policy.assignee_type.value == "member" else None,

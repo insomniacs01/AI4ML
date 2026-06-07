@@ -33,10 +33,15 @@ from backend.app.services.task_human_collaboration import (
     RESUME_TASK_ACTION,
     WAIT_FOR_HUMAN_ACTION,
     TaskHumanCollaborationService,
+    assert_actor_can_decide_human_request,
     build_human_decision_payload,
     build_human_request_payload,
     build_reassigned_decision_payload,
     build_reassigned_request_payload,
+    can_actor_view_human_request,
+    human_request_decision_denial_reason,
+    parse_candidate_pool,
+    resolve_human_request_assignee,
     resolve_reassign_timeout,
     resolve_human_decision_task_action,
 )
@@ -253,6 +258,127 @@ class TaskHumanCollaborationServiceTests(TestCase):
             ),
             WAIT_FOR_HUMAN_ACTION,
         )
+
+    def test_human_assignee_resolution_rules_are_explicit(self) -> None:
+        team_members = [
+            TeamMemberRecord(team_id="team-1", user_id="user-1", role="developer_user", member_status="active"),
+            TeamMemberRecord(team_id="team-1", user_id="reviewer-1", role="business_user", member_status="active"),
+            TeamMemberRecord(team_id="team-1", user_id="inactive-1", role="developer_user", member_status="removed"),
+        ]
+
+        default_member = resolve_human_request_assignee(
+            assignee_type=None,
+            assignee_value=None,
+            assigned_to=None,
+            default_member_id="user-1",
+            team_members=team_members,
+        )
+        self.assertEqual(default_member.assignee_type, InteractionAssigneeType.member)
+        self.assertEqual(default_member.assignee_value, "user-1")
+        self.assertEqual(default_member.assigned_to, "user-1")
+
+        role_assignee = resolve_human_request_assignee(
+            assignee_type=InteractionAssigneeType.role,
+            assignee_value="business_user",
+            assigned_to=None,
+            default_member_id="user-1",
+            team_members=team_members,
+        )
+        self.assertEqual(role_assignee.assignee_type, InteractionAssigneeType.role)
+        self.assertEqual(role_assignee.assignee_value, "business_user")
+        self.assertIsNone(role_assignee.assigned_to)
+
+        pool_value = " reviewer-1; qa_role, reviewer-2 "
+        self.assertEqual(parse_candidate_pool(pool_value), ["reviewer-1", "qa_role", "reviewer-2"])
+        pool_assignee = resolve_human_request_assignee(
+            assignee_type=InteractionAssigneeType.candidate_pool,
+            assignee_value=pool_value,
+            assigned_to=None,
+            default_member_id="user-1",
+            team_members=team_members,
+        )
+        self.assertEqual(pool_assignee.assignee_type, InteractionAssigneeType.candidate_pool)
+        self.assertEqual(pool_assignee.assignee_value, pool_value.strip())
+        self.assertIsNone(pool_assignee.assigned_to)
+
+        with self.assertRaisesRegex(RuntimeError, "member is not an active member"):
+            resolve_human_request_assignee(
+                assignee_type=InteractionAssigneeType.member,
+                assignee_value="inactive-1",
+                assigned_to=None,
+                default_member_id="user-1",
+                team_members=team_members,
+            )
+        with self.assertRaisesRegex(RuntimeError, "role has no active member"):
+            resolve_human_request_assignee(
+                assignee_type=InteractionAssigneeType.role,
+                assignee_value="missing_role",
+                assigned_to=None,
+                default_member_id="user-1",
+                team_members=team_members,
+            )
+        with self.assertRaisesRegex(RuntimeError, "candidate pool is empty"):
+            resolve_human_request_assignee(
+                assignee_type=InteractionAssigneeType.candidate_pool,
+                assignee_value=" , ; ",
+                assigned_to=None,
+                default_member_id="user-1",
+                team_members=team_members,
+            )
+
+    def test_human_request_actor_visibility_and_decision_rules_are_explicit(self) -> None:
+        now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        member_request = TaskHumanRequestRecord(
+            id="req-member",
+            team_id="team-1",
+            task_id="task-1",
+            stage=WorkflowStage.data_analysis,
+            status=HumanInteractionRequestStatus.open,
+            requested_by="requester-1",
+            assigned_to="reviewer-1",
+            assignee_type=InteractionAssigneeType.member,
+            assignee_value="reviewer-1",
+            created_at=now,
+            updated_at=now,
+        )
+
+        self.assertTrue(can_actor_view_human_request(member_request, actor_id="requester-1", actor_role="business_user"))
+        self.assertTrue(can_actor_view_human_request(member_request, actor_id="reviewer-1", actor_role="business_user"))
+        self.assertFalse(can_actor_view_human_request(member_request, actor_id="outsider-1", actor_role="business_user"))
+        self.assertIsNone(human_request_decision_denial_reason(member_request, actor_id="reviewer-1", actor_role="business_user"))
+        self.assertIsNone(human_request_decision_denial_reason(member_request, actor_id="admin-1", actor_role="admin"))
+        self.assertEqual(
+            human_request_decision_denial_reason(member_request, actor_id="requester-1", actor_role="business_user"),
+            "Only the assigned member or a team admin can decide this human request.",
+        )
+
+        role_request = member_request.model_copy(update={
+            "id": "req-role",
+            "assigned_to": None,
+            "assignee_type": InteractionAssigneeType.role,
+            "assignee_value": "developer_user",
+        })
+        self.assertTrue(can_actor_view_human_request(role_request, actor_id="developer-1", actor_role="developer_user"))
+        self.assertFalse(can_actor_view_human_request(role_request, actor_id="business-1", actor_role="business_user"))
+        self.assertIsNone(human_request_decision_denial_reason(role_request, actor_id="developer-1", actor_role="developer_user"))
+        self.assertEqual(
+            human_request_decision_denial_reason(role_request, actor_id="business-1", actor_role="business_user"),
+            "Only members with the assigned role or a team admin can decide this human request.",
+        )
+
+        candidate_request = member_request.model_copy(update={
+            "id": "req-candidate",
+            "assigned_to": None,
+            "assignee_type": InteractionAssigneeType.candidate_pool,
+            "assignee_value": "reviewer-2, qa_role",
+        })
+        self.assertTrue(can_actor_view_human_request(candidate_request, actor_id="reviewer-2", actor_role="business_user"))
+        self.assertTrue(can_actor_view_human_request(candidate_request, actor_id="qa-1", actor_role="qa_role"))
+        self.assertFalse(can_actor_view_human_request(candidate_request, actor_id="outsider-1", actor_role="business_user"))
+        self.assertIsNone(human_request_decision_denial_reason(candidate_request, actor_id="reviewer-2", actor_role="business_user"))
+        self.assertIsNone(human_request_decision_denial_reason(candidate_request, actor_id="qa-1", actor_role="qa_role"))
+        with self.assertRaisesRegex(PermissionError, "candidate-pool member"):
+            assert_actor_can_decide_human_request(candidate_request, actor_id="outsider-1", actor_role="business_user")
 
     def test_human_request_and_decision_payload_builders_are_explicit(self) -> None:
         create_payload = TaskHumanRequestCreateRequest(
