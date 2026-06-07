@@ -20,9 +20,9 @@ from backend.app.services.task_human_access import resolve_human_request_assigne
 from backend.app.services.task_human_context import ensure_task_human_loop, get_task_human_loop
 from backend.app.services.service_registry import (
     get_governance_store,
-    get_task_human_collaboration_service,
     get_task_store,
 )
+from backend.app.services.task_human_post_decision import save_task_waiting_for_human
 from backend.app.services.task_human_request_status import (
     ACTIVE_HUMAN_REQUEST_STATUSES,
     COMPLETED_HUMAN_REQUEST_STATUSES,
@@ -233,8 +233,8 @@ def _apply_interaction_policies(
         f"已根据任务的人机协同策略自动创建 {created_count} 个待处理节点，"
         f"当前阶段为 {trigger_mode.value}。"
     )
-    collaboration_service = get_task_human_collaboration_service()
-    paused_task = collaboration_service._mark_task_waiting(  # noqa: SLF001
+    paused_task = save_task_waiting_for_human(
+        task_store,
         task,
         access_token=team_access.access_token,
         manual_hold=False,

@@ -39,6 +39,11 @@ from backend.app.services.task_human_payloads import (
     build_human_request_payload,
     is_rerun_decision_action,
 )
+from backend.app.services.task_human_post_decision import (
+    apply_post_decision_task_action,
+    save_task_resume_after_human,
+    save_task_waiting_for_human,
+)
 from backend.app.services.task_human_reassignment import reassign_human_request
 from backend.app.services.task_human_stages import (
     HumanStageSnapshotBuilder,
@@ -50,18 +55,7 @@ from backend.app.services.task_human_snapshot import (
     build_human_collaboration_snapshot,
     count_open_human_requests,
 )
-from backend.app.services.task_human_task_state import (
-    apply_task_ready_for_human_rerun,
-    apply_task_rerun_request,
-    apply_task_resume_after_human,
-    apply_task_waiting_for_human,
-)
 from backend.app.services.task_human_transitions import (
-    READY_FOR_RERUN_ACTION,
-    REQUEST_RERUN_AND_WAIT_ACTION,
-    RESUME_TASK_ACTION,
-    WAIT_FOR_HUMAN_ACTION,
-    PostDecisionTaskAction,
     resolve_human_decision_task_action,
     status_for_human_decision_action,
 )
@@ -184,7 +178,12 @@ class TaskHumanCollaborationService:
             payload=build_human_request_payload(payload, actor_role=actor_role),
             access_token=access_token,
         )
-        saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        saved_task = save_task_waiting_for_human(
+            self.task_store,
+            task,
+            access_token=access_token,
+            manual_hold=True,
+        )
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=requested_by, actor_role=actor_role)
 
     def submit_decision(
@@ -238,7 +237,8 @@ class TaskHumanCollaborationService:
 
         task = self._record_latest_decision(task, request=request, payload=payload)
         remaining_requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
-        saved_task = self._apply_post_decision_task_action(
+        saved_task = apply_post_decision_task_action(
+            self.task_store,
             task,
             action=resolve_human_decision_task_action(
                 payload.action,
@@ -263,7 +263,7 @@ class TaskHumanCollaborationService:
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         if count_open_human_requests(requests):
             raise RuntimeError("There are still open human collaboration requests for this task.")
-        saved_task = self._resume_task_record(task, access_token=access_token)
+        saved_task = save_task_resume_after_human(self.task_store, task, access_token=access_token)
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=actor_id, actor_role=actor_role)
 
     def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
@@ -329,7 +329,12 @@ class TaskHumanCollaborationService:
             access_token=access_token,
         )
         task = self._record_latest_decision(task, request=updated_request, payload=payload)
-        saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        saved_task = save_task_waiting_for_human(
+            self.task_store,
+            task,
+            access_token=access_token,
+            manual_hold=True,
+        )
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
 
     @staticmethod
@@ -347,73 +352,6 @@ class TaskHumanCollaborationService:
     @staticmethod
     def _assert_actor_can_decide(request: TaskHumanRequestRecord, *, actor_id: str, actor_role: str) -> None:
         assert_actor_can_decide_human_request(request, actor_id=actor_id, actor_role=actor_role)
-
-    def _mark_task_waiting(
-        self,
-        task: TaskRecord,
-        *,
-        access_token: str,
-        manual_hold: bool,
-    ) -> TaskRecord:
-        apply_task_waiting_for_human(
-            task,
-            manual_hold=manual_hold,
-            updated_at=datetime.now(timezone.utc),
-        )
-        return self.task_store.save_task(task, access_token=access_token)
-
-    def _mark_task_rerun_requested(self, task: TaskRecord, *, reason: str, rerun_from_stage: str | None = None) -> None:
-        apply_task_rerun_request(
-            task,
-            reason=reason,
-            rerun_from_stage=rerun_from_stage,
-            requested_at=datetime.now(timezone.utc),
-        )
-
-    def _mark_task_ready_for_rerun(
-        self,
-        task: TaskRecord,
-        *,
-        access_token: str,
-        reason: str,
-        rerun_from_stage: str | None = None,
-    ) -> TaskRecord:
-        apply_task_ready_for_human_rerun(
-            task,
-            reason=reason,
-            rerun_from_stage=rerun_from_stage,
-            updated_at=datetime.now(timezone.utc),
-        )
-        return self.task_store.save_task(task, access_token=access_token)
-
-    def _apply_post_decision_task_action(
-        self,
-        task: TaskRecord,
-        *,
-        action: PostDecisionTaskAction,
-        access_token: str,
-        reason: str,
-        rerun_from_stage: str | None = None,
-    ) -> TaskRecord:
-        if action == WAIT_FOR_HUMAN_ACTION:
-            return self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
-        if action == READY_FOR_RERUN_ACTION:
-            return self._mark_task_ready_for_rerun(
-                task,
-                access_token=access_token,
-                reason=reason,
-                rerun_from_stage=rerun_from_stage,
-            )
-        if action == REQUEST_RERUN_AND_WAIT_ACTION:
-            self._mark_task_rerun_requested(task, reason=reason, rerun_from_stage=rerun_from_stage)
-            return self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
-        if action == RESUME_TASK_ACTION:
-            return self._resume_task_record(task, access_token=access_token)
-        raise RuntimeError(f"unsupported post decision task action: {action}")
-
-    def _resume_task_record(self, task: TaskRecord, *, access_token: str) -> TaskRecord:
-        apply_task_resume_after_human(task, resumed_at=datetime.now(timezone.utc))
-        return self.task_store.save_task(task, access_token=access_token)
 
     def _record_latest_decision(
         self,

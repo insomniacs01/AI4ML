@@ -1047,9 +1047,6 @@ class TaskHumanCollaborationServiceTests(TestCase):
         with patch("backend.app.services.task_human_policy.get_task_store", return_value=self.store), patch(
             "backend.app.services.task_human_policy._load_team_members_for_human",
             return_value=members,
-        ), patch(
-            "backend.app.services.task_human_policy.get_task_human_collaboration_service",
-            return_value=self.service,
         ):
             paused_task, created_count = _apply_interaction_policies(
                 task,
@@ -1118,9 +1115,6 @@ class TaskHumanCollaborationServiceTests(TestCase):
         with patch("backend.app.services.task_human_policy.get_task_store", return_value=self.store), patch(
             "backend.app.services.task_human_policy._load_team_members_for_human",
             return_value=members,
-        ), patch(
-            "backend.app.services.task_human_policy.get_task_human_collaboration_service",
-            return_value=self.service,
         ):
             paused_task, created_count = _apply_interaction_policies(
                 task,
@@ -1188,9 +1182,6 @@ class TaskHumanCollaborationServiceTests(TestCase):
         with patch("backend.app.services.task_human_policy.get_task_store", return_value=self.store), patch(
             "backend.app.services.task_human_policy._load_team_members_for_human",
             return_value=members,
-        ), patch(
-            "backend.app.services.task_human_policy.get_task_human_collaboration_service",
-            return_value=self.service,
         ):
             paused_task, _ = _apply_interaction_policies(
                 task,
@@ -1208,9 +1199,6 @@ class TaskHumanCollaborationServiceTests(TestCase):
         ), patch(
             "backend.app.services.task_human_policy.get_task_store",
             return_value=self.store,
-        ), patch(
-            "backend.app.services.task_human_policy.get_task_human_collaboration_service",
-            return_value=self.service,
         ), patch(
             "backend.app.services.task_workflow_tracking.get_task_human_collaboration_service",
             return_value=self.service,
