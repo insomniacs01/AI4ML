@@ -21,14 +21,11 @@ from backend.app.models.task import (
 from backend.app.services.task_human_access import (
     ResolvedHumanAssignee,
     assert_actor_can_decide_human_request,
-    can_actor_view_human_request,
     parse_candidate_pool,
     resolve_human_request_assignee,
 )
 from backend.app.services.task_human_context import (
     append_task_human_decision,
-    build_task_human_guidance_preview,
-    get_task_human_decision_history,
 )
 from backend.app.services.task_human_parameters import apply_human_decision_parameters
 from backend.app.services.task_human_payloads import (
@@ -45,6 +42,10 @@ from backend.app.services.task_human_stages import (
     is_active_request,
     sort_stages,
     stage_key,
+)
+from backend.app.services.task_human_snapshot import (
+    build_human_collaboration_snapshot,
+    count_open_human_requests,
 )
 from backend.app.services.task_human_task_state import (
     apply_task_ready_for_human_rerun,
@@ -63,6 +64,12 @@ from backend.app.services.task_human_transitions import (
     status_for_human_decision_action,
 )
 from backend.app.services.task_store import TaskStore
+
+
+RUNNING_TASK_HUMAN_REQUEST_ERROR = (
+    "Current task run is still in progress. "
+    "Wait until it finishes before creating a human collaboration request."
+)
 
 
 class TaskHumanCollaborationService:
@@ -88,19 +95,12 @@ class TaskHumanCollaborationService:
             existing_records=existing_records,
             requests=requests,
         )
-        open_request_count = self._count_open_requests(requests)
-        my_requests = self._filter_actor_requests(requests, actor_id=actor_id, actor_role=actor_role)
-        my_open_request_count = self._count_open_requests(my_requests)
-        return TaskHumanCollaborationResponse(
-            task=task,
+        return build_human_collaboration_snapshot(
+            task,
             stages=stages,
             requests=requests,
-            my_requests=my_requests,
-            decision_history=get_task_human_decision_history(task),
-            next_run_guidance=build_task_human_guidance_preview(task),
-            open_request_count=open_request_count,
-            my_open_request_count=my_open_request_count,
-            can_resume=task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human} and open_request_count == 0,
+            actor_id=actor_id,
+            actor_role=actor_role,
         )
 
     def sync_task_stages(
@@ -156,14 +156,14 @@ class TaskHumanCollaborationService:
         team_members: list[TeamMemberRecord] | None = None,
     ) -> TaskHumanCollaborationResponse:
         if task.status == TaskStatus.running:
-            raise RuntimeError("Current task run is still in progress. Wait until it finishes before creating a human collaboration request.")
+            raise RuntimeError(RUNNING_TASK_HUMAN_REQUEST_ERROR)
 
         assignee_type, assignee_value, assigned_to = self.resolve_assignee(
             assignee_type=payload.assignee_type,
             assignee_value=payload.assignee_value,
             assigned_to=payload.assigned_to,
             default_member_id=requested_by,
-            team_members=team_members or [TeamMemberRecord(team_id=task.team_id, user_id=requested_by, role=actor_role, member_status="active")],
+            team_members=team_members or [self._default_team_member(task, user_id=requested_by, role=actor_role)],
         )
 
         timeout_at = None
@@ -217,7 +217,7 @@ class TaskHumanCollaborationService:
                 payload,
                 decided_by=decided_by,
                 actor_role=actor_role,
-                team_members=team_members or [TeamMemberRecord(team_id=task.team_id, user_id=decided_by, role=actor_role, member_status="active")],
+                team_members=team_members or [self._default_team_member(task, user_id=decided_by, role=actor_role)],
                 access_token=access_token,
             )
 
@@ -241,7 +241,7 @@ class TaskHumanCollaborationService:
             task,
             action=resolve_human_decision_task_action(
                 payload.action,
-                open_request_count=self._count_open_requests(remaining_requests),
+                open_request_count=count_open_human_requests(remaining_requests),
                 resume_task=payload.resume_task,
             ),
             access_token=access_token,
@@ -260,7 +260,7 @@ class TaskHumanCollaborationService:
         actor_role: str | None = None,
     ) -> TaskHumanCollaborationResponse:
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
-        if self._count_open_requests(requests):
+        if count_open_human_requests(requests):
             raise RuntimeError("There are still open human collaboration requests for this task.")
         saved_task = self._resume_task_record(task, access_token=access_token)
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=actor_id, actor_role=actor_role)
@@ -270,7 +270,7 @@ class TaskHumanCollaborationService:
         if task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
             raise RuntimeError("Task is waiting for human collaboration. Resolve or resume it before running Codex.")
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
-        if self._count_open_requests(requests):
+        if count_open_human_requests(requests):
             raise RuntimeError("Task has open human collaboration requests. Resolve them before running Codex.")
 
     def resolve_assignee(
@@ -288,6 +288,15 @@ class TaskHumanCollaborationService:
             assigned_to=assigned_to,
             default_member_id=default_member_id,
             team_members=team_members,
+        )
+
+    @staticmethod
+    def _default_team_member(task: TaskRecord, *, user_id: str, role: str) -> TeamMemberRecord:
+        return TeamMemberRecord(
+            team_id=task.team_id,
+            user_id=user_id,
+            role=role,
+            member_status="active",
         )
 
     def _reassign_request(
@@ -370,38 +379,6 @@ class TaskHumanCollaborationService:
     @staticmethod
     def _sort_stages(stages: list[WorkflowStageRecord]) -> list[WorkflowStageRecord]:
         return sort_stages(stages)
-
-    @staticmethod
-    def _count_open_requests(requests: list[TaskHumanRequestRecord]) -> int:
-        return sum(1 for item in requests if TaskHumanCollaborationService._is_active_request(item))
-
-    @staticmethod
-    def _filter_actor_requests(
-        requests: list[TaskHumanRequestRecord],
-        *,
-        actor_id: str | None,
-        actor_role: str | None,
-    ) -> list[TaskHumanRequestRecord]:
-        if not actor_id:
-            return requests
-        return [
-            request
-            for request in requests
-            if TaskHumanCollaborationService._is_request_visible_to_actor(
-                request,
-                actor_id=actor_id,
-                actor_role=actor_role or "",
-            )
-        ]
-
-    @staticmethod
-    def _is_request_visible_to_actor(
-        request: TaskHumanRequestRecord,
-        *,
-        actor_id: str,
-        actor_role: str,
-    ) -> bool:
-        return can_actor_view_human_request(request, actor_id=actor_id, actor_role=actor_role)
 
     @staticmethod
     def _is_active_request(request: TaskHumanRequestRecord) -> bool:
