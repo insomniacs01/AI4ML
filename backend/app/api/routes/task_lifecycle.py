@@ -11,18 +11,15 @@ from backend.app.models.task import (
     DatasetProfile,
     TaskCreateRequest,
     TaskDeleteResponse,
-    TaskInteractionPolicyRecord,
     TaskListResponse,
     TaskRecord,
     TaskRuntimeSnapshotResponse,
     TaskRunRequest,
     TaskSemanticUpdateRequest,
-    TaskStageRoutingRecord,
     TaskStatus,
     TaskWorkflowConfigUpdateRequest,
     WorkflowStage,
     WorkflowStageStatus,
-    normalize_workflow_stage,
 )
 from backend.app.services.dataset_profile import build_dataset_profile
 from backend.app.services.task_codex_sync import sync_codex_task_state
@@ -51,6 +48,7 @@ from backend.app.services.task_uploads import (
     validate_upload_content_type as _validate_upload_content_type,
     validate_upload_filename as _validate_upload_filename,
 )
+from backend.app.services.task_workflow_config import apply_task_workflow_config
 from backend.app.services.task_workflow_tracking import (
     _record_workflow_stage,
     _sync_task_human_collaboration,
@@ -199,33 +197,7 @@ def update_task_workflow_config(
 
     _validate_task_stage_routing_overrides(payload.stage_routing)
     _validate_interaction_policy_assignees(payload.interaction_policies, team_access)
-    task.stage_routing = [
-        TaskStageRoutingRecord(
-            stage=normalize_workflow_stage(item.stage),
-            connector_id=item.connector_id,
-            model_name=item.model_name,
-            selection_source="task_override",
-        )
-        for item in payload.stage_routing
-        if item.connector_id
-    ]
-    task.interaction_policies = [
-        TaskInteractionPolicyRecord(
-            policy_id=item.policy_id or f"{normalize_workflow_stage(item.stage).value}:{index + 1}",
-            enabled=item.enabled,
-            stage=normalize_workflow_stage(item.stage),
-            trigger_mode=item.trigger_mode,
-            assignee_type=item.assignee_type,
-            assignee_value=item.assignee_value,
-            request_type=item.request_type,
-            title=item.title,
-            summary=item.summary,
-            suggested_action=item.suggested_action,
-            timeout_minutes=item.timeout_minutes,
-            artifact_paths=item.artifact_paths,
-        )
-        for index, item in enumerate(payload.interaction_policies)
-    ]
+    task = apply_task_workflow_config(task, payload)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     runtime_context = _build_runtime_context(team_access)
     stage_selection_map = _build_stage_selection_map(saved_task, team_access, runtime_context)
