@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.app.services.codex_overview import _overview_baseline_metric, build_codex_overview_from_artifacts
+from backend.app.services.codex_overview import build_codex_overview_from_artifacts
+from backend.app.services.codex_overview_metrics import overview_baseline_metric, overview_primary_metric
 
 
 def test_overview_baseline_metric_uses_requested_split_with_candidate_fallback() -> None:
@@ -15,7 +16,7 @@ def test_overview_baseline_metric_uses_requested_split_with_candidate_fallback()
         }
     }
 
-    assert _overview_baseline_metric(metrics, "mae", "validation") == ("median", 1.5)
+    assert overview_baseline_metric(metrics, "mae", "validation") == ("median", 1.5)
 
 
 def test_overview_baseline_metric_picks_higher_baseline_for_higher_is_better_metric() -> None:
@@ -26,7 +27,16 @@ def test_overview_baseline_metric_picks_higher_baseline_for_higher_is_better_met
         }
     }
 
-    assert _overview_baseline_metric(metrics, "accuracy", None) == ("majority", 0.8)
+    assert overview_baseline_metric(metrics, "accuracy", None) == ("majority", 0.8)
+
+
+def test_overview_primary_metric_prefers_test_split_known_metric() -> None:
+    selected = {
+        "validation": {"accuracy": 0.91},
+        "test": {"mae": 2.0, "accuracy": 0.89},
+    }
+
+    assert overview_primary_metric(selected, {"selected_model": selected}) == ("mae", 2.0, "test")
 
 
 def test_derived_overview_result_checks_use_metrics_and_workspace(tmp_path: Path) -> None:

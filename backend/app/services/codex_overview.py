@@ -13,7 +13,8 @@ from backend.app.services.codex_common import (
     read_json,
     workspace_path_from_artifacts,
 )
-from backend.app.services.codex_metrics import primary_metric, selected_model_metrics
+from backend.app.services.codex_metrics import selected_model_metrics
+from backend.app.services.codex_overview_metrics import overview_baseline_metric, overview_primary_metric
 
 
 def build_codex_overview_from_artifacts(artifacts: dict[str, Any]) -> dict[str, Any]:
@@ -48,8 +49,8 @@ def _normalize_overview_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _derive_overview_from_metrics(metrics: dict[str, Any], workspace_path: str | None) -> dict[str, Any]:
     selected = selected_model_metrics(metrics)
-    metric_name, metric_value, metric_split = _overview_primary_metric(selected, metrics)
-    baseline_name, baseline_value = _overview_baseline_metric(metrics, metric_name, metric_split)
+    metric_name, metric_value, metric_split = overview_primary_metric(selected, metrics)
+    baseline_name, baseline_value = overview_baseline_metric(metrics, metric_name, metric_split)
     diagnostics = metrics.get("diagnostics") if isinstance(metrics.get("diagnostics"), dict) else {}
     prediction_csv = nested_get(metrics, ("artifacts", "prediction_csv"))
     feature_importance_path = nested_get(metrics, ("artifacts", "feature_importance"))
@@ -143,79 +144,6 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
     return []
-
-
-def _overview_primary_metric(
-    selected: dict[str, Any],
-    metrics: dict[str, Any],
-) -> tuple[str | None, float | None, str | None]:
-    for split in ("test", "validation", "cross_validation", "holdout"):
-        container = selected.get(split)
-        if not isinstance(container, dict):
-            continue
-        for name in (
-            "signed_log_mae",
-            "mae",
-            "rmse",
-            "median_absolute_error",
-            "macro_f1",
-            "accuracy",
-            "r2",
-            "within_relative_error_25pct",
-        ):
-            value = coerce_float(container.get(name))
-            if value is not None:
-                return name, value, split
-    name, value = primary_metric(selected, metrics)
-    return (name if value is not None else None), value, None
-
-
-def _overview_baseline_metric(
-    metrics: dict[str, Any],
-    metric_name: str | None,
-    split: str | None,
-) -> tuple[str | None, float | None]:
-    if not metric_name:
-        return None, None
-    baselines = metrics.get("baselines")
-    if not isinstance(baselines, dict):
-        return None, None
-    candidates = _overview_baseline_candidates(baselines, metric_name, split)
-    if not candidates:
-        return None, None
-    if lower_is_better(metric_name):
-        return min(candidates, key=lambda item: item[1])
-    return max(candidates, key=lambda item: item[1])
-
-
-def _overview_baseline_candidates(
-    baselines: dict[str, Any],
-    metric_name: str,
-    split: str | None,
-) -> list[tuple[str, float]]:
-    candidates: list[tuple[str, float]] = []
-    for name, payload in baselines.items():
-        if not isinstance(payload, dict):
-            continue
-        container = _overview_baseline_container(payload, split)
-        if not isinstance(container, dict):
-            continue
-        value = coerce_float(container.get(metric_name))
-        if value is not None:
-            candidates.append((str(name), value))
-    return candidates
-
-
-def _overview_baseline_container(payload: dict[str, Any], split: str | None) -> dict[str, Any] | None:
-    requested = payload.get(split or "test")
-    if isinstance(requested, dict):
-        return requested
-
-    for fallback_split in ("test", "validation", "holdout", "cross_validation"):
-        candidate = payload.get(fallback_split)
-        if isinstance(candidate, dict):
-            return candidate
-    return None
 
 
 def _derive_confidence(
