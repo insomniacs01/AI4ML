@@ -5,9 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
-from backend.app.api.routes import team as team_routes
+from backend.app.api.router import register_api_routes
+from backend.app.api.routes import team_admin as team_admin_routes
+from backend.app.core.config import Settings
 from backend.app.models.governance import (
     AdminUserUpdateRequest,
     TeamMemberRecord,
@@ -89,10 +91,10 @@ class _AdminUserStore:
 
 def test_update_admin_user_rejects_team_owner_assignment(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _AdminUserStore(_member())
-    monkeypatch.setattr(team_routes, "get_governance_store", lambda: store)
+    monkeypatch.setattr(team_admin_routes, "get_governance_store", lambda: store)
 
     with pytest.raises(HTTPException) as exc:
-        team_routes.update_admin_user(
+        team_admin_routes.update_admin_user(
             "user-2",
             AdminUserUpdateRequest(role="team_owner"),
             _team_access(),
@@ -104,10 +106,10 @@ def test_update_admin_user_rejects_team_owner_assignment(monkeypatch: pytest.Mon
 
 def test_update_admin_user_rejects_existing_owner_role_change(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _AdminUserStore(_member(role="team_owner"))
-    monkeypatch.setattr(team_routes, "get_governance_store", lambda: store)
+    monkeypatch.setattr(team_admin_routes, "get_governance_store", lambda: store)
 
     with pytest.raises(HTTPException) as exc:
-        team_routes.update_admin_user(
+        team_admin_routes.update_admin_user(
             "user-2",
             AdminUserUpdateRequest(role="admin"),
             _team_access(),
@@ -124,11 +126,11 @@ def test_update_admin_user_applies_profile_member_quota_and_pauses_exhausted_tas
     store = _AdminUserStore(_member(), quota=exhausted_quota)
     update_profile = Mock()
     pause_tasks = Mock()
-    monkeypatch.setattr(team_routes, "get_governance_store", lambda: store)
+    monkeypatch.setattr(team_admin_routes, "get_governance_store", lambda: store)
     monkeypatch.setattr("backend.app.services.team_admin_user_update.update_supabase_user_profile", update_profile)
-    monkeypatch.setattr(team_routes, "pause_member_tasks_if_quota_exhausted", pause_tasks)
+    monkeypatch.setattr(team_admin_routes, "pause_member_tasks_if_quota_exhausted", pause_tasks)
 
-    response = team_routes.update_admin_user(
+    response = team_admin_routes.update_admin_user(
         "user-2",
         AdminUserUpdateRequest(
             display_name="New name",
@@ -208,6 +210,21 @@ def test_update_admin_user_record_reads_existing_quota_without_quota_changes() -
     store.get_member_quota.assert_called_once_with("team-1", "user-2", access_token="token")
     assert result.member.user_id == "user-2"
     assert result.quota == existing_quota
+
+
+def test_team_admin_routes_remain_registered_under_team_prefix() -> None:
+    app = FastAPI()
+    register_api_routes(app, Settings(AI4ML_SUPABASE_URL="", AI4ML_SUPABASE_PUBLISHABLE_KEY=""))
+    route_methods = {
+        (method, route.path)
+        for route in app.routes
+        for method in getattr(route, "methods", set())
+    }
+
+    assert ("PUT", "/api/teams/{team_id}/admin/users/{member_id}") in route_methods
+    assert ("POST", "/api/teams/{team_id}/admin/users/{member_id}/reset-password") in route_methods
+    assert ("GET", "/api/teams/{team_id}/admin/platform-limits") in route_methods
+    assert ("PUT", "/api/teams/{team_id}/admin/platform-limits") in route_methods
 
 
 def test_update_admin_user_record_rejects_team_owner_assignment() -> None:
