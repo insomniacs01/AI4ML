@@ -19,11 +19,11 @@ from backend.app.services.governance_store import GovernanceStore
 from backend.app.services.model_config import read_model_profile
 from backend.app.services.quota_runtime_guard import pause_codex_task_for_quota, quota_is_exhausted
 from backend.app.services.service_registry import get_task_store
+from backend.app.services.task_codex_improvement_review import has_codex_improvement_review
 from backend.app.services.task_codex_sync import is_codex_task, sync_codex_task_state
 from backend.app.services.task_runtime_progress import (
     ensure_codex_improvement_request,
     ensure_codex_plan_request,
-    has_codex_improvement_review,
 )
 from backend.app.services.task_runtime_steps import build_runtime_steps, progress_from_steps
 
