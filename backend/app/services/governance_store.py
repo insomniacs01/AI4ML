@@ -33,6 +33,7 @@ from backend.app.services.governance_team_records import (
     team_member_from_payload,
     team_settings_from_payload,
 )
+from backend.app.services.governance_team_ownership import resolve_ownership_transfer
 from backend.app.services.governance_usage import GovernanceUsageRepository
 
 
@@ -40,6 +41,7 @@ class GovernanceStore:
     _team_settings_from_payload = staticmethod(team_settings_from_payload)
     _member_record_from_payload = staticmethod(team_member_from_payload)
     _profile_records_from_payload = staticmethod(profile_records_from_payload)
+    _resolve_ownership_transfer = staticmethod(resolve_ownership_transfer)
     _connector_display_names = staticmethod(connector_display_names)
     _routing_policy_records_from_payload = staticmethod(routing_policy_records_from_payload)
     _routing_policy_has_value = staticmethod(routing_policy_has_value)
@@ -145,31 +147,27 @@ class GovernanceStore:
         access_token: str,
     ) -> tuple[TeamSettingsRecord, TeamMemberRecord, TeamMemberRecord]:
         members = self.list_members(team_id, access_token=access_token)
-        previous_owner = next((item for item in members if item.user_id == current_owner_id), None)
-        if previous_owner is None or previous_owner.role != "team_owner":
-            raise PermissionError("Only the current team owner can transfer ownership.")
+        plan = self._resolve_ownership_transfer(
+            members,
+            current_owner_id=current_owner_id,
+            new_owner_user_id=new_owner_user_id,
+        )
 
-        next_owner = next((item for item in members if item.user_id == new_owner_user_id), None)
-        if next_owner is None:
-            raise ValueError("new owner is not a member of this team")
-        if next_owner.member_status != "active":
-            raise ValueError("new owner must be an active team member")
-
-        if next_owner.user_id == previous_owner.user_id:
+        if plan.is_noop:
             settings = self.get_team_settings(team_id, access_token=access_token)
             if settings is None:
                 raise ValueError("team not found")
-            return settings, previous_owner, next_owner
+            return settings, plan.previous_owner, plan.next_owner
 
         promoted = self.update_member_role(
             team_id,
-            next_owner.user_id,
+            plan.next_owner.user_id,
             "team_owner",
             access_token=access_token,
         )
         demoted = self.update_member_role(
             team_id,
-            previous_owner.user_id,
+            plan.previous_owner.user_id,
             "admin",
             access_token=access_token,
         )
