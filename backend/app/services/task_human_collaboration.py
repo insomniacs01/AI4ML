@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import Any
 
 from backend.app.core.supabase_auth import TEAM_ADMIN_ROLES
@@ -42,6 +43,38 @@ RERUN_DECISION_ACTIONS = {
     HumanInteractionDecisionAction.revise,
     HumanInteractionDecisionAction.reject,
 }
+
+
+class PostDecisionTaskAction(str, Enum):
+    wait_for_human = "wait_for_human"
+    ready_for_rerun = "ready_for_rerun"
+    request_rerun_and_wait = "request_rerun_and_wait"
+    resume_task = "resume_task"
+
+
+WAIT_FOR_HUMAN_ACTION = PostDecisionTaskAction.wait_for_human
+READY_FOR_RERUN_ACTION = PostDecisionTaskAction.ready_for_rerun
+REQUEST_RERUN_AND_WAIT_ACTION = PostDecisionTaskAction.request_rerun_and_wait
+RESUME_TASK_ACTION = PostDecisionTaskAction.resume_task
+
+
+def resolve_human_decision_task_action(
+    action: HumanInteractionDecisionAction,
+    *,
+    open_request_count: int,
+    resume_task: bool,
+) -> PostDecisionTaskAction:
+    if open_request_count > 0:
+        return WAIT_FOR_HUMAN_ACTION
+    if action == HumanInteractionDecisionAction.block:
+        return WAIT_FOR_HUMAN_ACTION
+    if action in RERUN_DECISION_ACTIONS and resume_task:
+        return READY_FOR_RERUN_ACTION
+    if action in RERUN_DECISION_ACTIONS:
+        return REQUEST_RERUN_AND_WAIT_ACTION
+    if resume_task:
+        return RESUME_TASK_ACTION
+    return WAIT_FOR_HUMAN_ACTION
 
 
 class TaskHumanCollaborationService:
@@ -230,24 +263,17 @@ class TaskHumanCollaborationService:
 
         task = self._record_latest_decision(task, request=request, payload=payload)
         remaining_requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
-        if self._count_open_requests(remaining_requests):
-            saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
-        elif payload.action == HumanInteractionDecisionAction.block:
-            saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
-        elif requires_rerun and payload.resume_task:
-            saved_task = self._mark_task_ready_for_rerun(
-                task,
-                access_token=access_token,
-                reason=payload.decision_summary,
-                rerun_from_stage=rerun_from_stage,
-            )
-        elif requires_rerun:
-            self._mark_task_rerun_requested(task, reason=payload.decision_summary, rerun_from_stage=rerun_from_stage)
-            saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
-        elif payload.resume_task:
-            saved_task = self._resume_task_record(task, access_token=access_token)
-        else:
-            saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        saved_task = self._apply_post_decision_task_action(
+            task,
+            action=resolve_human_decision_task_action(
+                payload.action,
+                open_request_count=self._count_open_requests(remaining_requests),
+                resume_task=payload.resume_task,
+            ),
+            access_token=access_token,
+            reason=payload.decision_summary,
+            rerun_from_stage=rerun_from_stage,
+        )
 
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
 
@@ -537,6 +563,31 @@ class TaskHumanCollaborationService:
         task.status = TaskStatus.uploaded if task.dataset_filename else TaskStatus.draft
         task.notes = f"人工协同要求重新运行：{reason}"
         return self.task_store.save_task(task, access_token=access_token)
+
+    def _apply_post_decision_task_action(
+        self,
+        task: TaskRecord,
+        *,
+        action: PostDecisionTaskAction,
+        access_token: str,
+        reason: str,
+        rerun_from_stage: str | None = None,
+    ) -> TaskRecord:
+        if action == WAIT_FOR_HUMAN_ACTION:
+            return self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        if action == READY_FOR_RERUN_ACTION:
+            return self._mark_task_ready_for_rerun(
+                task,
+                access_token=access_token,
+                reason=reason,
+                rerun_from_stage=rerun_from_stage,
+            )
+        if action == REQUEST_RERUN_AND_WAIT_ACTION:
+            self._mark_task_rerun_requested(task, reason=reason, rerun_from_stage=rerun_from_stage)
+            return self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
+        if action == RESUME_TASK_ACTION:
+            return self._resume_task_record(task, access_token=access_token)
+        raise RuntimeError(f"unsupported post decision task action: {action}")
 
     def _resume_task_record(self, task: TaskRecord, *, access_token: str) -> TaskRecord:
         human_loop = self._ensure_human_loop(task)

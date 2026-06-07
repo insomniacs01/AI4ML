@@ -27,7 +27,14 @@ from backend.app.models.task import (
 )
 from backend.app.services.task_human_policy import _apply_interaction_policies
 from backend.app.api.routes.task_human import decide_task_human_request
-from backend.app.services.task_human_collaboration import TaskHumanCollaborationService
+from backend.app.services.task_human_collaboration import (
+    READY_FOR_RERUN_ACTION,
+    REQUEST_RERUN_AND_WAIT_ACTION,
+    RESUME_TASK_ACTION,
+    WAIT_FOR_HUMAN_ACTION,
+    TaskHumanCollaborationService,
+    resolve_human_decision_task_action,
+)
 from backend.app.services.task_human_context import (
     HUMAN_LOOP_KEY,
     build_task_human_context_block,
@@ -191,6 +198,56 @@ class TaskHumanCollaborationServiceTests(TestCase):
         self.store = FakeTaskStore()
         self.service = TaskHumanCollaborationService(self.store)
         self.access_token = "test-token"
+
+    def test_human_decision_task_action_resolution_is_explicit(self) -> None:
+        self.assertEqual(
+            resolve_human_decision_task_action(
+                HumanInteractionDecisionAction.approve,
+                open_request_count=1,
+                resume_task=True,
+            ),
+            WAIT_FOR_HUMAN_ACTION,
+        )
+        self.assertEqual(
+            resolve_human_decision_task_action(
+                HumanInteractionDecisionAction.block,
+                open_request_count=0,
+                resume_task=True,
+            ),
+            WAIT_FOR_HUMAN_ACTION,
+        )
+        self.assertEqual(
+            resolve_human_decision_task_action(
+                HumanInteractionDecisionAction.revise,
+                open_request_count=0,
+                resume_task=True,
+            ),
+            READY_FOR_RERUN_ACTION,
+        )
+        self.assertEqual(
+            resolve_human_decision_task_action(
+                HumanInteractionDecisionAction.reject,
+                open_request_count=0,
+                resume_task=False,
+            ),
+            REQUEST_RERUN_AND_WAIT_ACTION,
+        )
+        self.assertEqual(
+            resolve_human_decision_task_action(
+                HumanInteractionDecisionAction.skip,
+                open_request_count=0,
+                resume_task=True,
+            ),
+            RESUME_TASK_ACTION,
+        )
+        self.assertEqual(
+            resolve_human_decision_task_action(
+                HumanInteractionDecisionAction.approve,
+                open_request_count=0,
+                resume_task=False,
+            ),
+            WAIT_FOR_HUMAN_ACTION,
+        )
 
     def test_create_request_moves_task_into_waiting_human(self) -> None:
         task = _build_task()
