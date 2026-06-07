@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 from backend.app.core.config import Settings
 from backend.app.models.governance import (
@@ -23,6 +20,7 @@ from backend.app.models.governance import (
     TokenLedgerRecord,
 )
 from backend.app.services.governance_assets import PlatformAssetRepository
+from backend.app.services.governance_http import GovernanceHttpClient, unwrap_single_record
 from backend.app.services.governance_routing_policies import (
     connector_display_names,
     routing_policy_has_value,
@@ -47,9 +45,11 @@ class GovernanceStore:
     _routing_policy_has_value = staticmethod(routing_policy_has_value)
     _routing_policy_stage = staticmethod(routing_policy_stage)
     _routing_policy_upsert_body = staticmethod(routing_policy_upsert_body)
+    _unwrap_single_record = staticmethod(unwrap_single_record)
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.http = GovernanceHttpClient(settings)
         self._asset_repository = PlatformAssetRepository(
             request_json=self._request_json,
             list_profiles=self._list_profiles,
@@ -473,56 +473,14 @@ class GovernanceStore:
         expect_json: bool = True,
         prefer: str | None = None,
     ) -> Any:
-        self._ensure_configured()
-        url = f"{self.settings.supabase_rest_url.rstrip('/')}/{path.lstrip('/')}"
-        headers = {
-            "Accept": "application/json",
-            "apikey": self.settings.supabase_publishable_key,
-            "Authorization": f"Bearer {access_token}",
-            "Accept-Profile": "public",
-            "Content-Profile": "public",
-        }
-        data = None
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-            headers["Prefer"] = prefer or "return=representation"
-            data = json.dumps(body).encode("utf-8")
-
-        request = Request(url, data=data, headers=headers, method=method)
-        try:
-            with urlopen(request, timeout=self.settings.supabase_timeout_seconds) as response:  # noqa: S310
-                raw_body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            payload = exc.read().decode("utf-8", errors="ignore")
-            if exc.code in (401, 403):
-                raise PermissionError("Supabase rejected the team-governance request.") from exc
-            raise ConnectionError(
-                f"Supabase governance request failed with HTTP {exc.code}. Response: {payload or '<empty>'}"
-            ) from exc
-        except (URLError, TimeoutError, OSError) as exc:
-            raise ConnectionError("Could not reach Supabase to read or write team-governance records.") from exc
-
-        if not expect_json:
-            return None
-        if not raw_body:
-            return None
-        try:
-            return json.loads(raw_body)
-        except json.JSONDecodeError as exc:
-            raise ConnectionError("Supabase governance response was not valid JSON.") from exc
-
-    def _ensure_configured(self) -> None:
-        if self.settings.supabase_configured:
-            return
-        raise RuntimeError(
-            "Supabase team-governance storage is not configured. "
-            "Set AI4ML_SUPABASE_URL / AI4ML_SUPABASE_PUBLISHABLE_KEY or keep frontend/.env.local available."
+        return self.http.request_json(
+            path=path,
+            access_token=access_token,
+            method=method,
+            body=body,
+            expect_json=expect_json,
+            prefer=prefer,
         )
 
-    @staticmethod
-    def _unwrap_single_record(payload: Any, action: str) -> dict[str, Any]:
-        if isinstance(payload, dict):
-            return payload
-        if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
-            return payload[0]
-        raise ConnectionError(f"Unexpected Supabase response shape during {action}.")
+    def _ensure_configured(self) -> None:
+        self.http._ensure_configured()  # noqa: SLF001
