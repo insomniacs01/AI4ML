@@ -47,6 +47,12 @@ from backend.app.services.task_runtime_activity import (
     ActiveCodexTaskConflict,
     ensure_task_controls_current_codex_activity,
 )
+from backend.app.services.task_runtime_codex_state import (
+    apply_codex_plan_approval_response,
+    apply_codex_plan_regeneration_response,
+    apply_codex_resume_response,
+    apply_codex_start_response,
+)
 from backend.app.services.task_runtime_progress import (
     ensure_codex_plan_request,
     record_codex_running_stages,
@@ -348,13 +354,7 @@ def _regenerate_codex_plan_and_save(
         response = regenerate_codex_plan(task, settings, token_budget=token_budget)
     except CodexBackendError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    task = clear_quota_guard(task)
-    task.executor_type = "codex"
-    task.codex_session_id = response.get("sessionId") or task.codex_session_id
-    task.codex_thread_id = response.get("threadId") or task.codex_thread_id
-    task.codex_status = "running"
-    task.status = TaskStatus.running
-    task.notes = "Codex 正在根据人工反馈重新生成建模计划。"
+    task = apply_codex_plan_regeneration_response(task, response)
     task = update_codex_structured_metadata(task)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     record_codex_running_stages(saved_task, team_access)
@@ -386,17 +386,7 @@ def _start_codex_task_and_save(
     except CodexBackendError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    task.executor_type = "codex"
-    task.codex_session_id = response.get("sessionId") or task.codex_session_id
-    task.codex_thread_id = response.get("threadId") or task.codex_thread_id
-    task.codex_workspace_path = response.get("workspacePath") or task.codex_workspace_path
-    task.codex_status = "running"
-    task.codex_started_at = task.codex_started_at or datetime.now(timezone.utc)
-    task.codex_finished_at = None
-    task.status = TaskStatus.running
-    task.notes = "Codex 正在创建任务工作区并生成建模计划。"
-    task.last_run = None
-    task.last_run_attempt = None
+    task = apply_codex_start_response(task, response)
     task = update_codex_structured_metadata(task)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     record_codex_running_stages(saved_task, team_access)
@@ -464,14 +454,11 @@ def _resume_codex_task_and_save(
         )
     except CodexBackendError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    task = clear_quota_guard(task)
-    task.codex_session_id = response.get("sessionId") or task.codex_session_id
-    task.codex_thread_id = response.get("threadId") or task.codex_thread_id
-    task.executor_type = "codex"
-    task.codex_status = "running"
-    task.codex_finished_at = None
-    task.status = TaskStatus.running
-    task.notes = resume_note_for_improvement_decision(improvement_decision)
+    task = apply_codex_resume_response(
+        task,
+        response,
+        notes=resume_note_for_improvement_decision(improvement_decision),
+    )
     task = update_codex_structured_metadata(task)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     record_codex_running_stages(saved_task, team_access)
@@ -497,13 +484,7 @@ def _approve_codex_plan_and_save(
         response = approve_codex_plan(task, settings, plan_text=plan_text, token_budget=token_budget)
     except CodexBackendError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    task = clear_quota_guard(task)
-    task.codex_session_id = response.get("sessionId") or task.codex_session_id
-    task.codex_thread_id = response.get("threadId") or task.codex_thread_id
-    task.executor_type = "codex"
-    task.codex_status = "running"
-    task.status = TaskStatus.running
-    task.notes = "Codex 已收到计划确认，正在继续执行建模流程。"
+    task = apply_codex_plan_approval_response(task, response)
     task = update_codex_structured_metadata(task)
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     record_codex_running_stages(saved_task, team_access)
