@@ -2,17 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from backend.app.models.task import DatasetProfile, FeatureImportanceEntry, TaskRecord
 from backend.app.services.task_artifacts import build_run_artifact_index
-from backend.app.services.task_report_formatting import (
-    artifact_status as _artifact_status,
-    escape_table_cell as _escape_table_cell,
-    format_metric_value as _format_metric_value,
-    markdown_table as _markdown_table,
-    path_text as _path_text,
-)
+from backend.app.services.task_report_formatting import format_metric_value as _format_metric_value
 from backend.app.services.task_report_narrative import (
     abstract_lines as _abstract_lines,
     conclusion_lines as _conclusion_lines,
@@ -32,6 +25,11 @@ from backend.app.services.task_report_agent_loop import (
     stop_condition_report_lines as _stop_condition_report_lines,
     tuning_attempt_report_lines as _tuning_attempt_report_lines,
     workflow_report_lines as _workflow_report_lines,
+)
+from backend.app.services.task_report_result_sections import (
+    artifact_report_lines as _artifact_report_lines,
+    feature_importance_table_lines as _feature_importance_table_lines,
+    model_result_lines as _model_result_lines,
 )
 from backend.app.services.task_report_target_profile import build_target_profile
 
@@ -213,70 +211,6 @@ def _report_scope_text(using_artifact_importance: bool) -> str:
     if using_artifact_importance:
         return "真实结果文件、候选模型对比、模型给出的特征重要性、简单对照与结果检查"
     return "真实结果文件、候选模型对比、简单对照、结果检查，以及 CSV 中特征与目标列的统计关系"
-
-
-def _artifact_report_lines(artifact_index: Any) -> list[str]:
-    rows = [
-        ["输出目录", _artifact_status(artifact_index.output_dir), _escape_table_cell(_path_text(artifact_index.output_dir))],
-        ["结果摘要", _artifact_status(artifact_index.run_summary_path), _escape_table_cell(_path_text(artifact_index.run_summary_path))],
-        ["候选模型对比", _artifact_status(artifact_index.leaderboard_path), _escape_table_cell(_path_text(artifact_index.leaderboard_path))],
-        ["AI 使用记录", _artifact_status(artifact_index.token_usage_path), _escape_table_cell(_path_text(artifact_index.token_usage_path))],
-        ["生成代码", _artifact_status(artifact_index.generated_code_path), _escape_table_cell(_path_text(artifact_index.generated_code_path))],
-    ]
-    if artifact_index.feature_importance_paths:
-        for index, path in enumerate(artifact_index.feature_importance_paths[:5], start=1):
-            rows.append([f"特征重要性 {index}", "已找到", _escape_table_cell(str(path))])
-    else:
-        rows.append(["特征重要性", "未找到", "未记录"])
-    return _markdown_table(["文件", "状态", "路径"], ["---", "---", "---"], rows)
-
-
-def _feature_importance_table_lines(feature_importance: list[FeatureImportanceEntry]) -> list[str]:
-    rows = [
-        [str(index), _escape_table_cell(item.feature), _format_metric_value(item.importance), _escape_table_cell(item.source or "unknown")]
-        for index, item in enumerate(feature_importance[:15], start=1)
-    ]
-    return _markdown_table(["排名", "特征", "分数", "来源"], ["---:", "---", "---:", "---"], rows)
-
-
-def _model_result_lines(task: TaskRecord) -> list[str]:
-    if not task.last_run:
-        attempt = task.last_run_attempt
-        lines = ["- 暂无成功模型结果。"]
-        if attempt is not None:
-            lines.append(f"- 最近运行目录：{attempt.output_dir}。")
-            if attempt.diagnosis_detail:
-                lines.append(f"- 最近诊断：{attempt.diagnosis_detail}")
-        return lines
-    lines = [
-        f"- 最佳模型：{task.last_run.best_model}",
-        f"- 评价指标：{task.last_run.metric_name}",
-        f"- 指标数值：{_format_metric_value(task.last_run.metric_value)}",
-    ]
-    if task.last_run.validation_score is not None:
-        lines.append(f"- 候选排序分：{_format_metric_value(task.last_run.validation_score)}")
-    if task.last_run.leaderboard:
-        rows = []
-        for index, row in enumerate(task.last_run.leaderboard[:8], start=1):
-            model = row.get("model") or row.get("name") or row.get("model_name") or "unknown"
-            score = row.get("validation_score", row.get("score_val"))
-            metric_value = row.get("metric_value")
-            fit_time = row.get("fit_time")
-            pred_time = row.get("pred_time")
-            rows.append(
-                [
-                    str(index),
-                    _escape_table_cell(model),
-                    _format_metric_value(score),
-                    _format_metric_value(metric_value),
-                    _format_metric_value(fit_time),
-                    _format_metric_value(pred_time),
-                ]
-            )
-        lines.extend(["", *_markdown_table(["排名", "模型", "validation_score", "metric_value", "fit_time", "pred_time"], ["---:", "---", "---:", "---:", "---:", "---:"], rows)])
-    else:
-        lines.append("- 当前没有解析到候选模型对比结果。")
-    return lines
 
 
 def _persist_report_markdown(task: TaskRecord, markdown: str) -> None:
