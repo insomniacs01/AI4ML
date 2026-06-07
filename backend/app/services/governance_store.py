@@ -23,10 +23,19 @@ from backend.app.models.governance import (
     TokenLedgerRecord,
 )
 from backend.app.services.governance_assets import PlatformAssetRepository
+from backend.app.services.governance_team_records import (
+    profile_records_from_payload,
+    team_member_from_payload,
+    team_settings_from_payload,
+)
 from backend.app.services.governance_usage import GovernanceUsageRepository
 
 
 class GovernanceStore:
+    _team_settings_from_payload = staticmethod(team_settings_from_payload)
+    _member_record_from_payload = staticmethod(team_member_from_payload)
+    _profile_records_from_payload = staticmethod(profile_records_from_payload)
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._asset_repository = PlatformAssetRepository(
@@ -57,13 +66,8 @@ class GovernanceStore:
         )
         profile_map = {item.user_id: item for item in profiles}
         return [
-            TeamMemberRecord(
-                team_id=str(item.get("team_id")),
-                user_id=str(item.get("user_id")),
-                role=str(item.get("role", "member")),
-                member_status=str(item.get("member_status", "active")),
-                invited_by=str(item.get("invited_by")) if item.get("invited_by") else None,
-                joined_at=item.get("joined_at"),
+            self._member_record_from_payload(
+                item,
                 profile=profile_map.get(str(item.get("user_id"))),
             )
             for item in member_payload
@@ -182,14 +186,10 @@ class GovernanceStore:
             ) from exc
         profiles = self._list_profiles([user_id], access_token=access_token)
         profile = profiles[0] if profiles else None
-        return TeamMemberRecord(
-            team_id=str(updated.get("team_id")),
-            user_id=str(updated.get("user_id")),
-            role=str(updated.get("role", role)),
-            member_status=str(updated.get("member_status", "active")),
-            invited_by=str(updated.get("invited_by")) if updated.get("invited_by") else None,
-            joined_at=updated.get("joined_at"),
+        return self._member_record_from_payload(
+            updated,
             profile=profile,
+            default_role=role,
         )
 
     def update_member_status(self, team_id: str, user_id: str, member_status: str, *, access_token: str) -> TeamMemberRecord:
@@ -212,14 +212,11 @@ class GovernanceStore:
             ) from exc
         profiles = self._list_profiles([user_id], access_token=access_token)
         profile = profiles[0] if profiles else None
-        return TeamMemberRecord(
-            team_id=str(updated.get("team_id")),
-            user_id=str(updated.get("user_id")),
-            role=str(updated.get("role", "business_user")),
-            member_status=str(updated.get("member_status", member_status)),
-            invited_by=str(updated.get("invited_by")) if updated.get("invited_by") else None,
-            joined_at=updated.get("joined_at"),
+        return self._member_record_from_payload(
+            updated,
             profile=profile,
+            default_role="business_user",
+            default_status=member_status,
         )
 
     def update_profile(
@@ -471,28 +468,6 @@ class GovernanceStore:
             task_id=task_id,
         )
 
-    @staticmethod
-    def _team_settings_from_payload(
-        payload: dict[str, Any],
-        members: list[TeamMemberRecord],
-    ) -> TeamSettingsRecord:
-        owner = next((item for item in members if item.role == "team_owner" and item.member_status == "active"), None)
-        owner_user_id = owner.user_id if owner is not None else str(payload.get("created_by")) if payload.get("created_by") else None
-        owner_profile = owner.profile if owner is not None else None
-        return TeamSettingsRecord(
-            id=str(payload.get("id")),
-            name=str(payload.get("name") or ""),
-            invite_code=str(payload.get("invite_code") or ""),
-            created_by=str(payload.get("created_by") or owner_user_id or ""),
-            owner_user_id=owner_user_id,
-            owner_display_name=owner_profile.display_name if owner_profile else None,
-            owner_email=owner_profile.email if owner_profile else None,
-            description=str(payload.get("description")) if payload.get("description") else None,
-            status=str(payload.get("status") or "active"),
-            created_at=payload.get("created_at"),
-            updated_at=payload.get("updated_at"),
-        )
-
     def _list_profiles(self, user_ids: list[str], *, access_token: str) -> list[TeamProfileRecord]:
         normalized_ids = sorted({item for item in user_ids if item})
         if not normalized_ids:
@@ -505,15 +480,7 @@ class GovernanceStore:
         )
         if not isinstance(payload, list):
             raise ConnectionError("Unexpected profile response from Supabase.")
-        return [
-            TeamProfileRecord(
-                user_id=str(item.get("user_id")),
-                email=str(item.get("email")) if item.get("email") else None,
-                display_name=str(item.get("display_name")) if item.get("display_name") else None,
-            )
-            for item in payload
-            if isinstance(item, dict) and item.get("user_id")
-        ]
+        return self._profile_records_from_payload(payload)
 
     def _request_json(
         self,
