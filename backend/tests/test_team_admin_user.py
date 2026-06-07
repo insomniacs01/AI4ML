@@ -126,8 +126,7 @@ def test_update_admin_user_applies_profile_member_quota_and_pauses_exhausted_tas
     pause_tasks = Mock()
     monkeypatch.setattr(team_routes, "get_governance_store", lambda: store)
     monkeypatch.setattr("backend.app.services.team_admin_user_update.update_supabase_user_profile", update_profile)
-    monkeypatch.setattr(team_routes, "pause_member_tasks_for_quota", pause_tasks)
-    monkeypatch.setattr(team_routes, "get_task_store", lambda: SimpleNamespace())
+    monkeypatch.setattr(team_routes, "pause_member_tasks_if_quota_exhausted", pause_tasks)
 
     response = team_routes.update_admin_user(
         "user-2",
@@ -146,7 +145,7 @@ def test_update_admin_user_applies_profile_member_quota_and_pauses_exhausted_tas
     store.update_member_role.assert_called_once()
     store.update_member_status.assert_called_once()
     store.adjust_quota.assert_called_once()
-    pause_tasks.assert_called_once()
+    pause_tasks.assert_called_once_with(exhausted_quota, "user-2", _team_access())
     assert response.member.member_status == "frozen"
     assert response.quota == exhausted_quota
 

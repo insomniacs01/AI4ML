@@ -48,13 +48,13 @@ from backend.app.services.admin_user_management import (
     reset_supabase_user_password,
 )
 from backend.app.services.platform_limits import read_platform_limits, save_platform_limits
-from backend.app.services.quota_runtime_guard import pause_member_tasks_for_quota, quota_is_exhausted
-from backend.app.services.service_registry import get_governance_store, get_task_store
+from backend.app.services.service_registry import get_governance_store
 from backend.app.services.team_admin_user_update import (
     AdminRoleUpdateBlockedError,
     AdminTargetMemberNotFoundError,
     update_admin_user_record,
 )
+from backend.app.services.team_quota_enforcement import pause_member_tasks_if_quota_exhausted
 from backend.app.services.team_quota_scope import resolve_quota_scope_key
 
 
@@ -271,7 +271,7 @@ def adjust_team_quota(
             warning_threshold=payload.warning_threshold,
             access_token=team_access.access_token,
         )
-        _pause_member_tasks_if_quota_exhausted(quota, member_id, team_access)
+        pause_member_tasks_if_quota_exhausted(quota, member_id, team_access)
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return TeamQuotaAdjustResponse(detail="成员配额已更新。", quota=quota)
@@ -292,7 +292,7 @@ def update_admin_user(
             payload=payload,
             access_token=team_access.access_token,
         )
-        _pause_member_tasks_if_quota_exhausted(result.quota, member_id, team_access)
+        pause_member_tasks_if_quota_exhausted(result.quota, member_id, team_access)
     except AdminTargetMemberNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except AdminRoleUpdateBlockedError as exc:
@@ -302,12 +302,6 @@ def update_admin_user(
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
     return AdminUserUpdateResponse(detail="用户权限与额度已更新。", member=result.member, quota=result.quota)
-
-
-def _pause_member_tasks_if_quota_exhausted(quota, member_id: str, team_access: TeamAccessContext) -> None:
-    if not quota_is_exhausted(quota):
-        return
-    pause_member_tasks_for_quota(get_task_store(), team_access, user_id=member_id)
 
 
 @router.post("/admin/users/{member_id}/reset-password", response_model=AdminPasswordResetResponse)
