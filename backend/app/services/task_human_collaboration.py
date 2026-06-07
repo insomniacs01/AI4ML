@@ -27,6 +27,11 @@ from backend.app.services.task_human_access import (
 from backend.app.services.task_human_context import (
     append_task_human_decision,
 )
+from backend.app.services.task_human_expiration import (
+    expire_human_request,
+    expire_overdue_human_requests,
+    is_overdue_human_request,
+)
 from backend.app.services.task_human_parameters import apply_human_decision_parameters
 from backend.app.services.task_human_payloads import (
     build_human_decision_history_entry,
@@ -59,7 +64,6 @@ from backend.app.services.task_human_transitions import (
     RESUME_TASK_ACTION,
     WAIT_FOR_HUMAN_ACTION,
     PostDecisionTaskAction,
-    build_expired_human_decision_payload,
     resolve_human_decision_task_action,
     status_for_human_decision_action,
 )
@@ -85,7 +89,7 @@ class TaskHumanCollaborationService:
         actor_id: str | None = None,
         actor_role: str | None = None,
     ) -> TaskHumanCollaborationResponse:
-        requests = self._expire_overdue_requests(task, access_token=access_token)
+        requests = expire_overdue_human_requests(self.task_store, task, access_token=access_token)
         existing_records = {
             self._stage_key(record.stage): record
             for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
@@ -110,7 +114,7 @@ class TaskHumanCollaborationService:
         access_token: str,
         stage_selection_map: dict[str, TaskStageRoutingRecord] | None = None,
     ) -> list[WorkflowStageRecord]:
-        self._expire_overdue_requests(task, access_token=access_token)
+        expire_overdue_human_requests(self.task_store, task, access_token=access_token)
         existing_records = {
             self._stage_key(record.stage): record
             for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
@@ -199,10 +203,9 @@ class TaskHumanCollaborationService:
         request = self.task_store.get_human_request(task.team_id, task.id, request_id, access_token=access_token)
         if request is None:
             raise ValueError("human request not found")
-        if self._is_overdue(request):
-            expired_at = datetime.now(timezone.utc)
-            request.status = HumanInteractionRequestStatus.expired
-            request.decision = build_expired_human_decision_payload(expired_at=expired_at)
+        now = datetime.now(timezone.utc)
+        if is_overdue_human_request(request, now=now):
+            expire_human_request(request, expired_at=now)
             self.task_store.update_human_request(request, access_token=access_token)
             raise RuntimeError("human request has expired")
         if not self._is_active_request(request):
@@ -266,7 +269,7 @@ class TaskHumanCollaborationService:
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=actor_id, actor_role=actor_role)
 
     def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
-        self._expire_overdue_requests(task, access_token=access_token)
+        expire_overdue_human_requests(self.task_store, task, access_token=access_token)
         if task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
             raise RuntimeError("Task is waiting for human collaboration. Resolve or resume it before running Codex.")
         requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
@@ -359,23 +362,6 @@ class TaskHumanCollaborationService:
         saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
 
-    def _expire_overdue_requests(self, task: TaskRecord, *, access_token: str) -> list[TaskHumanRequestRecord]:
-        requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
-        now = datetime.now(timezone.utc)
-        expired_any = False
-        for request in requests:
-            if not self._is_active_request(request) or request.timeout_at is None:
-                continue
-            if request.timeout_at > now:
-                continue
-            request.status = HumanInteractionRequestStatus.expired
-            request.decision = build_expired_human_decision_payload(expired_at=now)
-            self.task_store.update_human_request(request, access_token=access_token)
-            expired_any = True
-        if not expired_any:
-            return requests
-        return self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
-
     @staticmethod
     def _sort_stages(stages: list[WorkflowStageRecord]) -> list[WorkflowStageRecord]:
         return sort_stages(stages)
@@ -383,14 +369,6 @@ class TaskHumanCollaborationService:
     @staticmethod
     def _is_active_request(request: TaskHumanRequestRecord) -> bool:
         return is_active_request(request)
-
-    @staticmethod
-    def _is_overdue(request: TaskHumanRequestRecord) -> bool:
-        return (
-            request.timeout_at is not None
-            and TaskHumanCollaborationService._is_active_request(request)
-            and request.timeout_at <= datetime.now(timezone.utc)
-        )
 
     @staticmethod
     def _parse_candidate_pool(value: str | None) -> list[str]:
