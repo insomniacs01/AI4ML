@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
 from backend.app.models.task import TaskRecord, WorkflowStageRecord
+from backend.app.services.task_cache_payloads import (
+    decode_stage_payload,
+    decode_task_payload,
+    encode_stage_payload,
+    encode_task_payload,
+)
 from backend.app.services.task_cache_schema import ensure_task_cache_schema
 from backend.app.services.task_cache_stage_upsert import (
     CachedStageState,
@@ -38,7 +43,7 @@ class TaskCache:
             ).fetchall()
         tasks: list[TaskRecord] = []
         for row in rows:
-            task = self._task_from_payload(row["payload"])
+            task = decode_task_payload(row["payload"])
             if task is not None:
                 tasks.append(task)
         return tasks
@@ -58,7 +63,7 @@ class TaskCache:
             ).fetchone()
         if row is None:
             return None
-        return self._task_from_payload(row["payload"])
+        return decode_task_payload(row["payload"])
 
     def upsert_tasks(self, tasks: list[TaskRecord], *, detail: bool = False) -> int:
         if not tasks:
@@ -80,14 +85,7 @@ class TaskCache:
 
     def delete_task(self, team_id: str, task_id: str) -> None:
         with self._lock, self._connect() as conn:
-            conn.execute(
-                "DELETE FROM task_cache WHERE team_id = ? AND task_id = ?",
-                (team_id, task_id),
-            )
-            conn.execute(
-                "DELETE FROM stage_cache WHERE team_id = ? AND task_id = ?",
-                (team_id, task_id),
-            )
+            self._delete_task_rows(conn, [(team_id, task_id)])
 
     def prune_team_tasks(self, team_id: str, live_task_ids: set[str]) -> int:
         with self._lock, self._connect() as conn:
@@ -98,14 +96,7 @@ class TaskCache:
             stale_ids = [str(row["task_id"]) for row in rows if str(row["task_id"]) not in live_task_ids]
             if not stale_ids:
                 return 0
-            conn.executemany(
-                "DELETE FROM task_cache WHERE team_id = ? AND task_id = ?",
-                [(team_id, task_id) for task_id in stale_ids],
-            )
-            conn.executemany(
-                "DELETE FROM stage_cache WHERE team_id = ? AND task_id = ?",
-                [(team_id, task_id) for task_id in stale_ids],
-            )
+            self._delete_task_rows(conn, [(team_id, task_id) for task_id in stale_ids])
             return len(stale_ids)
 
     def list_stage_records(self, team_id: str, task_id: str) -> list[WorkflowStageRecord]:
@@ -121,7 +112,7 @@ class TaskCache:
             ).fetchall()
         records: list[WorkflowStageRecord] = []
         for row in rows:
-            record = self._stage_from_payload(row["payload"])
+            record = decode_stage_payload(row["payload"])
             if record is not None:
                 records.append(record)
         return records
@@ -225,7 +216,7 @@ class TaskCache:
         if row is None:
             return None
         return CachedTaskState(
-            task=self._task_from_payload(str(row["payload"])),
+            task=decode_task_payload(str(row["payload"])),
             updated_at=self._parse_datetime(str(row["updated_at"])),
             is_detail=int(row["is_detail"] or 0) == 1,
         )
@@ -279,7 +270,7 @@ class TaskCache:
             (
                 task.team_id,
                 task.id,
-                json.dumps(task.model_dump(mode="json"), ensure_ascii=False),
+                encode_task_payload(task),
                 task.updated_at.isoformat(),
                 synced_at,
                 1 if is_detail else 0,
@@ -314,10 +305,23 @@ class TaskCache:
                 record.team_id,
                 record.task_id,
                 stage,
-                json.dumps(record.model_dump(mode="json"), ensure_ascii=False),
+                encode_stage_payload(record),
                 record.updated_at.isoformat(),
                 synced_at,
             ),
+        )
+
+    @staticmethod
+    def _delete_task_rows(conn: sqlite3.Connection, rows: list[tuple[str, str]]) -> None:
+        if not rows:
+            return
+        conn.executemany(
+            "DELETE FROM task_cache WHERE team_id = ? AND task_id = ?",
+            rows,
+        )
+        conn.executemany(
+            "DELETE FROM stage_cache WHERE team_id = ? AND task_id = ?",
+            rows,
         )
 
     @staticmethod
@@ -337,20 +341,6 @@ class TaskCache:
             """,
             (synced_at, team_id, task_id, stage),
         )
-
-    @staticmethod
-    def _task_from_payload(payload: str) -> TaskRecord | None:
-        try:
-            return TaskRecord.model_validate(json.loads(payload))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _stage_from_payload(payload: str) -> WorkflowStageRecord | None:
-        try:
-            return WorkflowStageRecord.model_validate(json.loads(payload))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return None
 
     @staticmethod
     def _now_iso() -> str:
