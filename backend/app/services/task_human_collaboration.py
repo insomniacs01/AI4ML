@@ -77,6 +77,98 @@ def resolve_human_decision_task_action(
     return WAIT_FOR_HUMAN_ACTION
 
 
+def build_human_request_payload(payload: TaskHumanRequestCreateRequest, *, actor_role: str) -> dict[str, Any]:
+    return {
+        "request_type": payload.request_type,
+        "title": payload.title,
+        "summary": payload.summary,
+        "suggested_action": payload.suggested_action,
+        "artifact_paths": payload.artifact_paths,
+        "details": payload.details,
+        "created_by_role": actor_role,
+    }
+
+
+def build_human_decision_payload(
+    payload: TaskHumanRequestDecisionRequest,
+    *,
+    decided_by: str,
+    actor_role: str,
+    decided_at: datetime,
+    requires_rerun: bool,
+    rerun_from_stage: str | None,
+) -> dict[str, Any]:
+    return {
+        "action": payload.action.value,
+        "summary": payload.decision_summary,
+        "artifact_paths": payload.artifact_paths,
+        "details": payload.details,
+        "decided_by": decided_by,
+        "decided_by_role": actor_role,
+        "decided_at": decided_at.isoformat(),
+        "requires_rerun": requires_rerun,
+        "rerun_from_stage": rerun_from_stage,
+    }
+
+
+def build_reassigned_decision_payload(
+    payload: TaskHumanRequestDecisionRequest,
+    *,
+    decided_by: str,
+    actor_role: str,
+    decided_at: datetime,
+    assignee_type: InteractionAssigneeType,
+    assignee_value: str,
+    assigned_to: str | None,
+) -> dict[str, Any]:
+    return {
+        "action": payload.action.value,
+        "summary": payload.decision_summary,
+        "artifact_paths": payload.artifact_paths,
+        "details": payload.details,
+        "decided_by": decided_by,
+        "decided_by_role": actor_role,
+        "decided_at": decided_at.isoformat(),
+        "reassigned_to": {
+            "assignee_type": assignee_type.value,
+            "assignee_value": assignee_value,
+            "assigned_to": assigned_to,
+        },
+    }
+
+
+def build_reassigned_request_payload(
+    request: TaskHumanRequestRecord,
+    payload: TaskHumanRequestDecisionRequest,
+    *,
+    decided_by: str,
+    actor_role: str,
+) -> dict[str, Any]:
+    request_payload = request.payload if isinstance(request.payload, dict) else {}
+    return {
+        **request_payload,
+        "reassigned_from_request_id": request.id,
+        "reassigned_by": decided_by,
+        "reassigned_by_role": actor_role,
+        "reassign_reason": payload.decision_summary,
+        "previous_assignee_type": request.assignee_type.value if request.assignee_type else None,
+        "previous_assignee_value": request.assignee_value,
+    }
+
+
+def resolve_reassign_timeout(
+    request: TaskHumanRequestRecord,
+    *,
+    reassign_timeout_minutes: int | None,
+    now: datetime,
+) -> datetime | None:
+    if reassign_timeout_minutes is not None:
+        return now + timedelta(minutes=reassign_timeout_minutes)
+    if request.timeout_at and request.timeout_at > now:
+        return request.timeout_at
+    return None
+
+
 class TaskHumanCollaborationService:
     def __init__(self, task_store: TaskStore) -> None:
         self.task_store = task_store
@@ -191,15 +283,7 @@ class TaskHumanCollaborationService:
             assignee_type=assignee_type.value,
             assignee_value=assignee_value,
             timeout_at=timeout_at,
-            payload={
-                "request_type": payload.request_type,
-                "title": payload.title,
-                "summary": payload.summary,
-                "suggested_action": payload.suggested_action,
-                "artifact_paths": payload.artifact_paths,
-                "details": payload.details,
-                "created_by_role": actor_role,
-            },
+            payload=build_human_request_payload(payload, actor_role=actor_role),
             access_token=access_token,
         )
         saved_task = self._mark_task_waiting(task, access_token=access_token, manual_hold=True)
@@ -247,17 +331,14 @@ class TaskHumanCollaborationService:
         request.status = self._status_for_decision_action(payload.action)
         requires_rerun = payload.action in RERUN_DECISION_ACTIONS
         rerun_from_stage = self._stage_key(request.stage) if requires_rerun else None
-        request.decision = {
-            "action": payload.action.value,
-            "summary": payload.decision_summary,
-            "artifact_paths": payload.artifact_paths,
-            "details": payload.details,
-            "decided_by": decided_by,
-            "decided_by_role": actor_role,
-            "decided_at": datetime.now(timezone.utc).isoformat(),
-            "requires_rerun": requires_rerun,
-            "rerun_from_stage": rerun_from_stage,
-        }
+        request.decision = build_human_decision_payload(
+            payload,
+            decided_by=decided_by,
+            actor_role=actor_role,
+            decided_at=datetime.now(timezone.utc),
+            requires_rerun=requires_rerun,
+            rerun_from_stage=rerun_from_stage,
+        )
         apply_human_decision_parameters(task, request, payload, decided_by=decided_by)
         self.task_store.update_human_request(request, access_token=access_token)
 
@@ -357,38 +438,28 @@ class TaskHumanCollaborationService:
         )
         now = datetime.now(timezone.utc)
         request.status = HumanInteractionRequestStatus.reassigned
-        request.decision = {
-            "action": payload.action.value,
-            "summary": payload.decision_summary,
-            "artifact_paths": payload.artifact_paths,
-            "details": payload.details,
-            "decided_by": decided_by,
-            "decided_by_role": actor_role,
-            "decided_at": now.isoformat(),
-            "reassigned_to": {
-                "assignee_type": assignee_type.value,
-                "assignee_value": assignee_value,
-                "assigned_to": assigned_to,
-            },
-        }
+        request.decision = build_reassigned_decision_payload(
+            payload,
+            decided_by=decided_by,
+            actor_role=actor_role,
+            decided_at=now,
+            assignee_type=assignee_type,
+            assignee_value=assignee_value,
+            assigned_to=assigned_to,
+        )
         self.task_store.update_human_request(request, access_token=access_token)
 
-        timeout_at = None
-        if payload.reassign_timeout_minutes is not None:
-            timeout_at = now + timedelta(minutes=payload.reassign_timeout_minutes)
-        elif request.timeout_at and request.timeout_at > now:
-            timeout_at = request.timeout_at
-
-        request_payload = request.payload if isinstance(request.payload, dict) else {}
-        reassigned_payload = {
-            **request_payload,
-            "reassigned_from_request_id": request.id,
-            "reassigned_by": decided_by,
-            "reassigned_by_role": actor_role,
-            "reassign_reason": payload.decision_summary,
-            "previous_assignee_type": request.assignee_type.value if request.assignee_type else None,
-            "previous_assignee_value": request.assignee_value,
-        }
+        timeout_at = resolve_reassign_timeout(
+            request,
+            reassign_timeout_minutes=payload.reassign_timeout_minutes,
+            now=now,
+        )
+        reassigned_payload = build_reassigned_request_payload(
+            request,
+            payload,
+            decided_by=decided_by,
+            actor_role=actor_role,
+        )
         version_seed = request.version_id or request.id
         self.task_store.create_human_request(
             team_id=task.team_id,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
@@ -33,6 +33,11 @@ from backend.app.services.task_human_collaboration import (
     RESUME_TASK_ACTION,
     WAIT_FOR_HUMAN_ACTION,
     TaskHumanCollaborationService,
+    build_human_decision_payload,
+    build_human_request_payload,
+    build_reassigned_decision_payload,
+    build_reassigned_request_payload,
+    resolve_reassign_timeout,
     resolve_human_decision_task_action,
 )
 from backend.app.services.task_human_context import (
@@ -248,6 +253,121 @@ class TaskHumanCollaborationServiceTests(TestCase):
             ),
             WAIT_FOR_HUMAN_ACTION,
         )
+
+    def test_human_request_and_decision_payload_builders_are_explicit(self) -> None:
+        create_payload = TaskHumanRequestCreateRequest(
+            stage=WorkflowStage.data_analysis,
+            request_type="data_review",
+            title="Confirm data",
+            summary="Confirm inferred target.",
+            suggested_action="Check target column.",
+            artifact_paths=["input.csv"],
+            details={"target": "churn"},
+        )
+
+        self.assertEqual(build_human_request_payload(create_payload, actor_role="developer_user"), {
+            "request_type": "data_review",
+            "title": "Confirm data",
+            "summary": "Confirm inferred target.",
+            "suggested_action": "Check target column.",
+            "artifact_paths": ["input.csv"],
+            "details": {"target": "churn"},
+            "created_by_role": "developer_user",
+        })
+
+        decided_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        decision_payload = TaskHumanRequestDecisionRequest(
+            action=HumanInteractionDecisionAction.revise,
+            decision_summary="Use F1.",
+            artifact_paths=["metrics.json"],
+            details={"metric": "f1"},
+        )
+
+        self.assertEqual(build_human_decision_payload(
+            decision_payload,
+            decided_by="reviewer-1",
+            actor_role="developer_user",
+            decided_at=decided_at,
+            requires_rerun=True,
+            rerun_from_stage="training_validation",
+        ), {
+            "action": "revise",
+            "summary": "Use F1.",
+            "artifact_paths": ["metrics.json"],
+            "details": {"metric": "f1"},
+            "decided_by": "reviewer-1",
+            "decided_by_role": "developer_user",
+            "decided_at": "2026-01-02T03:04:05+00:00",
+            "requires_rerun": True,
+            "rerun_from_stage": "training_validation",
+        })
+
+    def test_reassigned_payload_builders_and_timeout_rules_are_explicit(self) -> None:
+        now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        request = TaskHumanRequestRecord(
+            id="req-1",
+            team_id="team-1",
+            task_id="task-1",
+            stage=WorkflowStage.data_analysis,
+            status=HumanInteractionRequestStatus.open,
+            requested_by="user-1",
+            assigned_to="reviewer-1",
+            assignee_type=InteractionAssigneeType.member,
+            assignee_value="reviewer-1",
+            timeout_at=now + timedelta(hours=1),
+            payload={"request_type": "data_review", "title": "Confirm data"},
+            created_at=now,
+            updated_at=now,
+        )
+        payload = TaskHumanRequestDecisionRequest(
+            action=HumanInteractionDecisionAction.reassign,
+            decision_summary="Send to the data owner.",
+            artifact_paths=["input.csv"],
+            details={"reason": "domain owner"},
+        )
+
+        self.assertEqual(build_reassigned_decision_payload(
+            payload,
+            decided_by="reviewer-1",
+            actor_role="developer_user",
+            decided_at=now,
+            assignee_type=InteractionAssigneeType.role,
+            assignee_value="data_owner",
+            assigned_to=None,
+        ), {
+            "action": "reassign",
+            "summary": "Send to the data owner.",
+            "artifact_paths": ["input.csv"],
+            "details": {"reason": "domain owner"},
+            "decided_by": "reviewer-1",
+            "decided_by_role": "developer_user",
+            "decided_at": "2026-01-02T03:04:05+00:00",
+            "reassigned_to": {
+                "assignee_type": "role",
+                "assignee_value": "data_owner",
+                "assigned_to": None,
+            },
+        })
+        self.assertEqual(build_reassigned_request_payload(
+            request,
+            payload,
+            decided_by="reviewer-1",
+            actor_role="developer_user",
+        ), {
+            "request_type": "data_review",
+            "title": "Confirm data",
+            "reassigned_from_request_id": "req-1",
+            "reassigned_by": "reviewer-1",
+            "reassigned_by_role": "developer_user",
+            "reassign_reason": "Send to the data owner.",
+            "previous_assignee_type": "member",
+            "previous_assignee_value": "reviewer-1",
+        })
+        self.assertEqual(
+            resolve_reassign_timeout(request, reassign_timeout_minutes=30, now=now),
+            datetime(2026, 1, 2, 3, 34, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(resolve_reassign_timeout(request, reassign_timeout_minutes=None, now=now), request.timeout_at)
 
     def test_create_request_moves_task_into_waiting_human(self) -> None:
         task = _build_task()
