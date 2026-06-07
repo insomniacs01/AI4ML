@@ -7,10 +7,7 @@ from fastapi import HTTPException, status
 from backend.app.core.supabase_auth import TeamAccessContext
 from backend.app.models.governance import TeamMemberRecord
 from backend.app.models.task import (
-    PRIMARY_WORKFLOW_STAGES,
-    HumanInteractionRequestStatus,
     InteractionTriggerMode,
-    TaskHumanRequestRecord,
     TaskInteractionPolicyRecord,
     TaskRecord,
     TaskStageRoutingRecord,
@@ -23,18 +20,14 @@ from backend.app.services.service_registry import (
     get_task_store,
 )
 from backend.app.services.task_human_post_decision import save_task_waiting_for_human
-from backend.app.services.task_human_request_status import (
-    ACTIVE_HUMAN_REQUEST_STATUSES,
-    COMPLETED_HUMAN_REQUEST_STATUSES,
+from backend.app.services.task_human_policy_selection import (
+    applicable_policies,
+    is_stage_checkpoint_policy,
+    policy_version_id,
 )
 
 
 from backend.app.services.task_routing import _raise_governance_http_error
-
-STAGE_CHECKPOINT_REQUEST_TYPE = "stage_checkpoint"
-STAGE_CHECKPOINT_POLICY_PREFIX = "stage-checkpoint:"
-STAGE_CHECKPOINT_ACTIVE_STATUSES = ACTIVE_HUMAN_REQUEST_STATUSES
-STAGE_CHECKPOINT_COMPLETED_STATUSES = COMPLETED_HUMAN_REQUEST_STATUSES
 
 def _load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMemberRecord]:
     try:
@@ -82,81 +75,6 @@ def _get_current_policy_cycle(task: TaskRecord) -> int:
         return policy_cycle
     return 1
 
-def _is_stage_checkpoint_policy(policy: TaskInteractionPolicyRecord) -> bool:
-    return (
-        policy.request_type == STAGE_CHECKPOINT_REQUEST_TYPE
-        or policy.policy_id.startswith(STAGE_CHECKPOINT_POLICY_PREFIX)
-    )
-
-def _stage_checkpoint_status_by_policy(
-    existing_requests: list[TaskHumanRequestRecord],
-) -> dict[str, HumanInteractionRequestStatus]:
-    status_by_policy: dict[str, HumanInteractionRequestStatus] = {}
-    for request in existing_requests:
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        policy_id = payload.get("policy_id")
-        if not isinstance(policy_id, str) or not policy_id:
-            continue
-        if payload.get("request_type") != STAGE_CHECKPOINT_REQUEST_TYPE and not policy_id.startswith(STAGE_CHECKPOINT_POLICY_PREFIX):
-            continue
-        current_status = request.status
-        previous_status = status_by_policy.get(policy_id)
-        if current_status in STAGE_CHECKPOINT_ACTIVE_STATUSES:
-            status_by_policy[policy_id] = current_status
-            continue
-        if previous_status is None or previous_status not in STAGE_CHECKPOINT_ACTIVE_STATUSES:
-            status_by_policy[policy_id] = current_status
-    return status_by_policy
-
-def _policy_has_completed_request(
-    existing_requests: list[TaskHumanRequestRecord],
-    policy: TaskInteractionPolicyRecord,
-    *,
-    trigger_mode: InteractionTriggerMode,
-) -> bool:
-    for request in existing_requests:
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        if payload.get("policy_id") != policy.policy_id:
-            continue
-        if payload.get("trigger_mode") != trigger_mode.value:
-            continue
-        if request.status in STAGE_CHECKPOINT_COMPLETED_STATUSES:
-            return True
-    return False
-
-def _next_stage_checkpoint_policy(
-    policies: list[TaskInteractionPolicyRecord],
-    existing_requests: list[TaskHumanRequestRecord],
-    *,
-    trigger_mode: InteractionTriggerMode,
-) -> TaskInteractionPolicyRecord | None:
-    checkpoint_policies = [
-        policy
-        for policy in policies
-        if policy.enabled
-        and policy.trigger_mode == trigger_mode
-        and _is_stage_checkpoint_policy(policy)
-    ]
-    if not checkpoint_policies:
-        return None
-
-    stage_order = {stage.value: index for index, stage in enumerate(PRIMARY_WORKFLOW_STAGES)}
-    checkpoint_policies.sort(
-        key=lambda item: (
-            stage_order.get(normalize_workflow_stage(item.stage).value, len(stage_order)),
-            item.policy_id,
-        )
-    )
-    status_by_policy = _stage_checkpoint_status_by_policy(existing_requests)
-    for policy in checkpoint_policies:
-        status = status_by_policy.get(policy.policy_id)
-        if status in STAGE_CHECKPOINT_ACTIVE_STATUSES:
-            return None
-        if status in STAGE_CHECKPOINT_COMPLETED_STATUSES:
-            continue
-        return policy
-    return None
-
 def _build_policy_request_payload(
     policy: TaskInteractionPolicyRecord,
     *,
@@ -172,7 +90,7 @@ def _build_policy_request_payload(
         "policy_id": policy.policy_id,
         "selected_connector_id": selection.connector_id if selection else None,
         "selected_model_name": selection.model_name if selection else None,
-        "checkpoint_mode": "sequential_stage_gate" if _is_stage_checkpoint_policy(policy) else None,
+        "checkpoint_mode": "sequential_stage_gate" if is_stage_checkpoint_policy(policy) else None,
     }
 
 def _apply_interaction_policies(
@@ -191,7 +109,7 @@ def _apply_interaction_policies(
     team_members: list[TeamMemberRecord] | None = None
 
     created_count = 0
-    for policy in _applicable_policies(
+    for policy in applicable_policies(
         task.interaction_policies,
         existing_requests,
         trigger_mode=trigger_mode,
@@ -199,7 +117,7 @@ def _apply_interaction_policies(
         skip_completed=skip_completed,
     ):
         normalized_stage = normalize_workflow_stage(policy.stage)
-        version_id = _policy_version_id(policy, cycle_id=cycle_id, trigger_mode=trigger_mode)
+        version_id = policy_version_id(policy, cycle_id=cycle_id, trigger_mode=trigger_mode)
         if version_id in existing_version_ids:
             continue
 
@@ -240,66 +158,6 @@ def _apply_interaction_policies(
         manual_hold=False,
     )
     return paused_task, created_count
-
-
-def _applicable_policies(
-    policies: list[TaskInteractionPolicyRecord],
-    existing_requests: list[TaskHumanRequestRecord],
-    *,
-    trigger_mode: InteractionTriggerMode,
-    checkpoint_only: bool,
-    skip_completed: bool,
-) -> list[TaskInteractionPolicyRecord]:
-    next_checkpoint_policy = _next_stage_checkpoint_policy(
-        policies,
-        existing_requests,
-        trigger_mode=trigger_mode,
-    )
-    next_checkpoint_policy_id = getattr(next_checkpoint_policy, "policy_id", None)
-    return [
-        policy
-        for policy in policies
-        if _should_apply_policy(
-            policy,
-            existing_requests,
-            trigger_mode=trigger_mode,
-            checkpoint_only=checkpoint_only,
-            skip_completed=skip_completed,
-            next_checkpoint_policy_id=next_checkpoint_policy_id,
-        )
-    ]
-
-
-def _should_apply_policy(
-    policy: TaskInteractionPolicyRecord,
-    existing_requests: list[TaskHumanRequestRecord],
-    *,
-    trigger_mode: InteractionTriggerMode,
-    checkpoint_only: bool,
-    skip_completed: bool,
-    next_checkpoint_policy_id: str | None,
-) -> bool:
-    is_checkpoint = _is_stage_checkpoint_policy(policy)
-    if not policy.enabled or policy.trigger_mode != trigger_mode:
-        return False
-    if checkpoint_only and not is_checkpoint:
-        return False
-    if is_checkpoint and policy.policy_id != next_checkpoint_policy_id:
-        return False
-    if skip_completed and not is_checkpoint:
-        return not _policy_has_completed_request(existing_requests, policy, trigger_mode=trigger_mode)
-    return True
-
-
-def _policy_version_id(
-    policy: TaskInteractionPolicyRecord,
-    *,
-    cycle_id: int,
-    trigger_mode: InteractionTriggerMode,
-) -> str:
-    if _is_stage_checkpoint_policy(policy):
-        return f"{policy.policy_id}:stage-checkpoint"
-    return f"{policy.policy_id}:{cycle_id}:{trigger_mode.value}"
 
 
 def _resolve_policy_assignee(
