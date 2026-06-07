@@ -28,7 +28,6 @@ from backend.app.models.governance import (
     PlatformAssetsResponse,
     TeamInviteRequest,
     TeamInviteResponse,
-    TeamMemberRecord,
     TeamOwnershipTransferRequest,
     TeamOwnershipTransferResponse,
     TeamMemberRoleUpdateRequest,
@@ -39,7 +38,6 @@ from backend.app.models.governance import (
     TeamQuotaAdjustRequest,
     TeamQuotaAdjustResponse,
     TeamQuotaScopeAdjustRequest,
-    TeamQuotaRecord,
     TeamQuotasResponse,
     TeamSettingsResponse,
     TeamSettingsUpdateRequest,
@@ -48,11 +46,15 @@ from backend.app.models.governance import (
 from backend.app.services.admin_user_management import (
     AdminUserManagementError,
     reset_supabase_user_password,
-    update_supabase_user_profile,
 )
 from backend.app.services.platform_limits import read_platform_limits, save_platform_limits
 from backend.app.services.quota_runtime_guard import pause_member_tasks_for_quota, quota_is_exhausted
 from backend.app.services.service_registry import get_governance_store, get_task_store
+from backend.app.services.team_admin_user_update import (
+    AdminRoleUpdateBlockedError,
+    AdminTargetMemberNotFoundError,
+    update_admin_user_record,
+)
 from backend.app.services.team_quota_scope import resolve_quota_scope_key
 
 
@@ -283,103 +285,23 @@ def update_admin_user(
 ) -> AdminUserUpdateResponse:
     store = get_governance_store()
     try:
-        existing_member = _require_admin_target_member(store, team_access, member_id)
-        _update_admin_user_profile(store, member_id, payload)
-        member = _update_admin_member_record(store, team_access, member_id, payload, existing_member)
-        quota = _update_admin_member_quota(store, team_access, member_id, payload)
-        _pause_member_tasks_if_quota_exhausted(quota, member_id, team_access)
-    except HTTPException:
-        raise
+        result = update_admin_user_record(
+            store,
+            team_id=team_access.team_id,
+            member_id=member_id,
+            payload=payload,
+            access_token=team_access.access_token,
+        )
+        _pause_member_tasks_if_quota_exhausted(result.quota, member_id, team_access)
+    except AdminTargetMemberNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AdminRoleUpdateBlockedError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except AdminUserManagementError as exc:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_governance_http_error(exc)
-    return AdminUserUpdateResponse(detail="用户权限与额度已更新。", member=member, quota=quota)
-
-
-def _require_admin_target_member(
-    store,
-    team_access: TeamAccessContext,
-    member_id: str,
-) -> TeamMemberRecord:
-    existing_member = next(
-        (
-            item
-            for item in store.list_members(team_access.team_id, access_token=team_access.access_token)
-            if item.user_id == member_id
-        ),
-        None,
-    )
-    if existing_member is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member not found")
-    return existing_member
-
-
-def _update_admin_user_profile(store, member_id: str, payload: AdminUserUpdateRequest) -> None:
-    if payload.display_name is None:
-        return
-    update_supabase_user_profile(store.settings, user_id=member_id, display_name=payload.display_name)
-
-
-def _update_admin_member_record(
-    store,
-    team_access: TeamAccessContext,
-    member_id: str,
-    payload: AdminUserUpdateRequest,
-    existing_member: TeamMemberRecord,
-) -> TeamMemberRecord:
-    member = existing_member
-    if payload.role is not None:
-        _assert_admin_role_update_allowed(existing_member, payload.role)
-        member = store.update_member_role(
-            team_access.team_id,
-            member_id,
-            payload.role,
-            access_token=team_access.access_token,
-        )
-    if payload.member_status is not None:
-        member = store.update_member_status(
-            team_access.team_id,
-            member_id,
-            payload.member_status,
-            access_token=team_access.access_token,
-        )
-    return member
-
-
-def _assert_admin_role_update_allowed(existing_member: TeamMemberRecord, next_role: str) -> None:
-    if next_role == "team_owner":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="team_owner must be assigned through the ownership transfer endpoint.",
-        )
-    if existing_member.role == "team_owner" and next_role != "team_owner":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="team_owner cannot be changed through this endpoint. Use ownership transfer instead.",
-        )
-
-
-def _update_admin_member_quota(
-    store,
-    team_access: TeamAccessContext,
-    member_id: str,
-    payload: AdminUserUpdateRequest,
-) -> TeamQuotaRecord | None:
-    if _admin_payload_has_quota_update(payload):
-        return store.adjust_quota(
-            team_access.team_id,
-            member_id,
-            payload.token_quota,
-            status=payload.quota_status,
-            warning_threshold=payload.warning_threshold,
-            access_token=team_access.access_token,
-        )
-    return store.get_member_quota(team_access.team_id, member_id, access_token=team_access.access_token)
-
-
-def _admin_payload_has_quota_update(payload: AdminUserUpdateRequest) -> bool:
-    return payload.token_quota is not None or payload.quota_status is not None or payload.warning_threshold is not None
+    return AdminUserUpdateResponse(detail="用户权限与额度已更新。", member=result.member, quota=result.quota)
 
 
 def _pause_member_tasks_if_quota_exhausted(quota, member_id: str, team_access: TeamAccessContext) -> None:

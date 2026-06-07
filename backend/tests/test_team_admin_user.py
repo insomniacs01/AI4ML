@@ -14,6 +14,11 @@ from backend.app.models.governance import (
     TeamProfileRecord,
     TeamQuotaRecord,
 )
+from backend.app.services.team_admin_user_update import (
+    AdminRoleUpdateBlockedError,
+    AdminTargetMemberNotFoundError,
+    update_admin_user_record,
+)
 
 
 def _member(user_id: str = "user-2", *, role: str = "member", status: str = "active") -> TeamMemberRecord:
@@ -120,7 +125,7 @@ def test_update_admin_user_applies_profile_member_quota_and_pauses_exhausted_tas
     update_profile = Mock()
     pause_tasks = Mock()
     monkeypatch.setattr(team_routes, "get_governance_store", lambda: store)
-    monkeypatch.setattr(team_routes, "update_supabase_user_profile", update_profile)
+    monkeypatch.setattr("backend.app.services.team_admin_user_update.update_supabase_user_profile", update_profile)
     monkeypatch.setattr(team_routes, "pause_member_tasks_for_quota", pause_tasks)
     monkeypatch.setattr(team_routes, "get_task_store", lambda: SimpleNamespace())
 
@@ -144,3 +149,94 @@ def test_update_admin_user_applies_profile_member_quota_and_pauses_exhausted_tas
     pause_tasks.assert_called_once()
     assert response.member.member_status == "frozen"
     assert response.quota == exhausted_quota
+
+
+def test_update_admin_user_record_applies_profile_member_and_quota_updates() -> None:
+    exhausted_quota = _quota(status="exhausted", remaining=0)
+    store = _AdminUserStore(_member(), quota=exhausted_quota)
+    update_profile = Mock()
+
+    result = update_admin_user_record(
+        store,
+        team_id="team-1",
+        member_id="user-2",
+        payload=AdminUserUpdateRequest(
+            display_name="New name",
+            role="developer_user",
+            member_status="frozen",
+            token_quota=100,
+            quota_status="exhausted",
+            warning_threshold=5,
+        ),
+        access_token="token",
+        update_profile=update_profile,
+    )
+
+    update_profile.assert_called_once_with(store.settings, user_id="user-2", display_name="New name")
+    store.update_member_role.assert_called_once_with("team-1", "user-2", "developer_user", access_token="token")
+    store.update_member_status.assert_called_once_with("team-1", "user-2", "frozen", access_token="token")
+    store.adjust_quota.assert_called_once_with(
+        "team-1",
+        "user-2",
+        100,
+        status="exhausted",
+        warning_threshold=5,
+        access_token="token",
+    )
+    store.get_member_quota.assert_not_called()
+    assert result.member.member_status == "frozen"
+    assert result.quota == exhausted_quota
+
+
+def test_update_admin_user_record_reads_existing_quota_without_quota_changes() -> None:
+    existing_quota = _quota(status="active", remaining=10)
+    store = _AdminUserStore(_member(), quota=existing_quota)
+    update_profile = Mock()
+
+    result = update_admin_user_record(
+        store,
+        team_id="team-1",
+        member_id="user-2",
+        payload=AdminUserUpdateRequest(),
+        access_token="token",
+        update_profile=update_profile,
+    )
+
+    update_profile.assert_not_called()
+    store.update_member_role.assert_not_called()
+    store.update_member_status.assert_not_called()
+    store.adjust_quota.assert_not_called()
+    store.get_member_quota.assert_called_once_with("team-1", "user-2", access_token="token")
+    assert result.member.user_id == "user-2"
+    assert result.quota == existing_quota
+
+
+def test_update_admin_user_record_rejects_team_owner_assignment() -> None:
+    store = _AdminUserStore(_member())
+
+    with pytest.raises(AdminRoleUpdateBlockedError, match="ownership transfer"):
+        update_admin_user_record(
+            store,
+            team_id="team-1",
+            member_id="user-2",
+            payload=AdminUserUpdateRequest(role="team_owner"),
+            access_token="token",
+            update_profile=Mock(),
+        )
+
+    store.update_member_role.assert_not_called()
+    store.adjust_quota.assert_not_called()
+
+
+def test_update_admin_user_record_requires_existing_member() -> None:
+    store = _AdminUserStore(_member(user_id="other-user"))
+
+    with pytest.raises(AdminTargetMemberNotFoundError, match="member not found"):
+        update_admin_user_record(
+            store,
+            team_id="team-1",
+            member_id="user-2",
+            payload=AdminUserUpdateRequest(),
+            access_token="token",
+            update_profile=Mock(),
+        )
