@@ -22,8 +22,8 @@ from backend.app.services.codex_common import (
 )
 from backend.app.services.codex_http import CodexBackendClient
 from backend.app.services.codex_metrics import build_codex_run_summary
-from backend.app.services.codex_progress import (
-    build_codex_run_progress_response,
+from backend.app.services.codex_progress import build_codex_run_progress_response
+from backend.app.services.codex_progress_state import (
     codex_activity_text,
     codex_status,
     has_completed_codex_artifacts,
