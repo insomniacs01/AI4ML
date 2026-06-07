@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Iterable
 
 from backend.app.models.task import HumanInteractionRequestStatus, TaskRecord
+from backend.app.services.task_human_context import get_task_human_loop
 from backend.app.services.task_human_request_status import (
     human_request_is_active,
     human_request_is_completed,
@@ -59,8 +60,7 @@ def codex_improvement_review_version_id(improvement_plan_path: str | None) -> st
 
 
 def _human_loop_has_confirmed_codex_plan(task: TaskRecord) -> bool:
-    structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
-    human_loop = structured.get("human_loop") if isinstance(structured.get("human_loop"), dict) else {}
+    human_loop = get_task_human_loop(task)
     decision_history_value = human_loop.get("decision_history")
     decision_history = decision_history_value if isinstance(decision_history_value, list) else []
     latest_decision_value = human_loop.get("latest_decision")

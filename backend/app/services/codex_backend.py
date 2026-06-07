@@ -31,6 +31,7 @@ from backend.app.services.codex_progress import (
 from backend.app.services.codex_usage import token_usage_from_artifacts
 from backend.app.services.codex_overview import build_codex_overview_from_artifacts
 from backend.app.services.codex_workspace import CodexWorkspaceReader, read_workspace_overview_artifacts
+from backend.app.services.task_human_context import ensure_task_human_loop
 
 
 @dataclass(frozen=True)
@@ -262,14 +263,11 @@ def _set_codex_structured_metadata(task: TaskRecord) -> None:
 
 
 def _set_human_loop_previous_status(task: TaskRecord, *, previous_status: TaskStatus) -> None:
-    structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
-    human_loop = structured.get("human_loop") if isinstance(structured.get("human_loop"), dict) else {}
+    human_loop = ensure_task_human_loop(task)
     if human_loop.get("previous_status") in {None, TaskStatus.paused_for_review.value, TaskStatus.waiting_human.value}:
         human_loop["previous_status"] = previous_status.value
     human_loop["manual_hold"] = False
     human_loop["updated_at"] = datetime.now(timezone.utc).isoformat()
-    structured["human_loop"] = human_loop
-    task.structured_requirements = structured
 
 
 def _sync_dataset_path_from_local_storage(task: TaskRecord, settings: Settings) -> None:
