@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any
 
 from backend.app.models.task import TaskRecord, WorkflowStageRecord
+from backend.app.services.task_cache_schema import ensure_task_cache_schema
 from backend.app.services.task_cache_upsert import CachedTaskState, TaskUpsertPlan, build_task_upsert_plan
 
 
@@ -206,50 +207,7 @@ class TaskCache:
 
     def _ensure_schema(self) -> None:
         with self._lock, self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS task_cache (
-                    team_id TEXT NOT NULL,
-                    task_id TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    synced_at TEXT NOT NULL,
-                    is_detail INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (team_id, task_id)
-                )
-                """
-            )
-            columns = {
-                str(row["name"])
-                for row in conn.execute("PRAGMA table_info(task_cache)").fetchall()
-            }
-            if "is_detail" not in columns:
-                conn.execute("ALTER TABLE task_cache ADD COLUMN is_detail INTEGER NOT NULL DEFAULT 0")
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_task_cache_team_updated
-                ON task_cache(team_id, updated_at DESC)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS stage_cache (
-                    team_id TEXT NOT NULL,
-                    task_id TEXT NOT NULL,
-                    stage TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    synced_at TEXT NOT NULL,
-                    PRIMARY KEY (team_id, task_id, stage)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_stage_cache_task_updated
-                ON stage_cache(team_id, task_id, updated_at DESC)
-                """
-            )
+            ensure_task_cache_schema(conn)
 
     def _latest_sync(
         self,
