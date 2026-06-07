@@ -14,14 +14,12 @@ from backend.app.services.codex_backend import (
     read_codex_artifacts,
 )
 from backend.app.services.codex_common import CODEX_ACTIVE_STATUSES
-from backend.app.services.codex_usage import read_codex_token_usage
-from backend.app.services.governance_store import GovernanceStore
-from backend.app.services.model_config import read_model_profile
-from backend.app.services.quota_runtime_guard import pause_codex_task_for_quota, quota_is_exhausted
+from backend.app.services.quota_runtime_guard import pause_codex_task_for_quota
 from backend.app.services.service_registry import get_task_store
 from backend.app.services.task_codex_human_requests import ensure_codex_improvement_request, ensure_codex_plan_request
 from backend.app.services.task_codex_improvement_review import has_codex_improvement_review
 from backend.app.services.task_codex_sync import is_codex_task, sync_codex_task_state
+from backend.app.services.task_codex_token_ledger import sync_codex_token_ledger
 from backend.app.services.task_runtime_steps import build_runtime_steps, progress_from_steps
 
 
@@ -329,39 +327,3 @@ def _codex_payload(
     if isinstance(artifacts.get("token_usage"), dict):
         payload["token_usage"] = artifacts["token_usage"]
     return payload
-
-
-def sync_codex_token_ledger(task_store, task: TaskRecord, team_access: TeamAccessContext) -> bool:
-    output_dir = task.last_run.output_dir if task.last_run else task.last_run_attempt.output_dir if task.last_run_attempt else None
-    usage = (
-        task.last_run.token_usage if task.last_run and task.last_run.token_usage else
-        task.last_run_attempt.token_usage if task.last_run_attempt and task.last_run_attempt.token_usage else
-        read_codex_token_usage(output_dir)
-    )
-    if output_dir is None or usage is None:
-        return False
-
-    try:
-        model_name = read_model_profile(get_settings())["display_name"]
-        task_store.upsert_token_ledger(
-            team_id=task.team_id,
-            task_id=task.id,
-            phase="codex",
-            stage_key="codex_native",
-            source_key=output_dir,
-            usage=usage,
-            access_token=team_access.access_token,
-            user_id=team_access.user.id,
-            connector_display_name=model_name,
-            model_name=model_name,
-            calculation_method="codex_app_server_token_usage",
-        )
-        quota = GovernanceStore(get_settings()).get_member_quota(
-            team_access.team_id,
-            team_access.user.id,
-            access_token=team_access.access_token,
-        )
-        return quota_is_exhausted(quota)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not sync Codex token ledger for task %s: %s", task.id, exc)
-        return False
