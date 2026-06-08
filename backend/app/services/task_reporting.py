@@ -17,9 +17,9 @@ from backend.app.services.dataset_profile import build_dataset_profile, dataset_
 from backend.app.services.task_agent_loop import refresh_agent_loop_after_analysis, refresh_agent_loop_after_run
 from backend.app.services.task_report_features import collect_feature_importance, codex_feature_importance
 from backend.app.services.task_report_formatting import (
-    coerce_float as _coerce_float,
     format_metric_value as _format_metric_value,
 )
+from backend.app.services.task_report_codex_summary import codex_result_summary
 from backend.app.services.task_report_relationships import collect_feature_relationships
 from backend.app.services.task_report_sections import (
     build_report_markdown as _build_report_markdown,
@@ -43,7 +43,7 @@ def _build_codex_model_report(task: TaskRecord) -> TaskModelReportResponse | Non
     feature_importance = codex_feature_importance(metrics, source=str(metrics_path))
     overview = build_codex_overview_from_workspace(workspace)
     generated_at = datetime.now(timezone.utc)
-    result_summary = _codex_result_summary(task, metrics)
+    result_summary = codex_result_summary(task, metrics)
     return TaskModelReportResponse(
         task_id=task.id,
         task_name=task.name,
@@ -127,57 +127,6 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
-
-
-def _codex_result_summary(task: TaskRecord, metrics: dict[str, Any]) -> list[str]:
-    selected = metrics.get("selected_model") if isinstance(metrics.get("selected_model"), dict) else {}
-    metric_name, metric_value = _codex_summary_metric(task, selected)
-    lines = []
-    best_model = _codex_summary_best_model(task, selected)
-    if best_model:
-        lines.append(f"最佳模型：{best_model}")
-    if metric_name:
-        lines.append(f"评价指标：{metric_name} = {_format_metric_value(metric_value)}")
-    rationale = _codex_summary_rationale(selected)
-    if rationale:
-        lines.append(rationale)
-    return lines
-
-
-def _codex_summary_metric(task: TaskRecord, selected: dict[str, Any]) -> tuple[str, float | None]:
-    if task.last_run:
-        return task.last_run.metric_name, task.last_run.metric_value
-    return _selected_model_metric(selected)
-
-
-def _selected_model_metric(selected: dict[str, Any]) -> tuple[str, float | None]:
-    for container_name in ("cross_validation", "holdout"):
-        metric_name, metric_value = _metric_from_container(selected.get(container_name))
-        if metric_name:
-            return metric_name, metric_value
-    return "", None
-
-
-def _metric_from_container(container: Any) -> tuple[str, float | None]:
-    if not isinstance(container, dict):
-        return "", None
-    for candidate in ("macro_f1_mean", "accuracy_mean", "macro_f1", "accuracy", "r2", "rmse", "mae"):
-        value = _coerce_float(container.get(candidate))
-        if value is not None:
-            return candidate, value
-    return "", None
-
-
-def _codex_summary_best_model(task: TaskRecord, selected: dict[str, Any]) -> str | None:
-    selected_name = selected.get("name")
-    if isinstance(selected_name, str):
-        return selected_name
-    return task.last_run.best_model if task.last_run else None
-
-
-def _codex_summary_rationale(selected: dict[str, Any]) -> str:
-    rationale = selected.get("selection_rationale")
-    return rationale.strip() if isinstance(rationale, str) and rationale.strip() else ""
 
 
 def _resolve_dataset_profile(task: TaskRecord) -> DatasetProfile | None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from backend.app.models.task import RunSummary, TaskRecord
-from backend.app.services.task_reporting import _codex_result_summary
+from backend.app.services.task_report_codex_summary import codex_result_summary
 
 
 def _task() -> TaskRecord:
@@ -28,7 +28,7 @@ def test_codex_result_summary_uses_selected_model_metric_and_rationale() -> None
         }
     }
 
-    assert _codex_result_summary(_task(), metrics) == [
+    assert codex_result_summary(_task(), metrics) == [
         "最佳模型：LightGBM",
         "评价指标：macro_f1_mean = 0.81234",
         "Best validation tradeoff.",
@@ -44,7 +44,7 @@ def test_codex_result_summary_prefers_task_last_run_metric_and_model_fallback() 
         output_dir="workspace",
     )
 
-    assert _codex_result_summary(task, {"selected_model": {"holdout": {"rmse": 9.9}}}) == [
+    assert codex_result_summary(task, {"selected_model": {"holdout": {"rmse": 9.9}}}) == [
         "最佳模型：RandomForest",
         "评价指标：mae = 2.34567",
     ]
