@@ -68,3 +68,53 @@ def test_completed_snapshot_and_repair_payload_keep_terminal_percent() -> None:
     assert repaired["percent"] == 100
     assert repaired["percent_source"] == "completed"
     assert repaired["finished_at"] == "2026-01-01T00:02:00+00:00"
+
+
+def test_snapshot_keeps_previous_percent_when_event_percent_regresses() -> None:
+    snapshot = build_progress_snapshot(
+        [
+            normalize_progress_event(
+                {
+                    "event": "validation_completed",
+                    "actor": "codex",
+                    "percent": 20,
+                    "percent_source": "event_percent",
+                    "ts": "2026-01-01T00:03:00+00:00",
+                }
+            )
+        ],
+        previous_progress={
+            "status": "running",
+            "current_step": "modeling",
+            "summary": "Modeling.",
+            "updated_at": "2026-01-01T00:02:00+00:00",
+            "percent": 64,
+            "percent_source": "codex_runtime",
+        },
+    )
+
+    assert snapshot["status"] == "running"
+    assert snapshot["current_step"] == "validation"
+    assert snapshot["percent"] == 64
+    assert snapshot["percent_source"] == "codex_runtime"
+    assert snapshot["updated_at"] == "2026-01-01T00:03:00+00:00"
+
+
+def test_failed_snapshot_clamps_percent_below_completion() -> None:
+    snapshot = build_progress_snapshot(
+        [
+            normalize_progress_event(
+                {
+                    "event": "failed",
+                    "actor": "codex",
+                    "percent": 150,
+                    "ts": "2026-01-01T00:04:00+00:00",
+                }
+            )
+        ]
+    )
+
+    assert snapshot["status"] == "failed"
+    assert snapshot["percent"] == 99
+    assert snapshot["percent_source"] == "progress_event_percent"
+    assert snapshot["finished_at"] == "2026-01-01T00:04:00+00:00"
