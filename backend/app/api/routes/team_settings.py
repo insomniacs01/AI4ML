@@ -20,9 +20,6 @@ from backend.app.services.service_registry import get_governance_store
 router = APIRouter(tags=["team"])
 
 
-def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    raise_store_http_error(exc)
-
 
 @router.get("/settings", response_model=TeamSettingsResponse)
 def get_team_settings(team_access: TeamAccessContext = Depends(require_team_access)) -> TeamSettingsResponse:
@@ -36,7 +33,7 @@ def get_team_settings(team_access: TeamAccessContext = Depends(require_team_acce
     except HTTPException:
         raise
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamSettingsResponse(team=team)
 
 
@@ -55,7 +52,7 @@ def update_team_settings(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamSettingsResponse(team=team)
 
 
@@ -75,7 +72,7 @@ def transfer_team_ownership(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamOwnershipTransferResponse(
         detail="团队所有权已转移。",
         team=team,

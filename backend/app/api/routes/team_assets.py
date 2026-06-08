@@ -24,9 +24,6 @@ def asset_type_allows_results(asset_type: str | None) -> bool:
     return asset_type is None or asset_type in SUPPORTED_PLATFORM_ASSET_TYPES
 
 
-def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    raise_store_http_error(exc)
-
 
 @router.get("/assets", response_model=PlatformAssetsResponse)
 def list_team_assets(
@@ -48,7 +45,7 @@ def list_team_assets(
             category=category,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return PlatformAssetsResponse(team_id=team_access.team_id, items=items)
 
 
@@ -66,7 +63,7 @@ def create_team_asset(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产记录已创建。", asset=asset)
 
 
@@ -85,7 +82,7 @@ def review_team_asset(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产审核状态已更新。", asset=asset)
 
 
@@ -107,7 +104,7 @@ def publish_team_asset(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产已发布到团队广场。", asset=asset)
 
 
@@ -129,7 +126,7 @@ def fork_team_asset(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return PlatformAssetMutationResponse(detail="资产 Fork 已创建。", asset=asset)
 
 
@@ -145,7 +142,7 @@ def delete_team_asset(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
     return PlatformAssetDeleteResponse(deleted=True, asset_id=asset_id)

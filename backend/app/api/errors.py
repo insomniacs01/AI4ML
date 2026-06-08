@@ -8,9 +8,8 @@ def raise_store_http_error(exc: RuntimeError | PermissionError | ConnectionError
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 

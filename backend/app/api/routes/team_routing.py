@@ -16,9 +16,6 @@ from backend.app.services.team_routing_policy_validation import validate_routing
 router = APIRouter(tags=["team"])
 
 
-def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    raise_store_http_error(exc)
-
 
 @router.get("/routing", response_model=AIRoutingPoliciesResponse)
 def list_team_routing(team_access: TeamAccessContext = Depends(require_team_access)) -> AIRoutingPoliciesResponse:
@@ -28,7 +25,7 @@ def list_team_routing(team_access: TeamAccessContext = Depends(require_team_acce
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return AIRoutingPoliciesResponse(team_id=team_access.team_id, items=items)
 
 
@@ -50,7 +47,7 @@ def save_team_routing(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return AIRoutingPoliciesUpdateResponse(
         detail="默认 AI 路由已更新。",
         team_id=team_access.team_id,

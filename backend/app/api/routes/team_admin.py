@@ -29,9 +29,6 @@ from backend.app.services.team_quota_enforcement import pause_member_tasks_if_qu
 router = APIRouter(tags=["team"])
 
 
-def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    raise_store_http_error(exc)
-
 
 @router.put("/admin/users/{member_id}", response_model=AdminUserUpdateResponse)
 def update_admin_user(
@@ -56,7 +53,7 @@ def update_admin_user(
     except AdminUserManagementError as exc:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return AdminUserUpdateResponse(detail="用户权限与额度已更新。", member=result.member, quota=result.quota)
 
 

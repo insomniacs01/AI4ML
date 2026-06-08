@@ -28,16 +28,13 @@ def token_ledger_totals(items: list[TokenLedgerRecord]) -> dict[str, int]:
     }
 
 
-def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    raise_store_http_error(exc)
-
 
 @router.get("/quotas", response_model=TeamQuotasResponse)
 def list_team_quotas(team_access: TeamAccessContext = Depends(require_team_admin_access)) -> TeamQuotasResponse:
     try:
         items = get_governance_store().list_quotas(team_access.team_id, access_token=team_access.access_token)
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamQuotasResponse(team_id=team_access.team_id, items=items)
 
 
@@ -63,7 +60,7 @@ def adjust_team_quota_scope(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamQuotaAdjustResponse(detail="团队配额已更新。", quota=quota)
 
 
@@ -85,7 +82,7 @@ def adjust_team_quota(
         )
         pause_member_tasks_if_quota_exhausted(quota, member_id, team_access)
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamQuotaAdjustResponse(detail="成员配额已更新。", quota=quota)
 
 
@@ -105,7 +102,7 @@ def list_team_token_ledgers(
             task_id=task_id,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TokenLedgersResponse(
         team_id=team_access.team_id,
         items=items,

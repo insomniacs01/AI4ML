@@ -21,16 +21,13 @@ from backend.app.services.team_member_role_rules import assert_member_role_updat
 router = APIRouter(tags=["team"])
 
 
-def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    raise_store_http_error(exc)
-
 
 @router.get("/members", response_model=TeamMembersResponse)
 def list_team_members(team_access: TeamAccessContext = Depends(require_team_access)) -> TeamMembersResponse:
     try:
         items = get_governance_store().list_members(team_access.team_id, access_token=team_access.access_token)
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamMembersResponse(team_id=team_access.team_id, items=items)
 
 
@@ -47,7 +44,7 @@ def get_team_invite_details(
     except HTTPException:
         raise
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
 
     return build_team_invite_response(
         team_id=team_access.team_id,
@@ -80,7 +77,7 @@ def update_team_member_role(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamMemberRoleUpdateResponse(detail="成员角色已更新。", member=member)
 
 
@@ -99,5 +96,5 @@ def update_team_member_status(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return TeamMemberStatusUpdateResponse(detail="成员状态已更新。", member=member)

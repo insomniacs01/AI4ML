@@ -23,9 +23,6 @@ from backend.app.services.service_registry import get_connector_store
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
-def _raise_connector_store_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    raise_store_http_error(exc)
-
 
 @router.get("", response_model=ConnectorListResponse)
 def list_connectors(team_access: TeamAccessContext = Depends(require_team_access)) -> ConnectorListResponse:
@@ -38,7 +35,7 @@ def list_connectors(team_access: TeamAccessContext = Depends(require_team_access
             )
         ]
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
     return ConnectorListResponse(items=items)
 
 
@@ -66,7 +63,7 @@ def create_connector(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
     return connector.to_public()
 
 
@@ -82,7 +79,7 @@ def health_check_connectors(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
 
     return ConnectorHealthCheckResponse(detail="连接器批量健康检查已完成。", items=results)
 
@@ -123,7 +120,7 @@ def update_connector(
     except HTTPException:
         raise
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
     return updated.to_public()
 
 
@@ -148,7 +145,7 @@ def test_connector(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
 
     return result
 
@@ -165,7 +162,7 @@ def set_connector_as_runtime(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
 
     return ConnectorActivateResponse(
         detail="连接器已设为当前团队运行时。后续这个团队的 AI 解析和 Codex 任务协作都会优先使用它。",
@@ -185,7 +182,7 @@ def deactivate_connector(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
 
     return ConnectorDeactivateResponse(
         detail="连接器已停用为非当前运行时。后续任务必须显式选择其他阶段路由或激活新的连接器。",
@@ -214,6 +211,6 @@ def delete_connector(
     except HTTPException:
         raise
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
 
     return ConnectorDeleteResponse(deleted=True, connector_id=connector_id, detail="连接器已删除。")
