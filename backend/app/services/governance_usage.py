@@ -18,6 +18,7 @@ from backend.app.services.governance_quota_records import (
 )
 from backend.app.services.governance_quota_listing import build_quota_records
 from backend.app.services.governance_quota_writes import build_quota_account_payload
+from backend.app.services.governance_related_names import list_connector_names, list_task_names
 from backend.app.services.governance_token_ledgers import normalize_ledger_limit, token_ledger_from_payload
 
 RequestJson = Callable[..., Any]
@@ -163,12 +164,14 @@ class GovernanceUsageRepository:
                 access_token=access_token,
             )
         }
-        task_map = self._list_task_names(
+        task_map = list_task_names(
+            self._request_json,
             team_id,
             [str(item.get("task_id")) for item in payload if isinstance(item, dict) and item.get("task_id")],
             access_token=access_token,
         )
-        connector_map = self._list_connector_names(
+        connector_map = list_connector_names(
+            self._request_json,
             team_id,
             [str(item.get("connector_id")) for item in payload if isinstance(item, dict) and item.get("connector_id")],
             access_token=access_token,
@@ -251,50 +254,3 @@ class GovernanceUsageRepository:
             for item in payload
             if isinstance(item, dict) and item.get("id")
         }
-
-    def _list_task_names(self, team_id: str, task_ids: list[str], *, access_token: str) -> dict[str, str]:
-        normalized_ids = sorted({item for item in task_ids if item})
-        if not normalized_ids:
-            return {}
-        quoted_in_list = _quoted_in_list(normalized_ids)
-        payload = self._request_json(
-            path=(
-                "ai_tasks"
-                f"?select=id,name&team_id=eq.{quote(team_id, safe='')}"
-                f"&id=in.({quoted_in_list})"
-            ),
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected task-name response from Supabase.")
-        return {
-            str(item.get("id")): str(item.get("name") or item.get("id"))
-            for item in payload
-            if isinstance(item, dict) and item.get("id")
-        }
-
-    def _list_connector_names(self, team_id: str, connector_ids: list[str], *, access_token: str) -> dict[str, str]:
-        normalized_ids = sorted({item for item in connector_ids if item})
-        if not normalized_ids:
-            return {}
-        quoted_in_list = _quoted_in_list(normalized_ids)
-        payload = self._request_json(
-            path=(
-                "ai_connectors"
-                f"?select=id,display_name&team_id=eq.{quote(team_id, safe='')}"
-                f"&id=in.({quoted_in_list})"
-            ),
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected connector-name response from Supabase.")
-        return {
-            str(item.get("id")): str(item.get("display_name") or item.get("id"))
-            for item in payload
-            if isinstance(item, dict) and item.get("id")
-        }
-
-
-def _quoted_in_list(values: list[str]) -> str:
-    in_list = ",".join(f'"{item}"' for item in values)
-    return quote(in_list, safe='(),"')
