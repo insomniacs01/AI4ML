@@ -17,8 +17,7 @@ from backend.app.services.governance_quota_records import (
 )
 from backend.app.services.governance_quota_listing import build_quota_records
 from backend.app.services.governance_quota_writes import build_quota_account_payload
-from backend.app.services.governance_related_names import list_connector_names, list_task_names
-from backend.app.services.governance_token_ledgers import token_ledger_from_payload
+from backend.app.services.governance_token_ledger_listing import list_token_ledger_records
 from backend.app.services.governance_usage_queries import (
     connector_names_path,
     member_quota_filter,
@@ -26,7 +25,6 @@ from backend.app.services.governance_usage_queries import (
     quota_existing_path,
     quota_update_path,
     scope_quota_filter,
-    token_ledgers_path,
 )
 
 RequestJson = Callable[..., Any]
@@ -139,43 +137,15 @@ class GovernanceUsageRepository:
         user_id: str | None = None,
         task_id: str | None = None,
     ) -> list[TokenLedgerRecord]:
-        payload = self._request_json(
-            path=token_ledgers_path(team_id, limit=limit, user_id=user_id, task_id=task_id),
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected token-ledgers response from Supabase.")
-
-        profile_map = {
-            item.user_id: item
-            for item in self._list_profiles(
-                [str(item.get("user_id")) for item in payload if isinstance(item, dict) and item.get("user_id")],
-                access_token=access_token,
-            )
-        }
-        task_map = list_task_names(
+        return list_token_ledger_records(
             self._request_json,
+            self._list_profiles,
             team_id,
-            [str(item.get("task_id")) for item in payload if isinstance(item, dict) and item.get("task_id")],
             access_token=access_token,
+            limit=limit,
+            user_id=user_id,
+            task_id=task_id,
         )
-        connector_map = list_connector_names(
-            self._request_json,
-            team_id,
-            [str(item.get("connector_id")) for item in payload if isinstance(item, dict) and item.get("connector_id")],
-            access_token=access_token,
-        )
-
-        return [
-            token_ledger_from_payload(
-                item,
-                profile_map=profile_map,
-                task_map=task_map,
-                connector_map=connector_map,
-            )
-            for item in payload
-            if isinstance(item, dict)
-        ]
 
     def _existing_quota_row(self, team_id: str, *, access_token: str, filter_path: str) -> dict[str, Any]:
         existing = self._request_json(
