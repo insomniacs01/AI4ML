@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from fastapi import HTTPException, status
 
+from backend.app.api.errors import raise_store_http_error
 from backend.app.core.supabase_auth import TeamAccessContext
 from backend.app.models.governance import TeamMemberRecord
 from backend.app.models.task import (
@@ -27,8 +28,6 @@ from backend.app.services.task_human_policy_selection import (
 )
 
 
-from backend.app.services.task_routing import _raise_governance_http_error
-
 def load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMemberRecord]:
     try:
         return get_governance_store().list_members(
@@ -36,7 +35,7 @@ def load_team_members_for_human(team_access: TeamAccessContext) -> list[TeamMemb
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
 
 def validate_interaction_policy_assignees(
     policies: list[TaskInteractionPolicyRecord],

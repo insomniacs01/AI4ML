@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from backend.app.api.errors import raise_store_http_error
 from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
 from backend.app.models.task import (
@@ -28,17 +29,6 @@ class TaskCacheWarmupResponse(BaseModel):
     detail_task_id: str | None = None
 
 
-def _raise_task_store_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    if isinstance(exc, RuntimeError):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-    if isinstance(exc, PermissionError):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
-    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-
 @router.post("/cache/warmup", response_model=TaskCacheWarmupResponse)
 def warmup_task_cache(team_access: TeamAccessContext = Depends(require_team_access)) -> TaskCacheWarmupResponse:
     try:
@@ -57,7 +47,7 @@ def warmup_task_cache(team_access: TeamAccessContext = Depends(require_team_acce
                 prefer_cache=False,
             )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_task_store_http_error(exc)
+        raise_store_http_error(exc)
     return TaskCacheWarmupResponse(warmed=True, task_count=len(tasks), detail_task_id=detail_task_id)
 
 
@@ -71,7 +61,7 @@ def list_tasks(team_access: TeamAccessContext = Depends(require_team_access)) ->
             allow_stale_cache=True,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_task_store_http_error(exc)
+        raise_store_http_error(exc)
     return TaskListResponse(items=items)
 
 
@@ -94,7 +84,7 @@ def create_task(
     except PlatformLimitError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_task_store_http_error(exc)
+        raise_store_http_error(exc)
 
     task = task_store.create_task(
         payload,
@@ -116,7 +106,7 @@ def get_task(task_id: str, team_access: TeamAccessContext = Depends(require_team
             allow_stale_cache=True,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_task_store_http_error(exc)
+        raise_store_http_error(exc)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     task.executor_type = "codex"

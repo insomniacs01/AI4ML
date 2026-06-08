@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
+from backend.app.api.errors import raise_store_http_error
 from backend.app.core.config import Settings
 from backend.app.core.supabase_auth import TeamAccessContext
 from backend.app.models.connector import StoredConnectorRecord
@@ -34,28 +35,6 @@ from backend.app.services.task_routing_selection import (
 )
 
 
-def _raise_connector_store_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    if isinstance(exc, RuntimeError):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-    if isinstance(exc, PermissionError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-def _raise_governance_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
-    if isinstance(exc, RuntimeError):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-    if isinstance(exc, PermissionError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
 def _build_runtime_context(team_access: TeamAccessContext) -> _RoutingRuntimeContext:
     team_policies: dict[str, AIRoutingPolicyRecord] = {}
     try:
@@ -65,7 +44,7 @@ def _build_runtime_context(team_access: TeamAccessContext) -> _RoutingRuntimeCon
         )
         team_policies = {normalize_workflow_stage(item.stage).value: item for item in items}
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
     return _RoutingRuntimeContext(
         team_policies=team_policies,
         connector_cache={},
@@ -85,7 +64,7 @@ def _get_connector_by_id(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_connector_store_http_error(exc)
+        raise_store_http_error(exc)
     runtime_context.connector_cache[connector_id] = connector
     return connector
 
@@ -179,7 +158,7 @@ def _assert_quota_allows_action(
             access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        _raise_governance_http_error(exc)
+        raise_store_http_error(exc)
 
     if quota is None:
         return None

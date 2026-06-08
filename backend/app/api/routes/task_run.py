@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from backend.app.api.errors import raise_store_http_error
 from backend.app.core.config import Settings, get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
 from backend.app.models.task import TaskRecord, TaskRunRequest, TaskStatus
@@ -74,7 +75,7 @@ def run_task(
     except PlatformLimitError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise_store_http_error(exc)
 
     task.executor_type = "codex"
     return _run_codex_task(task, payload, team_access)
