@@ -8,9 +8,9 @@ from backend.app.services.task_agent_baseline import compute_baseline as _comput
 from backend.app.services.task_agent_baseline_metrics import baseline_completed as _baseline_completed
 from backend.app.services.task_agent_checklist import build_checklist as _build_checklist
 from backend.app.services.task_agent_quality import (
-    build_next_improvement as _build_next_improvement,
     build_quality_gates as _build_quality_gates,
 )
+from backend.app.services.task_agent_improvement import build_next_improvement as _build_next_improvement
 from backend.app.services.task_agent_tuning import (
     build_stop_conditions as _build_stop_conditions,
     merge_baseline_attempt as _merge_baseline_attempt,
