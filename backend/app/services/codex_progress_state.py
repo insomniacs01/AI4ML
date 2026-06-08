@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, NamedTuple
+from typing import Any
 
 from backend.app.models.task import TaskRecord, TaskStatus, WorkflowStage
+from backend.app.services.codex_artifact_state import has_completed_codex_artifacts
 from backend.app.services.codex_common import (
     CODEX_ACTIVE_STATUSES,
     CODEX_FAILED_STATUSES,
     CODEX_WAITING_STATUSES,
 )
-
-
-class ProgressPercentResult(NamedTuple):
-    percent: int | None
-    source: str | None
-    unavailable_reason: str | None
 
 
 def codex_status(task: TaskRecord, progress: dict[str, Any]) -> str:
@@ -57,12 +52,6 @@ def codex_activity_text(
     if codex_status_value in CODEX_FAILED_STATUSES:
         return "Codex 任务未正常完成，请查看工作区日志和进度文件。"
     return task.notes or "Codex 任务尚未启动。"
-
-
-def has_completed_codex_artifacts(artifacts: dict[str, Any]) -> bool:
-    report = artifacts.get("report") if isinstance(artifacts.get("report"), dict) else {}
-    predict = artifacts.get("predict") if isinstance(artifacts.get("predict"), dict) else {}
-    return bool(report.get("exists") and predict.get("exists") and isinstance(artifacts.get("metrics"), dict))
 
 
 def bootstrap_progress(workspace: Any, artifacts: dict[str, Any]) -> dict[str, Any]:
@@ -130,74 +119,3 @@ def current_codex_stage(codex_status_value: str, progress: dict[str, Any], artif
     if codex_status_value == "interrupted" and artifacts.get("workspace"):
         return WorkflowStage.training_validation
     return None
-
-
-def codex_progress_percent(
-    task: TaskRecord,
-    progress: dict[str, Any],
-    codex_status_value: str,
-    artifacts: dict[str, Any],
-) -> ProgressPercentResult:
-    if codex_status_value == "completed" or task.status == TaskStatus.completed or has_completed_codex_artifacts(artifacts):
-        return ProgressPercentResult(100, "completed", None)
-    if task.status in {TaskStatus.draft, TaskStatus.uploaded, TaskStatus.planning}:
-        return ProgressPercentResult(0, "not_started", None)
-    percent = _explicit_progress_percent(progress)
-    if percent is not None:
-        source = str(
-            progress.get("percent_source")
-            or ("progress_json_percent" if "percent" in progress else "progress_json_progress_percent")
-        )
-        if task.status in {TaskStatus.failed, TaskStatus.cancelled}:
-            return ProgressPercentResult(min(99, max(0, percent)), source, None)
-        if codex_status_value == "interrupted" and task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-            return ProgressPercentResult(min(99, max(0, percent)), source, None)
-        if codex_status_value in CODEX_FAILED_STATUSES:
-            return ProgressPercentResult(min(99, max(0, percent)), source, None)
-        return ProgressPercentResult(max(0, min(99, percent)), source, None)
-
-    reason = _progress_unavailable_reason(task, progress, artifacts)
-    if task.status in {TaskStatus.failed, TaskStatus.cancelled}:
-        return ProgressPercentResult(None, None, reason)
-    if codex_status_value == "interrupted" and task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-        return ProgressPercentResult(None, None, reason)
-    if codex_status_value in CODEX_FAILED_STATUSES:
-        return ProgressPercentResult(None, None, reason)
-    return ProgressPercentResult(None, None, reason)
-
-
-def _explicit_progress_percent(progress: dict[str, Any]) -> int | None:
-    if "percent" in progress:
-        raw_percent = progress.get("percent")
-    elif "progress_percent" in progress:
-        raw_percent = progress.get("progress_percent")
-    else:
-        return None
-    try:
-        return int(raw_percent)
-    except (TypeError, ValueError):
-        return None
-
-
-def _progress_unavailable_reason(
-    task: TaskRecord,
-    progress: dict[str, Any],
-    artifacts: dict[str, Any],
-) -> str:
-    progress_file = artifacts.get("progress_file") if isinstance(artifacts.get("progress_file"), dict) else {}
-    if progress_file.get("exists") and not progress_file.get("readable"):
-        return "progress_file_unreadable"
-    if artifacts.get("workspace") and progress_file and not progress_file.get("exists"):
-        return "progress_file_missing"
-    if not progress:
-        if artifacts.get("workspace"):
-            return "progress_file_missing"
-        if task.status == TaskStatus.running:
-            return "workspace_not_ready"
-        return "progress_not_available"
-    if "percent" in progress or "progress_percent" in progress:
-        raw_percent = progress.get("percent") if "percent" in progress else progress.get("progress_percent")
-        if raw_percent is None or raw_percent == "":
-            return "progress_percent_missing"
-        return "progress_percent_invalid"
-    return "progress_percent_missing"

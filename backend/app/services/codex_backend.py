@@ -20,13 +20,13 @@ from backend.app.services.codex_common import (
     is_quota_guard_paused,
     workspace_path_from_artifacts,
 )
+from backend.app.services.codex_artifact_state import has_completed_codex_artifacts
 from backend.app.services.codex_http import CodexBackendClient
 from backend.app.services.codex_metrics import build_codex_run_summary
 from backend.app.services.codex_progress import build_codex_run_progress_response
 from backend.app.services.codex_progress_state import (
     codex_activity_text,
     codex_status,
-    has_completed_codex_artifacts,
 )
 from backend.app.services.codex_usage import token_usage_from_artifacts
 from backend.app.services.codex_overview import build_codex_overview_from_artifacts

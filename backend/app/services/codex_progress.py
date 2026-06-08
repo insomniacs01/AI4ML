@@ -21,10 +21,10 @@ from backend.app.services.codex_metrics import (
     selected_model_metrics,
 )
 from backend.app.services.codex_overview import build_codex_overview_from_artifacts
+from backend.app.services.codex_progress_percent import codex_progress_percent
 from backend.app.services.codex_progress_state import (
     bootstrap_progress,
     codex_activity_text,
-    codex_progress_percent,
     codex_response_status,
     codex_status,
     current_codex_stage,
