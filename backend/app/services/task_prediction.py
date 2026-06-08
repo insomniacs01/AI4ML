@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import csv
 import json
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -12,13 +8,14 @@ from backend.app.core.config import get_settings
 from backend.app.models.task import TaskPredictionDemoRequest, TaskPredictionDemoResponse, TaskRecord
 from backend.app.services.codex_backend import resolve_codex_workspace
 from backend.app.services.task_artifacts import build_run_artifact_index
+from backend.app.services.task_prediction_codex import build_codex_prediction_response
 from backend.app.services.task_prediction_generated_code import (
     GeneratedCodePrediction,
     GeneratedCodePredictionFailure,
     call_generated_code_prediction,
     generated_code_has_predict_contract,
 )
-from backend.app.services.task_targets import target_columns_from_task
+from backend.app.services.task_prediction_inputs import clean_prediction_features
 
 
 def build_prediction_demo_response(task: TaskRecord, payload: TaskPredictionDemoRequest) -> TaskPredictionDemoResponse:
@@ -63,73 +60,7 @@ def _build_codex_prediction_response(
     payload: TaskPredictionDemoRequest,
 ) -> TaskPredictionDemoResponse | None:
     workspace = resolve_codex_workspace(task, get_settings())
-    if workspace is None:
-        return None
-    predict_path = workspace / "output" / "predict.py"
-    if not predict_path.is_file():
-        return None
-
-    features = _clean_prediction_features(task, payload)
-    if not features:
-        return TaskPredictionDemoResponse(
-            task_id=task.id,
-            supported=False,
-            detail="预测输入为空，或只包含目标列。请传入至少一个特征字段。",
-            command_hint=f"Codex predict path: {predict_path}",
-        )
-
-    try:
-        with tempfile.TemporaryDirectory(prefix=f"ai4ml-codex-predict-{task.id}-") as temp_dir:
-            temp_path = Path(temp_dir)
-            input_path = temp_path / "input.csv"
-            output_path = temp_path / "output.csv"
-            with input_path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=list(features.keys()))
-                writer.writeheader()
-                writer.writerow(features)
-            completed = subprocess.run(  # noqa: S603
-                [
-                    sys.executable,
-                    str(predict_path),
-                    "--input",
-                    str(input_path),
-                    "--output",
-                    str(output_path),
-                ],
-                cwd=str(predict_path.parent),
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if completed.returncode != 0:
-                detail = (completed.stderr or completed.stdout or "").strip()
-                return TaskPredictionDemoResponse(
-                    task_id=task.id,
-                    supported=False,
-                    detail=f"Codex predict.py 试算失败，退出码 {completed.returncode}：{detail[:800]}",
-                    command_hint=f"Codex predict path: {predict_path}",
-                )
-            prediction = _read_prediction_output(output_path)
-    except Exception as exc:  # noqa: BLE001
-        return TaskPredictionDemoResponse(
-            task_id=task.id,
-            supported=False,
-            detail=f"调用 Codex predict.py 失败：{exc}",
-            command_hint=f"Codex predict path: {predict_path}",
-        )
-
-    return TaskPredictionDemoResponse(
-        task_id=task.id,
-        supported=True,
-        detail="已调用 Codex workspace 中的真实 predict.py 完成单行试算。",
-        prediction={
-            "features": features,
-            "result": prediction,
-            "code_path": str(predict_path),
-        },
-        command_hint=f"{sys.executable} {predict_path} --input input.csv --output output.csv",
-    )
+    return build_codex_prediction_response(task, payload, workspace)
 
 
 def _build_generated_code_prediction_response(
@@ -140,7 +71,7 @@ def _build_generated_code_prediction_response(
     if not generated_code_has_predict_contract(generated_code):
         return None
 
-    features = _clean_prediction_features(task, payload)
+    features = clean_prediction_features(task, payload)
     if not features:
         return TaskPredictionDemoResponse(
             task_id=task.id,
@@ -200,20 +131,3 @@ def _generated_code_prediction_success(
         prediction=result,
         command_hint=f"Generated code path: {generated_code}",
     )
-
-
-def _clean_prediction_features(task: TaskRecord, payload: TaskPredictionDemoRequest) -> dict[str, Any]:
-    target_columns = set(target_columns_from_task(task))
-    return {
-        key: value
-        for key, value in payload.features.items()
-        if key and key not in target_columns
-    }
-
-
-def _read_prediction_output(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        return {}
-    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    return rows[0] if rows else {}
