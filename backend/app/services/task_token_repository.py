@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 from urllib.parse import quote
 
 from backend.app.models.task import (
@@ -16,16 +15,14 @@ from backend.app.models.task import (
     WorkflowStageStatus,
     normalize_workflow_stage,
 )
+from backend.app.services.task_token_ledger_writes import (
+    TOKEN_LEDGER_UPSERT_PATH,
+    build_token_ledger_payload,
+    previous_ledger_total,
+    token_ledger_lookup_path,
+    token_usage_delta,
+)
 from backend.app.services.task_store_payloads import TaskPayloadMapper
-
-
-def _coerce_non_negative_int(value: Any) -> int:
-    try:
-        result = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return max(result, 0)
-
 
 
 class TaskTokenRepository(TaskPayloadMapper):
@@ -137,45 +134,32 @@ class TaskTokenRepository(TaskPayloadMapper):
             return
 
         existing = self._request_json(
-            path=(
-                "token_ledgers"
-                f"?select=id,total_tokens&team_id=eq.{quote(team_id, safe='')}"
-                f"&task_id=eq.{quote(task_id, safe='')}"
-                f"&phase=eq.{quote(phase, safe='')}"
-                f"&source_key=eq.{quote(source_key, safe='')}"
-                "&limit=1"
-            ),
+            path=token_ledger_lookup_path(team_id, task_id, phase, source_key),
             access_token=access_token,
         )
-        previous_total = 0
-        if isinstance(existing, list) and existing:
-            previous_total = _coerce_non_negative_int(existing[0].get("total_tokens"))
-
-        body = {
-            "team_id": team_id,
-            "task_id": task_id,
-            "user_id": user_id,
-            "connector_id": connector_id,
-            "connector_display_name": connector_display_name,
-            "phase": phase,
-            "stage_key": stage_key,
-            "source_key": source_key,
-            "model_name": model_name,
-            "calculation_method": calculation_method,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "total_tokens": usage.total_tokens,
-            "raw_usage": usage.model_dump(),
-        }
+        previous_total = previous_ledger_total(existing)
+        body = build_token_ledger_payload(
+            team_id=team_id,
+            task_id=task_id,
+            phase=phase,
+            source_key=source_key,
+            usage=usage,
+            user_id=user_id,
+            connector_id=connector_id,
+            connector_display_name=connector_display_name,
+            model_name=model_name,
+            stage_key=stage_key,
+            calculation_method=calculation_method,
+        )
         self._request_json(
-            path="token_ledgers?on_conflict=team_id,task_id,phase,source_key",
+            path=TOKEN_LEDGER_UPSERT_PATH,
             access_token=access_token,
             method="POST",
             body=body,
             prefer="resolution=merge-duplicates,return=representation",
         )
 
-        delta = usage.total_tokens - previous_total
+        delta = token_usage_delta(usage, previous_total)
         if user_id and delta != 0:
             self._adjust_member_token_usage(
                 team_id=team_id,
