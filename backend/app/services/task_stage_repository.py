@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
 
 from backend.app.models.task import (
     WorkflowStage,
@@ -10,6 +9,12 @@ from backend.app.models.task import (
     normalize_workflow_stage,
 )
 from backend.app.services.task_cache import TaskCache
+from backend.app.services.task_stage_repository_paths import (
+    stage_record_lookup_path,
+    stage_record_update_path,
+    stage_records_path,
+)
+from backend.app.services.task_stage_writes import build_stage_record_payload
 from backend.app.services.task_store_payloads import TaskPayloadMapper
 
 
@@ -40,12 +45,7 @@ class TaskStageRepository(TaskPayloadMapper):
 
         try:
             payload = self._request_json(
-                path=(
-                    "workflow_stage_records"
-                    f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                    f"&task_id=eq.{quote(task_id, safe='')}"
-                    "&order=updated_at.desc"
-                ),
+                path=stage_records_path(team_id, task_id),
                 access_token=access_token,
             )
         except ConnectionError:
@@ -82,14 +82,7 @@ class TaskStageRepository(TaskPayloadMapper):
     ) -> WorkflowStageRecord:
         normalized_stage = normalize_workflow_stage(stage)
         existing = self._request_json(
-            path=(
-                "workflow_stage_records"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                f"&task_id=eq.{quote(task_id, safe='')}"
-                f"&stage=eq.{quote(self._enum_value(normalized_stage), safe='')}"
-                "&order=updated_at.desc"
-                "&limit=1"
-            ),
+            path=stage_record_lookup_path(team_id, task_id, normalized_stage),
             access_token=access_token,
         )
         existing_record = None
@@ -99,24 +92,25 @@ class TaskStageRepository(TaskPayloadMapper):
             existing_record,
             status=status,
         )
-        body = {
-            "team_id": team_id,
-            "task_id": task_id,
-            "stage": self._enum_value(normalized_stage),
-            "status": self._enum_value(status),
-            "selected_connector_id": selected_connector_id,
-            "model_name": model_name,
-            "selection_source": selection_source,
-            "summary": summary,
-            "artifact_refs": artifact_refs,
-            "started_at": started_at.isoformat() if started_at else None,
-            "finished_at": finished_at.isoformat() if finished_at else None,
-            "duration_seconds": duration_seconds,
-            "log_excerpt": log_excerpt if log_excerpt is not None else (existing_record.log_excerpt if existing_record else None),
-        }
+        body = build_stage_record_payload(
+            team_id=team_id,
+            task_id=task_id,
+            stage=normalized_stage,
+            status=status,
+            selected_connector_id=selected_connector_id,
+            model_name=model_name,
+            selection_source=selection_source,
+            summary=summary,
+            artifact_refs=artifact_refs,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=duration_seconds,
+            log_excerpt=log_excerpt,
+            existing_log_excerpt=existing_record.log_excerpt if existing_record else None,
+        )
         if existing_record is not None:
             updated_payload = self._request_json(
-                path=f"workflow_stage_records?id=eq.{quote(existing_record.id, safe='')}",
+                path=stage_record_update_path(existing_record.id),
                 access_token=access_token,
                 method="PATCH",
                 body=body,
