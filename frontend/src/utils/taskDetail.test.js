@@ -74,6 +74,25 @@ describe('task detail token helpers', () => {
     })
   })
 
+  it('compares peer token usage when task records use task_id identifiers', () => {
+    const comparison = buildTokenComparison(
+      { total_tokens: 120 },
+      [
+        { task_id: 'current', dataset_filename: 'train.csv', llm_usage: { total_tokens: 999 } },
+        { task_id: 'peer', dataset_filename: 'train.csv', llm_usage: { total_tokens: 80 } },
+      ],
+      { task_id: 'current', dataset_filename: 'train.csv' },
+    )
+
+    expect(comparison).toEqual({
+      available: true,
+      text: '当前 120，历史同类均值 80，高于均值。',
+      current: 120,
+      average: 80,
+      sample_count: 1,
+    })
+  })
+
   it('reports unavailable comparison without current or peer token records', () => {
     expect(buildTokenComparison(null, [], { id: 'current' })).toEqual({
       available: false,

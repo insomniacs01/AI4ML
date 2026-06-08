@@ -129,6 +129,10 @@ export function sameComparableTask(candidate, current) {
   return Boolean(candidateType && currentType && candidateType === currentType)
 }
 
+function taskIdentity(task) {
+  return task?.id || task?.task_id || ''
+}
+
 export function normalizeTokenUsage(value) {
   if (!value || typeof value !== 'object') return null
   const total = value.total && typeof value.total === 'object' ? value.total : value
@@ -151,8 +155,12 @@ export function normalizeTokenUsage(value) {
 
 export function buildTokenComparison(currentUsage, peerTasks, currentTask) {
   const currentTotal = Number((currentUsage || {}).total_tokens || 0)
+  const currentTaskId = taskIdentity(currentTask)
   const related = (Array.isArray(peerTasks) ? peerTasks : [])
-    .filter((item) => item.id !== currentTask?.id)
+    .filter((item) => {
+      const itemId = taskIdentity(item)
+      return !currentTaskId || !itemId || itemId !== currentTaskId
+    })
     .filter((item) => sameComparableTask(item, currentTask))
     .map((item) => Number(item.llm_usage?.total_tokens || 0))
     .filter((value) => value > 0)
