@@ -17,6 +17,7 @@ from backend.app.models.task import (
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
 from backend.app.services.task_agent_collaboration import append_stage_agent_messages
 from backend.app.services.task_agent_definitions import agent_runtime_spec_for_stage
+from backend.app.services.task_agent_status import agent_progress_for_status, agent_status_label
 from backend.app.services.task_human_request_status import human_request_is_active
 
 
@@ -95,7 +96,7 @@ def _record_workflow_stage(
             role=agent_role,
             short_role=str(agent_spec["short_role"]),
             status=stage_status,
-            progress=_agent_progress_for_status(stage_status),
+            progress=agent_progress_for_status(stage_status),
             current_task=current_task,
             access_token=team_access.access_token,
             selected_connector_id=stage_record.connector_id if stage_record else None,
@@ -112,7 +113,7 @@ def _record_workflow_stage(
             stage=stage,
             kind="agent",
             status=status_value,
-            text=f"{agent_name}（{agent_role}）{_format_stage_status(stage_status)}：{current_task}",
+            text=f"{agent_name}（{agent_role}）{agent_status_label(stage_status)}：{current_task}",
             artifact_refs=artifact_refs,
             access_token=team_access.access_token,
         )
@@ -128,27 +129,6 @@ def _record_workflow_stage(
         )
     except ConnectionError as exc:
         _raise_agent_schema_http_error(exc)
-
-def _format_stage_status(stage_status: WorkflowStageStatus) -> str:
-    labels = {
-        WorkflowStageStatus.pending: "待命",
-        WorkflowStageStatus.running: "执行中",
-        WorkflowStageStatus.waiting_human: "等待人工",
-        WorkflowStageStatus.completed: "已完成",
-        WorkflowStageStatus.failed: "失败",
-    }
-    return labels.get(stage_status, stage_status.value if hasattr(stage_status, "value") else str(stage_status))
-
-def _agent_progress_for_status(stage_status: WorkflowStageStatus) -> int:
-    if stage_status == WorkflowStageStatus.completed:
-        return 100
-    if stage_status == WorkflowStageStatus.failed:
-        return 100
-    if stage_status == WorkflowStageStatus.running:
-        return 62
-    if stage_status == WorkflowStageStatus.waiting_human:
-        return 48
-    return 0
 
 def _record_stage_selection_map(
     task: TaskRecord,
@@ -215,7 +195,7 @@ def _ensure_agent_runtime_records(
                 role=str(agent_spec["role"]),
                 short_role=str(agent_spec["short_role"]),
                 status=resolved_status,
-                progress=_agent_progress_for_status(resolved_status),
+                progress=agent_progress_for_status(resolved_status),
                 current_task=current_task,
                 access_token=team_access.access_token,
                 selected_connector_id=stage_record.selected_connector_id if stage_record else None,
