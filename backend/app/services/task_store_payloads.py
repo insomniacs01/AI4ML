@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any
 
 from backend.app.models.task import (
-    HumanInteractionRequestStatus,
     TaskAgentEventRecord,
     TaskAgentMessageRecord,
     TaskAgentRuntimeRecord,
@@ -14,11 +13,12 @@ from backend.app.models.task import (
     TaskRecord,
     TaskStageRoutingOverrideInput,
     TaskStageRoutingRecord,
-    WorkflowStage,
     WorkflowStageRecord,
     WorkflowStageStatus,
     normalize_workflow_stage,
 )
+from backend.app.services.task_agent_artifacts import flatten_artifact_refs
+from backend.app.services.task_store_payload_normalization import normalize_record_stage, payload_with_created_time
 from backend.app.services.task_store_stage_timing import resolve_stage_timing
 from backend.app.services.token_usage import get_task_analysis_token_usage
 
@@ -65,48 +65,28 @@ class TaskPayloadMapper:
     @classmethod
     def _stage_record_from_payload(cls, payload: dict[str, Any]) -> WorkflowStageRecord:
         record = WorkflowStageRecord.model_validate(payload)
-        if isinstance(record.stage, WorkflowStage):
-            record.stage = normalize_workflow_stage(record.stage)
-        else:
-            record.stage = normalize_workflow_stage(str(record.stage))
-        return record
+        return normalize_record_stage(record)
 
     @classmethod
     def _agent_runtime_from_payload(cls, payload: dict[str, Any]) -> TaskAgentRuntimeRecord:
         record = TaskAgentRuntimeRecord.model_validate(payload)
-        if isinstance(record.stage, WorkflowStage):
-            record.stage = normalize_workflow_stage(record.stage)
-        else:
-            record.stage = normalize_workflow_stage(str(record.stage))
-        return record
+        return normalize_record_stage(record)
 
     @classmethod
     def _agent_event_from_payload(cls, payload: dict[str, Any]) -> TaskAgentEventRecord:
-        event_payload = dict(payload)
-        if "time" not in event_payload:
-            event_payload["time"] = event_payload.get("created_at")
-        event_payload["artifact_refs"] = cls._flatten_artifact_refs(event_payload.get("artifact_refs"))
+        event_payload = payload_with_created_time(payload)
+        event_payload["artifact_refs"] = flatten_artifact_refs(event_payload.get("artifact_refs"))
         record = TaskAgentEventRecord.model_validate(event_payload)
-        if isinstance(record.stage, WorkflowStage):
-            record.stage = normalize_workflow_stage(record.stage)
-        else:
-            record.stage = normalize_workflow_stage(str(record.stage))
-        return record
+        return normalize_record_stage(record)
 
     @classmethod
     def _agent_message_from_payload(cls, payload: dict[str, Any]) -> TaskAgentMessageRecord:
-        message_payload = dict(payload)
-        if "time" not in message_payload:
-            message_payload["time"] = message_payload.get("created_at")
-        message_payload["artifact_refs"] = cls._flatten_artifact_refs(message_payload.get("artifact_refs"))
+        message_payload = payload_with_created_time(payload)
+        message_payload["artifact_refs"] = flatten_artifact_refs(message_payload.get("artifact_refs"))
         if not isinstance(message_payload.get("payload"), dict):
             message_payload["payload"] = None
         record = TaskAgentMessageRecord.model_validate(message_payload)
-        if isinstance(record.stage, WorkflowStage):
-            record.stage = normalize_workflow_stage(record.stage)
-        else:
-            record.stage = normalize_workflow_stage(str(record.stage))
-        return record
+        return normalize_record_stage(record)
 
     @staticmethod
     def _resolve_stage_timing(
@@ -119,11 +99,7 @@ class TaskPayloadMapper:
     @classmethod
     def _human_request_from_payload(cls, payload: dict[str, Any]) -> TaskHumanRequestRecord:
         record = TaskHumanRequestRecord.model_validate(payload)
-        if isinstance(record.stage, WorkflowStage):
-            record.stage = normalize_workflow_stage(record.stage)
-        else:
-            record.stage = normalize_workflow_stage(str(record.stage))
-        return record
+        return normalize_record_stage(record)
 
     @classmethod
     def _task_to_payload(cls, task: TaskRecord) -> dict[str, Any]:
@@ -226,21 +202,3 @@ class TaskPayloadMapper:
     @staticmethod
     def _enum_value(value: Any) -> Any:
         return value.value if hasattr(value, "value") else value
-
-    @staticmethod
-    def _flatten_artifact_refs(value: Any) -> list[str]:
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [value] if value else []
-        if isinstance(value, list):
-            return [str(item) for item in value if item]
-        if isinstance(value, dict):
-            flattened: list[str] = []
-            for key, item in value.items():
-                if isinstance(item, list):
-                    flattened.extend(str(child) for child in item if child)
-                elif item:
-                    flattened.append(f"{key}: {item}")
-            return flattened
-        return [str(value)]
