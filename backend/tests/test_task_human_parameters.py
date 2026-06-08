@@ -17,7 +17,7 @@ from backend.app.models.task import (
     WorkflowStage,
 )
 from backend.app.services.task_human_parameter_values import HUMAN_PARAMETERS_KEY, PARAMETER_HISTORY_KEY
-from backend.app.services.task_human_parameter_application import column_names
+from backend.app.services.task_human_columns import column_names
 from backend.app.services.task_human_parameters import apply_human_decision_parameters
 
 
