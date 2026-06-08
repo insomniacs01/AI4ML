@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote
 
 from backend.app.models.governance import (
     TeamMemberRecord,
@@ -19,17 +18,20 @@ from backend.app.services.governance_quota_records import (
 from backend.app.services.governance_quota_listing import build_quota_records
 from backend.app.services.governance_quota_writes import build_quota_account_payload
 from backend.app.services.governance_related_names import list_connector_names, list_task_names
-from backend.app.services.governance_token_ledgers import normalize_ledger_limit, token_ledger_from_payload
+from backend.app.services.governance_token_ledgers import token_ledger_from_payload
+from backend.app.services.governance_usage_queries import (
+    connector_names_path,
+    member_quota_filter,
+    quota_accounts_path,
+    quota_existing_path,
+    quota_update_path,
+    scope_quota_filter,
+    token_ledgers_path,
+)
 
 RequestJson = Callable[..., Any]
 ListMembers = Callable[..., list[TeamMemberRecord]]
 ListProfiles = Callable[..., list[TeamProfileRecord]]
-
-_QUOTA_SELECT = (
-    "team_id,user_id,connector_id,scope_type,scope_key,token_quota,"
-    "token_used,status,warning_threshold,updated_at"
-)
-
 
 class GovernanceUsageRepository:
     def __init__(
@@ -46,10 +48,7 @@ class GovernanceUsageRepository:
     def list_quotas(self, team_id: str, *, access_token: str) -> list[TeamQuotaRecord]:
         members = self._list_members(team_id, access_token=access_token)
         quota_payload = self._request_json(
-            path=(
-                "quota_accounts"
-                f"?select={_QUOTA_SELECT}&team_id=eq.{quote(team_id, safe='')}"
-            ),
+            path=quota_accounts_path(team_id),
             access_token=access_token,
         )
         if not isinstance(quota_payload, list):
@@ -74,10 +73,11 @@ class GovernanceUsageRepository:
         access_token: str,
     ) -> TeamQuotaRecord:
         scope = quota_scope("member", user_id)
+        filter_path = member_quota_filter(user_id)
         existing_row = self._existing_quota_row(
             team_id,
             access_token=access_token,
-            filter_path=f"&user_id=eq.{quote(user_id, safe='')}",
+            filter_path=filter_path,
         )
         row = self._write_quota_account(
             team_id,
@@ -86,7 +86,7 @@ class GovernanceUsageRepository:
             status=status,
             warning_threshold=warning_threshold,
             existing_row=existing_row,
-            update_filter=f"&user_id=eq.{quote(user_id, safe='')}",
+            update_filter=filter_path,
             access_token=access_token,
             action="quota adjust",
         )
@@ -108,10 +108,7 @@ class GovernanceUsageRepository:
         access_token: str,
     ) -> TeamQuotaRecord:
         scope = quota_scope(scope_type, scope_key)
-        scope_filter = (
-            f"&scope_type=eq.{quote(scope.scope_type, safe='')}"
-            f"&scope_key=eq.{quote(scope.scope_key, safe='')}"
-        )
+        scope_filter = scope_quota_filter(scope.scope_type, scope.scope_key)
         row = self._write_quota_account(
             team_id,
             scope,
@@ -142,18 +139,10 @@ class GovernanceUsageRepository:
         user_id: str | None = None,
         task_id: str | None = None,
     ) -> list[TokenLedgerRecord]:
-        capped_limit = normalize_ledger_limit(limit)
-        path = (
-            "token_ledgers"
-            f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-            f"&order=created_at.desc&limit={capped_limit}"
+        payload = self._request_json(
+            path=token_ledgers_path(team_id, limit=limit, user_id=user_id, task_id=task_id),
+            access_token=access_token,
         )
-        if user_id:
-            path += f"&user_id=eq.{quote(user_id, safe='')}"
-        if task_id:
-            path += f"&task_id=eq.{quote(task_id, safe='')}"
-
-        payload = self._request_json(path=path, access_token=access_token)
         if not isinstance(payload, list):
             raise ConnectionError("Unexpected token-ledgers response from Supabase.")
 
@@ -190,11 +179,7 @@ class GovernanceUsageRepository:
 
     def _existing_quota_row(self, team_id: str, *, access_token: str, filter_path: str) -> dict[str, Any]:
         existing = self._request_json(
-            path=(
-                "quota_accounts"
-                f"?select={_QUOTA_SELECT}&team_id=eq.{quote(team_id, safe='')}"
-                f"{filter_path}&limit=1"
-            ),
+            path=quota_existing_path(team_id, filter_path),
             access_token=access_token,
         )
         return existing[0] if isinstance(existing, list) and existing else {}
@@ -222,10 +207,7 @@ class GovernanceUsageRepository:
         )
         if existing_row:
             updated = self._request_json(
-                path=(
-                    "quota_accounts"
-                    f"?team_id=eq.{quote(team_id, safe='')}{update_filter}"
-                ),
+                path=quota_update_path(team_id, update_filter),
                 access_token=access_token,
                 method="PATCH",
                 body=payload,
@@ -241,10 +223,7 @@ class GovernanceUsageRepository:
 
     def _connector_map(self, team_id: str, *, access_token: str) -> dict[str, str]:
         payload = self._request_json(
-            path=(
-                "ai_connectors"
-                f"?select=id,display_name&team_id=eq.{quote(team_id, safe='')}"
-            ),
+            path=connector_names_path(team_id),
             access_token=access_token,
         )
         if not isinstance(payload, list):
