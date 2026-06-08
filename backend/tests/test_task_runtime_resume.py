@@ -65,6 +65,21 @@ def test_interrupted_status_is_interrupted_resume() -> None:
     assert codex_waiting_plan_approval(task, progress) is False
 
 
+def test_interrupted_progress_with_pending_plan_step_is_not_plan_approval() -> None:
+    progress = {
+        "status": "interrupted",
+        "current_step": "awaiting_plan_approval",
+        "steps": [
+            {"id": "dataset_analysis", "status": "interrupted"},
+            {"id": "awaiting_plan_approval", "status": "pending"},
+        ],
+    }
+    task = _task(codex_status="interrupted")
+
+    assert codex_interrupted(task, progress) is True
+    assert codex_waiting_plan_approval(task, progress) is False
+
+
 def test_waiting_plan_approval_reads_progress_steps() -> None:
     progress = {
         "status": "running",

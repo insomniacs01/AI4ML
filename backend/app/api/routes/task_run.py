@@ -17,6 +17,10 @@ from backend.app.services.platform_limits import PlatformLimitError
 from backend.app.services.quota_runtime_guard import clear_quota_guard, quota_token_budget
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
 from backend.app.services.task_codex_metadata import update_codex_structured_metadata
+from backend.app.services.task_codex_plan_approval import (
+    CodexPlanNotReadyError,
+    assert_codex_plan_ready_for_approval,
+)
 from backend.app.services.task_codex_sync import sync_codex_task_state
 from backend.app.services.task_routing import _assert_quota_allows_action
 from backend.app.services.task_runtime_activity import (
@@ -283,8 +287,10 @@ def _approve_codex_plan_and_save(
             detail="There are open human confirmation requests.",
         )
     plan_text = payload.plan_text or codex_plan_text(task, settings)
-    if not plan_text.strip():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex plan is not ready for approval")
+    try:
+        assert_codex_plan_ready_for_approval(plan_text)
+    except CodexPlanNotReadyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     try:
         response = approve_codex_plan(task, settings, plan_text=plan_text, token_budget=token_budget)
     except CodexBackendError as exc:

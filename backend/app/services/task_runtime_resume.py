@@ -13,6 +13,8 @@ CODEX_IMPROVEMENT_REVIEW_STATUSES = {
     "improvement_review",
     "waiting_improvement_approval",
 }
+STEP_WAITING_HUMAN_STATUSES = {"waiting_human", "waiting", "paused_for_review"}
+
 
 def codex_interrupted(task: TaskRecord, progress: dict[str, object]) -> bool:
     return any(
@@ -49,16 +51,24 @@ def task_or_progress_has_status(
     values = [
         task.codex_status,
         progress.get("status"),
-        progress.get("current_step"),
     ]
     if any(status_value(value) in statuses for value in values):
+        return True
+    progress_status = status_value(progress.get("status"))
+    current_step = status_value(progress.get("current_step"))
+    if current_step in statuses and progress_status in statuses | STEP_WAITING_HUMAN_STATUSES:
         return True
     steps = progress.get("steps")
     if isinstance(steps, list):
         for item in steps:
             if not isinstance(item, dict):
                 continue
-            step_values = (item.get("id"), item.get("name"), item.get("status"))
+            step_status = status_value(item.get("status"))
+            if step_status in statuses:
+                return True
+            if step_status not in STEP_WAITING_HUMAN_STATUSES:
+                continue
+            step_values = (item.get("id"), item.get("name"))
             if any(status_value(value) in statuses for value in step_values):
                 return True
     return False
