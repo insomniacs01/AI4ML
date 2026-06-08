@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from backend.app.models.task import RunAttempt, RunSummary, TaskRecord, TaskStatus
-from backend.app.services.task_chat import _build_task_context, _load_chat_history
+from backend.app.services.task_chat import _build_task_context
+from backend.app.services.task_interactive_chat_history import load_interactive_chat_history
 
 
 def test_load_chat_history_filters_invalid_entries_and_normalizes_defaults() -> None:
-    messages = _load_chat_history(
+    messages = load_interactive_chat_history(
         [
             "invalid",
             {"role": "user", "content": "  "},
@@ -57,7 +58,7 @@ def test_load_chat_history_filters_invalid_entries_and_normalizes_defaults() -> 
 
 
 def test_load_chat_history_rejects_non_list_history() -> None:
-    assert _load_chat_history({"role": "user", "content": "hello"}) == []
+    assert load_interactive_chat_history({"role": "user", "content": "hello"}) == []
 
 
 def test_build_task_context_formats_analysis_fields_and_prefers_latest_attempt_output() -> None:

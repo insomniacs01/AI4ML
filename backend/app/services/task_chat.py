@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -9,13 +8,15 @@ from uuid import uuid4
 from backend.app.core.config import Settings
 from backend.app.models.task import TaskInteractiveChatMessage, TaskRecord, TokenUsageReport
 from backend.app.services.task_human_context import build_task_human_context_block
+from backend.app.services.task_interactive_chat_history import (
+    INTERACTIVE_CHAT_HISTORY_KEY,
+    load_interactive_chat_history,
+)
 from backend.app.services.openai_compatible_provider import call_openai_compatible_provider
 from backend.app.services.provider_availability import OpenAICompatibleProvider
 
 
-INTERACTIVE_CHAT_HISTORY_KEY = "interactive_chat_history"
 MAX_HISTORY_MESSAGES = 12
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,7 +33,7 @@ def send_task_chat_message(task: TaskRecord, *, prompt: str, settings: Settings)
         raise ValueError("请输入要发给 AI 的 prompt。")
 
     structured_requirements = dict(task.structured_requirements) if isinstance(task.structured_requirements, dict) else {}
-    history = _load_chat_history(structured_requirements.get(INTERACTIVE_CHAT_HISTORY_KEY))
+    history = load_interactive_chat_history(structured_requirements.get(INTERACTIVE_CHAT_HISTORY_KEY))
 
     user_message = TaskInteractiveChatMessage(
         id=f"chat_{uuid4().hex}",
@@ -85,80 +86,6 @@ def send_task_chat_message(task: TaskRecord, *, prompt: str, settings: Settings)
         token_usage=token_usage,
         token_usage_calculation_method=provider_result.token_usage_calculation_method,
     )
-
-
-def _load_chat_history(raw_history: object) -> list[TaskInteractiveChatMessage]:
-    if not isinstance(raw_history, list):
-        return []
-
-    messages: list[TaskInteractiveChatMessage] = []
-    for item in raw_history:
-        message = _chat_message_from_history_item(item)
-        if message is None:
-            continue
-        messages.append(message)
-
-    return messages
-
-
-def _chat_message_from_history_item(item: object) -> TaskInteractiveChatMessage | None:
-    if not isinstance(item, dict):
-        return None
-    role = item.get("role")
-    content = _chat_content(item.get("content"))
-    if role not in {"user", "assistant"} or content is None:
-        return None
-
-    return TaskInteractiveChatMessage(
-        id=str(item.get("id") or f"chat_{uuid4().hex}"),
-        role=role,
-        origin=_chat_origin(item.get("origin"), role),
-        content=content,
-        status=_chat_status(item.get("status")),
-        model_name=_optional_chat_str(item.get("model_name")),
-        composed_prompt=_optional_chat_str(item.get("composed_prompt")),
-        token_usage=_chat_token_usage(item.get("token_usage")),
-        created_at=_chat_created_at(item.get("created_at")),
-    )
-
-
-def _chat_content(value: object) -> str | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return value.strip()
-
-
-def _chat_origin(value: object, role: object) -> str:
-    if value in {"user", "ai_model", "local_runtime"}:
-        return str(value)
-    return "user" if role == "user" else "ai_model"
-
-
-def _chat_status(value: object) -> str:
-    return str(value) if value in {"ok", "error"} else "ok"
-
-
-def _optional_chat_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _chat_token_usage(value: object) -> TokenUsageReport | None:
-    if not isinstance(value, dict):
-        return None
-    try:
-        return TokenUsageReport.model_validate(value)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Could not parse interactive chat token usage: %s", exc)
-        return None
-
-
-def _chat_created_at(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def _build_chat_prompt(task: TaskRecord, history: list[TaskInteractiveChatMessage]) -> str:
