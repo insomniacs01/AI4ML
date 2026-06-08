@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
-from urllib.parse import quote
-
 from backend.app.models.task import (
     TaskCreateRequest,
     TaskRecord,
 )
 from backend.app.services.task_cache import TaskCache
+from backend.app.services.task_repository_queries import (
+    TASK_LIST_SELECT,
+    TASK_SUMMARY_SELECT,
+    task_detail_path,
+    task_list_path,
+    task_mutation_path,
+)
 from backend.app.services.task_store_payloads import TaskPayloadMapper
 
 
@@ -37,19 +41,9 @@ class TaskRepository(TaskPayloadMapper):
             if allow_stale_cache or self.cache.has_fresh_team_cache(team_id):
                 return cached_tasks
 
-        query_parts = [
-            "ai_tasks",
-            f"?select={self._task_summary_select() if lightweight else self._task_list_select()}",
-            f"&team_id=eq.{quote(team_id, safe='')}",
-            "&order=created_at.desc",
-        ]
-        if limit is not None:
-            query_parts.append(f"&limit={max(1, min(int(limit), 500))}")
-        if offset:
-            query_parts.append(f"&offset={max(0, int(offset))}")
         try:
             payload = self._request_json(
-                path="".join(query_parts),
+                path=task_list_path(team_id, lightweight=lightweight, limit=limit, offset=offset),
                 access_token=access_token,
             )
         except ConnectionError:
@@ -65,72 +59,11 @@ class TaskRepository(TaskPayloadMapper):
 
     @staticmethod
     def _task_summary_select() -> str:
-        return ",".join(
-            [
-                "id",
-                "team_id",
-                "created_by",
-                "creator_user_id",
-                "name",
-                "description",
-                "workflow_id",
-                "label_column",
-                "problem_type",
-                "status",
-                "dataset_filename",
-                "dataset_path",
-                "notes",
-                "executor_type",
-                "codex_workspace_path",
-                "codex_session_id",
-                "codex_thread_id",
-                "codex_status",
-                "codex_started_at",
-                "codex_finished_at",
-                "routing_policy_id",
-                "routing_source",
-                "created_at",
-                "updated_at",
-            ]
-        )
+        return TASK_SUMMARY_SELECT
 
     @staticmethod
     def _task_list_select() -> str:
-        return ",".join(
-            [
-                "id",
-                "team_id",
-                "created_by",
-                "creator_user_id",
-                "name",
-                "description",
-                "workflow_id",
-                "label_column",
-                "problem_type",
-                "status",
-                "dataset_filename",
-                "dataset_path",
-                "dataset_profile",
-                "notes",
-                "analysis_token_usage",
-                "last_run",
-                "last_run_attempt",
-                "executor_type",
-                "codex_workspace_path",
-                "codex_session_id",
-                "codex_thread_id",
-                "codex_status",
-                "codex_started_at",
-                "codex_finished_at",
-                "routing_policy_id",
-                "routing_source",
-                "structured_requirements",
-                "stage_routing",
-                "interaction_policies",
-                "created_at",
-                "updated_at",
-            ]
-        )
+        return TASK_LIST_SELECT
 
     def create_task(self, payload: TaskCreateRequest, *, team_id: str, created_by: str, access_token: str) -> TaskRecord:
         created_payload = self._request_json(
@@ -178,12 +111,7 @@ class TaskRepository(TaskPayloadMapper):
 
         try:
             payload = self._request_json(
-                path=(
-                    "ai_tasks"
-                    f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                    f"&id=eq.{quote(task_id, safe='')}"
-                    "&limit=1"
-                ),
+                path=task_detail_path(team_id, task_id),
                 access_token=access_token,
             )
         except ConnectionError:
@@ -200,11 +128,7 @@ class TaskRepository(TaskPayloadMapper):
 
     def save_task(self, task: TaskRecord, *, access_token: str) -> TaskRecord:
         updated_payload = self._request_json(
-            path=(
-                "ai_tasks"
-                f"?team_id=eq.{quote(task.team_id, safe='')}"
-                f"&id=eq.{quote(task.id, safe='')}"
-            ),
+            path=task_mutation_path(task.team_id, task.id),
             access_token=access_token,
             method="PATCH",
             body=self._task_to_payload(task),
@@ -220,11 +144,7 @@ class TaskRepository(TaskPayloadMapper):
             return False
 
         self._request_json(
-            path=(
-                "ai_tasks"
-                f"?team_id=eq.{quote(team_id, safe='')}"
-                f"&id=eq.{quote(task_id, safe='')}"
-            ),
+            path=task_mutation_path(team_id, task_id),
             access_token=access_token,
             method="DELETE",
             expect_json=False,
