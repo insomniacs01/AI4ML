@@ -9,7 +9,7 @@ from backend.app.models.task import (
     WorkflowStageStatus,
 )
 from backend.app.services.codex_backend import codex_workspace_plan_path
-from backend.app.services.task_artifacts import (
+from backend.app.services.task_run_artifacts import (
     collect_stage_artifacts_by_stage,
     read_run_log_excerpt,
 )
