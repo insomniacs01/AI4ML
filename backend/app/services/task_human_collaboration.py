@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from backend.app.models.governance import TeamMemberRecord
 from backend.app.models.task import (
@@ -14,7 +14,6 @@ from backend.app.models.task import (
     TaskStageRoutingRecord,
     TaskStatus,
     WorkflowStageRecord,
-    normalize_workflow_stage,
 )
 from backend.app.services.task_human_access import (
     ResolvedHumanAssignee,
@@ -28,9 +27,9 @@ from backend.app.services.task_human_expiration import (
 )
 from backend.app.services.task_human_decision_requests import require_decidable_human_request
 from backend.app.services.task_human_decisions import apply_human_decision
+from backend.app.services.task_human_request_creation import build_human_request_creation
 from backend.app.services.task_human_payloads import (
     build_human_decision_history_entry,
-    build_human_request_payload,
 )
 from backend.app.services.task_human_post_decision import (
     apply_post_decision_task_action,
@@ -145,28 +144,23 @@ class TaskHumanCollaborationService:
         if task.status == TaskStatus.running:
             raise RuntimeError(RUNNING_TASK_HUMAN_REQUEST_ERROR)
 
-        assignee_type, assignee_value, assigned_to = self.resolve_assignee(
-            assignee_type=payload.assignee_type,
-            assignee_value=payload.assignee_value,
-            assigned_to=payload.assigned_to,
-            default_member_id=requested_by,
+        creation = build_human_request_creation(
+            payload,
+            requested_by=requested_by,
+            actor_role=actor_role,
             team_members=team_members or [self._default_team_member(task, user_id=requested_by, role=actor_role)],
         )
-
-        timeout_at = None
-        if payload.timeout_minutes is not None:
-            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=payload.timeout_minutes)
 
         self.task_store.create_human_request(
             team_id=task.team_id,
             task_id=task.id,
-            stage=normalize_workflow_stage(payload.stage),
+            stage=creation.stage,
             requested_by=requested_by,
-            assigned_to=assigned_to,
-            assignee_type=assignee_type.value,
-            assignee_value=assignee_value,
-            timeout_at=timeout_at,
-            payload=build_human_request_payload(payload, actor_role=actor_role),
+            assigned_to=creation.assigned_to,
+            assignee_type=creation.assignee_type.value,
+            assignee_value=creation.assignee_value,
+            timeout_at=creation.timeout_at,
+            payload=creation.payload,
             access_token=access_token,
         )
         saved_task = save_task_waiting_for_human(
