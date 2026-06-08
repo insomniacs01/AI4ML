@@ -27,12 +27,10 @@ from backend.app.services.task_human_expiration import (
     expire_overdue_human_requests,
 )
 from backend.app.services.task_human_decision_requests import require_decidable_human_request
-from backend.app.services.task_human_parameters import apply_human_decision_parameters
+from backend.app.services.task_human_decisions import apply_human_decision
 from backend.app.services.task_human_payloads import (
     build_human_decision_history_entry,
-    build_human_decision_payload,
     build_human_request_payload,
-    is_rerun_decision_action,
 )
 from backend.app.services.task_human_post_decision import (
     apply_post_decision_task_action,
@@ -51,7 +49,6 @@ from backend.app.services.task_human_snapshot import (
 )
 from backend.app.services.task_human_transitions import (
     resolve_human_decision_task_action,
-    status_for_human_decision_action,
 )
 from backend.app.services.task_store import TaskStore
 
@@ -210,21 +207,17 @@ class TaskHumanCollaborationService:
                 access_token=access_token,
             )
 
-        request.status = status_for_human_decision_action(payload.action)
-        requires_rerun = is_rerun_decision_action(payload.action)
-        rerun_from_stage = stage_key(request.stage) if requires_rerun else None
-        request.decision = build_human_decision_payload(
+        applied_decision = apply_human_decision(
+            self.task_store,
+            task,
+            request,
             payload,
             decided_by=decided_by,
             actor_role=actor_role,
-            decided_at=datetime.now(timezone.utc),
-            requires_rerun=requires_rerun,
-            rerun_from_stage=rerun_from_stage,
+            access_token=access_token,
         )
-        apply_human_decision_parameters(task, request, payload, decided_by=decided_by)
-        self.task_store.update_human_request(request, access_token=access_token)
 
-        task = self._record_latest_decision(task, request=request, payload=payload)
+        task = self._record_latest_decision(task, request=applied_decision.request, payload=payload)
         remaining_requests = self.task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
         saved_task = apply_post_decision_task_action(
             self.task_store,
@@ -236,7 +229,7 @@ class TaskHumanCollaborationService:
             ),
             access_token=access_token,
             reason=payload.decision_summary,
-            rerun_from_stage=rerun_from_stage,
+            rerun_from_stage=applied_decision.rerun_from_stage,
         )
 
         return self.get_snapshot(saved_task, access_token=access_token, actor_id=decided_by, actor_role=actor_role)
