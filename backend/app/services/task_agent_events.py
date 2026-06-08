@@ -9,7 +9,7 @@ from backend.app.models.task import (
     normalize_workflow_stage,
 )
 from backend.app.services.task_agent_artifacts import flatten_artifact_refs
-from backend.app.services.task_agent_definitions import stage_status_label
+from backend.app.services.task_agent_status import agent_status_label
 from backend.app.services.task_human_request_status import human_request_status_value
 
 
@@ -46,7 +46,7 @@ def _stage_event_from_agent(agent: TaskAgentRecord) -> TaskAgentEventRecord | No
         stage=agent.stage,
         kind="stage",
         status=agent.status.value,
-        text=f"{agent.name}（{agent.role}）{stage_status_label(agent.status)}：{agent.current_task}",
+        text=f"{agent.name}（{agent.role}）{agent_status_label(agent.status)}：{agent.current_task}",
         time=agent.last_action_at,
         artifact_refs=agent.artifact_refs,
     )

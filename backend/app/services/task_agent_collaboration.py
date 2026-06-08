@@ -19,7 +19,7 @@ from backend.app.models.task import (
 )
 from backend.app.services.task_agent_artifacts import flatten_artifact_refs as _flatten_artifact_refs
 from backend.app.services.task_agent_definitions import agent_definition as _agent_definition
-from backend.app.services.task_agent_definitions import progress_for_status as _progress_for_status
+from backend.app.services.task_agent_status import agent_progress_for_status as _progress_for_status
 from backend.app.services.task_agent_events import build_task_agent_events
 from backend.app.services.task_agent_messages import build_stage_message_specs as _build_stage_message_specs
 from backend.app.services.task_agent_sanitization import (

@@ -5,7 +5,6 @@ from typing import Any
 from backend.app.models.task import (
     PRIMARY_WORKFLOW_STAGES,
     WorkflowStage,
-    WorkflowStageStatus,
     normalize_workflow_stage,
 )
 
@@ -61,14 +60,6 @@ AGENT_DEFINITIONS: dict[WorkflowStage, dict[str, Any]] = {
     },
 }
 
-STATUS_LABELS = {
-    WorkflowStageStatus.pending: "待命",
-    WorkflowStageStatus.running: "执行中",
-    WorkflowStageStatus.waiting_human: "等待人工",
-    WorkflowStageStatus.completed: "已完成",
-    WorkflowStageStatus.failed: "失败",
-}
-
 MESSAGE_TYPE_LABELS = {
     "coordination": "步骤安排",
     "handoff": "阶段交接",
@@ -95,23 +86,7 @@ def agent_runtime_spec_for_stage(stage: WorkflowStage | str) -> dict[str, Any]:
         "description": definition["description"],
         "x": definition["x"],
         "y": definition["y"],
-    }
-
-
-def progress_for_status(status: WorkflowStageStatus) -> int:
-    if status == WorkflowStageStatus.completed:
-        return 100
-    if status == WorkflowStageStatus.failed:
-        return 100
-    if status == WorkflowStageStatus.running:
-        return 62
-    if status == WorkflowStageStatus.waiting_human:
-        return 48
-    return 0
-
-
-def stage_status_label(status: WorkflowStageStatus) -> str:
-    return STATUS_LABELS.get(status, status.value)
+}
 
 
 def next_primary_stage(stage: WorkflowStage) -> WorkflowStage | None:

@@ -10,6 +10,7 @@ def test_agent_status_label_maps_workflow_stage_statuses() -> None:
     assert agent_status_label(WorkflowStageStatus.waiting_human) == "等待人工"
     assert agent_status_label(WorkflowStageStatus.completed) == "已完成"
     assert agent_status_label(WorkflowStageStatus.failed) == "失败"
+    assert agent_status_label("custom") == "custom"
 
 
 def test_agent_progress_for_status_keeps_terminal_and_waiting_values() -> None:
