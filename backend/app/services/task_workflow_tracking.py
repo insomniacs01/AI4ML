@@ -17,10 +17,12 @@ from backend.app.models.task import (
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
 from backend.app.services.task_agent_collaboration import append_stage_agent_messages
 from backend.app.services.task_agent_definitions import agent_runtime_spec_for_stage
-from backend.app.services.task_agent_status import agent_progress_for_status, agent_status_label
+from backend.app.services.task_agent_status import agent_progress_for_status
 from backend.app.services.task_human_request_status import human_request_is_active
-
-
+from backend.app.services.task_workflow_agent_records import (
+    WorkflowStageTrackingContext,
+    build_workflow_stage_tracking_context,
+)
 from backend.app.services.task_routing import _ResolvedStageSelection
 
 AGENT_SCHEMA_MISSING_DETAIL = (
@@ -67,68 +69,106 @@ def _record_workflow_stage(
     log_excerpt: str | None = None,
 ) -> None:
     stage_record = selection.stage_record if isinstance(selection, _ResolvedStageSelection) else selection
-    task_store = get_task_store()
-    task_store.upsert_stage_record(
-        team_id=task.team_id,
-        task_id=task.id,
+    tracking_context = build_workflow_stage_tracking_context(
+        task,
         stage=stage,
-        status=stage_status,
-        access_token=team_access.access_token,
-        selected_connector_id=stage_record.connector_id if stage_record else None,
-        model_name=stage_record.model_name if stage_record else None,
-        selection_source=stage_record.selection_source if stage_record else None,
+        stage_status=stage_status,
         summary=summary,
+        stage_record=stage_record,
+    )
+    task_store = get_task_store()
+    _upsert_workflow_stage_record(
+        task_store,
+        task,
+        team_access,
+        tracking_context,
         artifact_refs=artifact_refs,
         log_excerpt=log_excerpt,
     )
-    agent_spec = agent_runtime_spec_for_stage(stage)
-    agent_name = str(agent_spec["name"])
-    agent_role = str(agent_spec["role"])
-    status_value = stage_status.value if hasattr(stage_status, "value") else str(stage_status)
-    current_task = summary
     try:
-        task_store.upsert_agent_run(
-            team_id=task.team_id,
-            task_id=task.id,
-            agent_id=str(agent_spec["agent_id"]),
-            stage=stage,
-            name=agent_name,
-            role=agent_role,
-            short_role=str(agent_spec["short_role"]),
-            status=stage_status,
-            progress=agent_progress_for_status(stage_status),
-            current_task=current_task,
-            access_token=team_access.access_token,
-            selected_connector_id=stage_record.connector_id if stage_record else None,
-            model_name=stage_record.model_name if stage_record else None,
-            selection_source=stage_record.selection_source if stage_record else None,
-            artifact_refs=artifact_refs,
-            log_excerpt=log_excerpt,
-            worker_id=f"backend-agent-worker:{task.id}:{normalize_workflow_stage(stage).value}",
-        )
-        task_store.append_agent_event(
-            team_id=task.team_id,
-            task_id=task.id,
-            agent_id=str(agent_spec["agent_id"]),
-            stage=stage,
-            kind="agent",
-            status=status_value,
-            text=f"{agent_name}（{agent_role}）{agent_status_label(stage_status)}：{current_task}",
-            artifact_refs=artifact_refs,
-            access_token=team_access.access_token,
-        )
-        append_stage_agent_messages(
+        _record_agent_runtime_activity(
             task_store,
             task,
-            access_token=team_access.access_token,
-            stage=stage,
-            stage_status=stage_status,
-            summary=current_task,
+            team_access,
+            tracking_context,
             artifact_refs=artifact_refs,
             log_excerpt=log_excerpt,
         )
     except ConnectionError as exc:
         _raise_agent_schema_http_error(exc)
+
+def _upsert_workflow_stage_record(
+    task_store,
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    tracking_context: WorkflowStageTrackingContext,
+    *,
+    artifact_refs: list[str] | dict | None,
+    log_excerpt: str | None,
+) -> None:
+    task_store.upsert_stage_record(
+        team_id=task.team_id,
+        task_id=task.id,
+        stage=tracking_context.stage,
+        status=tracking_context.stage_status,
+        access_token=team_access.access_token,
+        selected_connector_id=tracking_context.selected_connector_id,
+        model_name=tracking_context.model_name,
+        selection_source=tracking_context.selection_source,
+        summary=tracking_context.current_task,
+        artifact_refs=artifact_refs,
+        log_excerpt=log_excerpt,
+    )
+
+def _record_agent_runtime_activity(
+    task_store,
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    tracking_context: WorkflowStageTrackingContext,
+    *,
+    artifact_refs: list[str] | dict | None,
+    log_excerpt: str | None,
+) -> None:
+    task_store.upsert_agent_run(
+        team_id=task.team_id,
+        task_id=task.id,
+        agent_id=tracking_context.agent_id,
+        stage=tracking_context.stage,
+        name=tracking_context.agent_name,
+        role=tracking_context.agent_role,
+        short_role=tracking_context.agent_short_role,
+        status=tracking_context.stage_status,
+        progress=tracking_context.progress,
+        current_task=tracking_context.current_task,
+        access_token=team_access.access_token,
+        selected_connector_id=tracking_context.selected_connector_id,
+        model_name=tracking_context.model_name,
+        selection_source=tracking_context.selection_source,
+        artifact_refs=artifact_refs,
+        log_excerpt=log_excerpt,
+        worker_id=tracking_context.worker_id,
+    )
+    task_store.append_agent_event(
+        team_id=task.team_id,
+        task_id=task.id,
+        agent_id=tracking_context.agent_id,
+        stage=tracking_context.stage,
+        kind="agent",
+        status=tracking_context.status_value,
+        text=tracking_context.event_text,
+        artifact_refs=artifact_refs,
+        access_token=team_access.access_token,
+    )
+    append_stage_agent_messages(
+        task_store,
+        task,
+        access_token=team_access.access_token,
+        stage=tracking_context.stage,
+        stage_status=tracking_context.stage_status,
+        summary=tracking_context.current_task,
+        artifact_refs=artifact_refs,
+        log_excerpt=log_excerpt,
+    )
 
 def _record_stage_selection_map(
     task: TaskRecord,
