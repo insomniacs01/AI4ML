@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote
 
 from backend.app.models.governance import (
     TeamMemberRecord,
@@ -16,6 +15,15 @@ from backend.app.services.governance_team_records import (
     profile_records_from_payload,
     team_member_from_payload,
     team_settings_from_payload,
+)
+from backend.app.services.governance_team_queries import (
+    normalized_profile_ids,
+    profile_update_path,
+    profiles_path,
+    team_member_update_path,
+    team_members_path,
+    team_path,
+    team_update_path,
 )
 
 RequestJson = Callable[..., Any]
@@ -33,11 +41,7 @@ class GovernanceTeamRepository:
 
     def list_members(self, team_id: str, *, access_token: str) -> list[TeamMemberRecord]:
         member_payload = self._request_json(
-            path=(
-                "team_members"
-                f"?select=team_id,user_id,role,member_status,invited_by,joined_at,updated_at&team_id=eq.{quote(team_id, safe='')}"
-                "&order=joined_at.asc"
-            ),
+            path=team_members_path(team_id),
             access_token=access_token,
         )
         if not isinstance(member_payload, list):
@@ -59,11 +63,7 @@ class GovernanceTeamRepository:
 
     def get_team(self, team_id: str, *, access_token: str) -> dict[str, Any] | None:
         payload = self._request_json(
-            path=(
-                "teams"
-                f"?select=id,name,invite_code,created_by,description,status,created_at,updated_at&"
-                f"id=eq.{quote(team_id, safe='')}&limit=1"
-            ),
+            path=team_path(team_id),
             access_token=access_token,
         )
         if not isinstance(payload, list):
@@ -98,7 +98,7 @@ class GovernanceTeamRepository:
             return current
 
         updated_payload = self._request_json(
-            path=f"teams?id=eq.{quote(team_id, safe='')}",
+            path=team_update_path(team_id),
             access_token=access_token,
             method="PATCH",
             body=body,
@@ -147,11 +147,7 @@ class GovernanceTeamRepository:
 
     def update_member_role(self, team_id: str, user_id: str, role: str, *, access_token: str) -> TeamMemberRecord:
         payload = self._request_json(
-            path=(
-                "team_members"
-                f"?team_id=eq.{quote(team_id, safe='')}"
-                f"&user_id=eq.{quote(user_id, safe='')}"
-            ),
+            path=team_member_update_path(team_id, user_id),
             access_token=access_token,
             method="PATCH",
             body={"role": role},
@@ -180,11 +176,7 @@ class GovernanceTeamRepository:
         access_token: str,
     ) -> TeamMemberRecord:
         payload = self._request_json(
-            path=(
-                "team_members"
-                f"?team_id=eq.{quote(team_id, safe='')}"
-                f"&user_id=eq.{quote(user_id, safe='')}"
-            ),
+            path=team_member_update_path(team_id, user_id),
             access_token=access_token,
             method="PATCH",
             body={"member_status": member_status},
@@ -213,7 +205,7 @@ class GovernanceTeamRepository:
         access_token: str,
     ) -> TeamProfileRecord:
         payload = self._request_json(
-            path=f"profiles?user_id=eq.{quote(user_id, safe='')}",
+            path=profile_update_path(user_id),
             access_token=access_token,
             method="PATCH",
             body={"display_name": display_name.strip() if display_name else None},
@@ -226,13 +218,11 @@ class GovernanceTeamRepository:
         )
 
     def list_profiles(self, user_ids: list[str], *, access_token: str) -> list[TeamProfileRecord]:
-        normalized_ids = sorted({item for item in user_ids if item})
+        normalized_ids = normalized_profile_ids(user_ids)
         if not normalized_ids:
             return []
-        in_list = ",".join(f'"{item}"' for item in normalized_ids)
-        quoted_in_list = quote(in_list, safe='(),"')
         payload = self._request_json(
-            path=f"profiles?select=user_id,email,display_name&user_id=in.({quoted_in_list})",
+            path=profiles_path(normalized_ids),
             access_token=access_token,
         )
         if not isinstance(payload, list):
