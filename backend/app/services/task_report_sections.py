@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from backend.app.models.task import DatasetProfile, FeatureImportanceEntry, TaskRecord
 from backend.app.services.task_artifacts import build_run_artifact_index
@@ -46,12 +47,72 @@ def build_report_markdown(
     relationship_notes: list[str],
     using_artifact_importance: bool,
 ) -> str:
+    lines = _build_report_lines(
+        task=task,
+        generated_at=generated_at,
+        dataset_profile=dataset_profile,
+        feature_importance=feature_importance,
+        result_summary=result_summary,
+        data_quality_notes=data_quality_notes,
+        limitation_notes=limitation_notes,
+        relationship_notes=relationship_notes,
+        using_artifact_importance=using_artifact_importance,
+    )
+    markdown = "\n".join(lines)
+    _persist_report_markdown(task, markdown)
+    return markdown
+
+
+def _build_report_lines(
+    *,
+    task: TaskRecord,
+    generated_at: datetime,
+    dataset_profile: DatasetProfile | None,
+    feature_importance: list[FeatureImportanceEntry],
+    result_summary: list[str],
+    data_quality_notes: list[str],
+    limitation_notes: list[str],
+    relationship_notes: list[str],
+    using_artifact_importance: bool,
+) -> list[str]:
     agent_loop = _agent_loop(task)
     target_profile = build_target_profile(task, dataset_profile)
     artifact_index = build_run_artifact_index(task, prefer_success=True)
     primary_metric = _primary_metric_text(task)
     candidate_count = len(task.last_run.leaderboard or []) if task.last_run else 0
-    lines = [
+    lines = _report_intro_lines(
+        task=task,
+        generated_at=generated_at,
+        dataset_profile=dataset_profile,
+        target_profile=target_profile,
+        agent_loop=agent_loop,
+        feature_importance=feature_importance,
+        candidate_count=candidate_count,
+        primary_metric=primary_metric,
+        using_artifact_importance=using_artifact_importance,
+    )
+    lines.extend(_data_quality_section_lines(dataset_profile, target_profile, data_quality_notes))
+    lines.extend(_automation_process_lines(agent_loop, task))
+    lines.extend(_experiment_result_lines(task, result_summary, artifact_index))
+    lines.extend(_review_process_lines(agent_loop))
+    lines.extend(_feature_explanation_lines(feature_importance, relationship_notes, using_artifact_importance))
+    lines.extend(_closing_section_lines(task, agent_loop, feature_importance, limitation_notes))
+    return lines
+
+
+def _report_intro_lines(
+    *,
+    task: TaskRecord,
+    generated_at: datetime,
+    dataset_profile: DatasetProfile | None,
+    target_profile: dict[str, Any],
+    agent_loop: dict[str, Any],
+    feature_importance: list[FeatureImportanceEntry],
+    candidate_count: int,
+    primary_metric: str,
+    using_artifact_importance: bool,
+) -> list[str]:
+    return [
         f"# {task.name} 自动建模实验报告",
         "",
         "## 基本信息",
@@ -76,6 +137,15 @@ def build_report_markdown(
         "## 1. 任务背景与目标",
         "",
         *_task_background_lines(task, dataset_profile, target_profile, primary_metric),
+    ]
+
+
+def _data_quality_section_lines(
+    dataset_profile: DatasetProfile | None,
+    target_profile: dict[str, Any],
+    data_quality_notes: list[str],
+) -> list[str]:
+    return [
         "",
         "## 2. 数据整理与质量检查",
         "",
@@ -90,6 +160,11 @@ def build_report_markdown(
         "### 2.3 数据质量结论",
         "",
         *[f"- {item}" for item in data_quality_notes],
+    ]
+
+
+def _automation_process_lines(agent_loop: dict[str, Any], task: TaskRecord) -> list[str]:
+    return [
         "",
         "## 3. 自动建模过程与检查清单",
         "",
@@ -104,6 +179,11 @@ def build_report_markdown(
         "## 4. 简单对照实验",
         "",
         *_baseline_experiment_lines(agent_loop, task),
+    ]
+
+
+def _experiment_result_lines(task: TaskRecord, result_summary: list[str], artifact_index: Any) -> list[str]:
+    return [
         "",
         "## 5. 自动建模实验",
         "",
@@ -119,56 +199,57 @@ def build_report_markdown(
         "",
         *_artifact_report_lines(artifact_index),
     ]
+
+
+def _review_process_lines(agent_loop: dict[str, Any]) -> list[str]:
     if agent_loop:
-        lines.extend(
-            [
-                "",
-                "## 6. 结果检查与优化过程",
-                "",
-                "### 6.1 结果检查",
-                "",
-                *_quality_gate_report_lines(agent_loop),
-                "",
-                "### 6.2 优化记录",
-                "",
-                *_tuning_attempt_report_lines(agent_loop),
-                "",
-                "### 6.3 停止条件",
-                "",
-                *_stop_condition_report_lines(agent_loop),
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "",
-                "## 6. 结果检查与优化过程",
-                "",
-                "- 当前任务尚未记录完整检查数据，无法输出简单对照、结果检查和优化复盘。",
-            ]
-        )
+        return [
+            "",
+            "## 6. 结果检查与优化过程",
+            "",
+            "### 6.1 结果检查",
+            "",
+            *_quality_gate_report_lines(agent_loop),
+            "",
+            "### 6.2 优化记录",
+            "",
+            *_tuning_attempt_report_lines(agent_loop),
+            "",
+            "### 6.3 停止条件",
+            "",
+            *_stop_condition_report_lines(agent_loop),
+        ]
+    return [
+        "",
+        "## 6. 结果检查与优化过程",
+        "",
+        "- 当前任务尚未记录完整检查数据，无法输出简单对照、结果检查和优化复盘。",
+    ]
+
+
+def _feature_explanation_lines(
+    feature_importance: list[FeatureImportanceEntry],
+    relationship_notes: list[str],
+    using_artifact_importance: bool,
+) -> list[str]:
     if feature_importance:
-        lines.extend(
-            [
-                "",
-                "## 7. 特征解释与目标关系",
-                "",
-                "### 7.1 特征重要性/相关性排名",
-                "",
-                f"- 特征排名来源：{'模型给出的特征重要性' if using_artifact_importance else 'CSV 中特征与目标列的统计关系'}。",
-                "",
-                *_feature_importance_table_lines(feature_importance),
-            ]
-        )
+        lines = [
+            "",
+            "## 7. 特征解释与目标关系",
+            "",
+            "### 7.1 特征重要性/相关性排名",
+            "",
+            f"- 特征排名来源：{'模型给出的特征重要性' if using_artifact_importance else 'CSV 中特征与目标列的统计关系'}。",
+            "",
+            *_feature_importance_table_lines(feature_importance),
+        ]
     else:
-        lines.extend(
-            [
-                "",
-                "## 7. 特征解释与目标关系",
-                "",
-                "- 当前没有可量化的特征重要性或统计相关性结果。",
-            ]
-        )
+        lines = [
+            "",
+            "## 7. 特征解释与目标关系",
+            "",
+            "- 当前没有可量化的特征重要性或统计相关性结果。",
+        ]
     if relationship_notes:
         lines.extend(
             [
@@ -178,25 +259,29 @@ def build_report_markdown(
                 *[f"- {item}" for item in relationship_notes[:12]],
             ]
         )
-    lines.extend(
-        [
-            "",
-            "## 8. 风险和局限",
-            "",
-            *[f"- {item}" for item in limitation_notes],
-            "",
-            "## 9. 结论",
-            "",
-            *_conclusion_lines(task, agent_loop, feature_importance),
-            "",
-            "## 10. 下一步建议",
-            "",
-            *_next_step_lines(task, feature_importance),
-        ]
-    )
-    markdown = "\n".join(lines)
-    _persist_report_markdown(task, markdown)
-    return markdown
+    return lines
+
+
+def _closing_section_lines(
+    task: TaskRecord,
+    agent_loop: dict[str, Any],
+    feature_importance: list[FeatureImportanceEntry],
+    limitation_notes: list[str],
+) -> list[str]:
+    return [
+        "",
+        "## 8. 风险和局限",
+        "",
+        *[f"- {item}" for item in limitation_notes],
+        "",
+        "## 9. 结论",
+        "",
+        *_conclusion_lines(task, agent_loop, feature_importance),
+        "",
+        "## 10. 下一步建议",
+        "",
+        *_next_step_lines(task, feature_importance),
+    ]
 
 
 def _primary_metric_text(task: TaskRecord) -> str:
