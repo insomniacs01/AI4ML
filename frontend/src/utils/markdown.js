@@ -13,11 +13,29 @@ function renderInlineMarkdown(value) {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 }
 
+function renderParagraphText(value) {
+  return `<p>${renderInlineMarkdown(value.trim())}</p>`
+}
+
+function splitTableRow(line) {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim())
+}
+
+function isTableSeparatorCell(cell) {
+  return /^:?-{3,}:?$/.test(cell)
+}
+
+function isMarkdownTable(lines) {
+  if (lines.length < 2) return false
+  const header = splitTableRow(lines[0])
+  const separator = splitTableRow(lines[1])
+  return header.length > 0 && separator.length === header.length && separator.every(isTableSeparatorCell)
+}
+
 function renderMarkdownTable(lines) {
   const rows = lines
     .filter((line) => line.trim())
-    .map((line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => renderInlineMarkdown(cell.trim())))
-  if (rows.length < 2) return ''
+    .map((line) => splitTableRow(line).map((cell) => renderInlineMarkdown(cell)))
   const header = rows[0]
   const body = rows.slice(2)
   return [
@@ -49,12 +67,16 @@ export function renderMarkdown(markdown) {
 
   const flushParagraph = () => {
     if (!paragraph.length) return
-    html.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`)
+    html.push(renderParagraphText(paragraph.join(' ')))
     paragraph = []
   }
   const flushTable = () => {
     if (!tableLines.length) return
-    html.push(renderMarkdownTable(tableLines))
+    if (isMarkdownTable(tableLines)) {
+      html.push(renderMarkdownTable(tableLines))
+    } else {
+      html.push(...tableLines.map(renderParagraphText))
+    }
     tableLines = []
   }
   const flushCode = () => {
