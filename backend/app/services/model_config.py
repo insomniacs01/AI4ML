@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import Settings
 from backend.app.services.codex_backend import CodexBackendError, reload_codex_config
+from backend.app.services.model_config_secrets import (
+    REDACTED_SECRET_VALUE,
+    is_secret_key,
+    redact_config_toml,
+    restore_redacted_toml_values,
+)
 
 
 DEFAULT_MODEL_DISPLAY_NAME = "Codex"
 MODEL_PROFILE_FILENAME = "model_profile.json"
-REDACTED_SECRET_VALUE = "***"
-
 
 def read_model_profile(settings: Settings) -> dict[str, str]:
     profile = _read_profile(settings)
@@ -26,7 +29,7 @@ def read_model_config(settings: Settings) -> dict[str, Any]:
     return {
         **profile,
         "auth_json": "",
-        "config_toml": _redact_config_toml(_read_text(config_path)),
+        "config_toml": redact_config_toml(_read_text(config_path)),
         "auth_path": auth_path.name,
         "config_path": config_path.name,
         "auth_configured": bool(_find_primary_auth_secret(auth_payload)),
@@ -44,7 +47,7 @@ def save_model_config(
 ) -> dict[str, Any]:
     normalized_display_name = _normalize_display_name(display_name)
     auth_path, config_path = _codex_paths(settings)
-    normalized_config_toml = _restore_redacted_toml_values(config_toml, _read_text(config_path))
+    normalized_config_toml = restore_redacted_toml_values(config_toml, _read_text(config_path))
     _validate_toml_if_available(normalized_config_toml)
 
     auth_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +134,7 @@ def _find_primary_auth_secret(payload: dict[str, Any]) -> str:
     if isinstance(preferred, str) and preferred.strip():
         return preferred.strip()
     for key, value in payload.items():
-        if _is_secret_key(str(key)) and isinstance(value, str) and value.strip():
+        if is_secret_key(str(key)) and isinstance(value, str) and value.strip():
             return value.strip()
     return ""
 
@@ -150,113 +153,6 @@ def _write_auth_api_key(path: Path, api_key: str) -> None:
     payload = _read_auth_payload(path)
     payload["OPENAI_API_KEY"] = api_key
     _atomic_write_text(path, _normalize_auth_json(json.dumps(payload, ensure_ascii=False)))
-
-
-def _is_secret_key(key: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
-    exact_secret_names = {
-        "api_key",
-        "apikey",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "bearer_token",
-        "authorization",
-        "secret",
-        "password",
-        "credential",
-        "credentials",
-    }
-    if normalized in exact_secret_names:
-        return True
-    secret_suffixes = (
-        "_api_key",
-        "_access_token",
-        "_refresh_token",
-        "_id_token",
-        "_bearer_token",
-        "_secret",
-        "_password",
-        "_credential",
-        "_credentials",
-    )
-    return normalized.endswith(secret_suffixes)
-
-
-def _toml_section_name(line: str) -> str | None:
-    stripped = line.strip()
-    match = re.match(r"^\[{1,2}\s*([^\]]+?)\s*\]{1,2}(?:\s*#.*)?$", stripped)
-    if not match:
-        return None
-    return match.group(1).strip()
-
-
-def _split_toml_assignment(line: str) -> tuple[str, str, str] | None:
-    if line.lstrip().startswith("#"):
-        return None
-    if "=" not in line:
-        return None
-    left, right = line.split("=", 1)
-    key = left.strip().strip('"').strip("'")
-    if not key:
-        return None
-    return f"{left}=", key, right
-
-
-def _redact_config_toml(value: str) -> str:
-    lines = []
-    for line in str(value or "").splitlines(keepends=True):
-        assignment = _split_toml_assignment(line)
-        if assignment is None:
-            lines.append(line)
-            continue
-        prefix, key, _right = assignment
-        if _is_secret_key(key):
-            newline = "\n" if line.endswith("\n") else ""
-            lines.append(f'{prefix} "{REDACTED_SECRET_VALUE}"{newline}')
-            continue
-        lines.append(line)
-    return "".join(lines)
-
-
-def _toml_secret_values_by_path(value: str) -> dict[tuple[str, str], str]:
-    section = ""
-    values: dict[tuple[str, str], str] = {}
-    for line in str(value or "").splitlines(keepends=True):
-        section_name = _toml_section_name(line)
-        if section_name is not None:
-            section = section_name
-            continue
-        assignment = _split_toml_assignment(line)
-        if assignment is None:
-            continue
-        _prefix, key, right = assignment
-        if _is_secret_key(key):
-            values[(section, key)] = right
-    return values
-
-
-def _restore_redacted_toml_values(incoming: str, current: str) -> str:
-    current_values = _toml_secret_values_by_path(current)
-    section = ""
-    lines = []
-    redacted_values = {f'"{REDACTED_SECRET_VALUE}"', f"'{REDACTED_SECRET_VALUE}'", REDACTED_SECRET_VALUE}
-    for line in str(incoming or "").splitlines(keepends=True):
-        section_name = _toml_section_name(line)
-        if section_name is not None:
-            section = section_name
-            lines.append(line)
-            continue
-        assignment = _split_toml_assignment(line)
-        if assignment is None:
-            lines.append(line)
-            continue
-        prefix, key, right = assignment
-        if _is_secret_key(key) and right.strip() in redacted_values and (section, key) in current_values:
-            lines.append(f"{prefix}{current_values[(section, key)]}")
-            continue
-        lines.append(line)
-    return "".join(lines)
 
 
 def _validate_toml_if_available(value: str) -> None:
