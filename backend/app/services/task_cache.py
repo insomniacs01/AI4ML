@@ -9,8 +9,6 @@ from backend.app.models.task import TaskRecord, WorkflowStageRecord
 from backend.app.services.task_cache_payloads import (
     decode_stage_payload,
     decode_task_payload,
-    encode_stage_payload,
-    encode_task_payload,
 )
 from backend.app.services.task_cache_schema import ensure_task_cache_schema
 from backend.app.services.task_cache_stage_upsert import (
@@ -20,6 +18,13 @@ from backend.app.services.task_cache_stage_upsert import (
     stage_key,
 )
 from backend.app.services.task_cache_upsert import CachedTaskState, TaskUpsertPlan, build_task_upsert_plan
+from backend.app.services.task_cache_writes import (
+    delete_task_rows,
+    mark_stage_synced,
+    mark_task_synced,
+    write_stage_cache,
+    write_task_cache,
+)
 
 
 class TaskCache:
@@ -74,9 +79,9 @@ class TaskCache:
             for task in tasks:
                 plan = self._task_upsert_plan(conn, task, detail=detail)
                 if not plan.should_write:
-                    self._mark_synced(conn, task.team_id, task.id, synced_at=synced_at)
+                    mark_task_synced(conn, task.team_id, task.id, synced_at=synced_at)
                     continue
-                self._write_task_cache(conn, plan.task, synced_at=synced_at, is_detail=plan.is_detail)
+                write_task_cache(conn, plan.task, synced_at=synced_at, is_detail=plan.is_detail)
                 changed += 1
         return changed
 
@@ -85,7 +90,7 @@ class TaskCache:
 
     def delete_task(self, team_id: str, task_id: str) -> None:
         with self._lock, self._connect() as conn:
-            self._delete_task_rows(conn, [(team_id, task_id)])
+            delete_task_rows(conn, [(team_id, task_id)])
 
     def prune_team_tasks(self, team_id: str, live_task_ids: set[str]) -> int:
         with self._lock, self._connect() as conn:
@@ -96,7 +101,7 @@ class TaskCache:
             stale_ids = [str(row["task_id"]) for row in rows if str(row["task_id"]) not in live_task_ids]
             if not stale_ids:
                 return 0
-            self._delete_task_rows(conn, [(team_id, task_id) for task_id in stale_ids])
+            delete_task_rows(conn, [(team_id, task_id) for task_id in stale_ids])
             return len(stale_ids)
 
     def list_stage_records(self, team_id: str, task_id: str) -> list[WorkflowStageRecord]:
@@ -126,9 +131,9 @@ class TaskCache:
             for record in records:
                 plan = self._stage_upsert_plan(conn, record)
                 if not plan.should_write:
-                    self._mark_stage_synced(conn, record.team_id, record.task_id, plan.stage, synced_at=synced_at)
+                    mark_stage_synced(conn, record.team_id, record.task_id, plan.stage, synced_at=synced_at)
                     continue
-                self._write_stage_cache(conn, record, synced_at=synced_at, stage=plan.stage)
+                write_stage_cache(conn, record, synced_at=synced_at, stage=plan.stage)
                 changed += 1
         return changed
 
@@ -183,17 +188,6 @@ class TaskCache:
         conn.row_factory = sqlite3.Row
         return conn
 
-    @staticmethod
-    def _mark_synced(conn: sqlite3.Connection, team_id: str, task_id: str, *, synced_at: str) -> None:
-        conn.execute(
-            """
-            UPDATE task_cache
-            SET synced_at = ?
-            WHERE team_id = ? AND task_id = ?
-            """,
-            (synced_at, team_id, task_id),
-        )
-
     def _task_upsert_plan(
         self,
         conn: sqlite3.Connection,
@@ -238,109 +232,6 @@ class TaskCache:
         if row is None:
             return None
         return CachedStageState(updated_at=self._parse_datetime(str(row["updated_at"])))
-
-    @staticmethod
-    def _write_task_cache(
-        conn: sqlite3.Connection,
-        task: TaskRecord,
-        *,
-        synced_at: str,
-        is_detail: bool,
-    ) -> None:
-        conn.execute(
-            """
-            INSERT INTO task_cache (
-                team_id,
-                task_id,
-                payload,
-                updated_at,
-                synced_at,
-                is_detail
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(team_id, task_id) DO UPDATE SET
-                payload = excluded.payload,
-                updated_at = excluded.updated_at,
-                synced_at = excluded.synced_at,
-                is_detail = CASE
-                    WHEN task_cache.is_detail = 1 THEN 1
-                    ELSE excluded.is_detail
-                END
-            """,
-            (
-                task.team_id,
-                task.id,
-                encode_task_payload(task),
-                task.updated_at.isoformat(),
-                synced_at,
-                1 if is_detail else 0,
-            ),
-        )
-
-    @staticmethod
-    def _write_stage_cache(
-        conn: sqlite3.Connection,
-        record: WorkflowStageRecord,
-        *,
-        synced_at: str,
-        stage: str,
-    ) -> None:
-        conn.execute(
-            """
-            INSERT INTO stage_cache (
-                team_id,
-                task_id,
-                stage,
-                payload,
-                updated_at,
-                synced_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(team_id, task_id, stage) DO UPDATE SET
-                payload = excluded.payload,
-                updated_at = excluded.updated_at,
-                synced_at = excluded.synced_at
-            """,
-            (
-                record.team_id,
-                record.task_id,
-                stage,
-                encode_stage_payload(record),
-                record.updated_at.isoformat(),
-                synced_at,
-            ),
-        )
-
-    @staticmethod
-    def _delete_task_rows(conn: sqlite3.Connection, rows: list[tuple[str, str]]) -> None:
-        if not rows:
-            return
-        conn.executemany(
-            "DELETE FROM task_cache WHERE team_id = ? AND task_id = ?",
-            rows,
-        )
-        conn.executemany(
-            "DELETE FROM stage_cache WHERE team_id = ? AND task_id = ?",
-            rows,
-        )
-
-    @staticmethod
-    def _mark_stage_synced(
-        conn: sqlite3.Connection,
-        team_id: str,
-        task_id: str,
-        stage: str,
-        *,
-        synced_at: str,
-    ) -> None:
-        conn.execute(
-            """
-            UPDATE stage_cache
-            SET synced_at = ?
-            WHERE team_id = ? AND task_id = ? AND stage = ?
-            """,
-            (synced_at, team_id, task_id, stage),
-        )
 
     @staticmethod
     def _now_iso() -> str:
