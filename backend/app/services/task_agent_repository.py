@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
-from urllib.parse import quote
 
 from backend.app.models.task import (
-    HumanInteractionRequestStatus,
     TaskAgentEventRecord,
     TaskAgentMessageRecord,
     TaskAgentRuntimeRecord,
-    TaskHumanRequestRecord,
-    TaskRecord,
-    TokenUsageReport,
     WorkflowStage,
     WorkflowStageStatus,
     normalize_workflow_stage,
+)
+from backend.app.services.task_agent_repository_paths import (
+    agent_events_path,
+    agent_message_correlation_path,
+    agent_messages_path,
+    agent_run_lookup_path,
+    agent_run_update_path,
+    agent_runs_path,
 )
 from backend.app.services.task_store_payloads import TaskPayloadMapper
 
@@ -29,12 +31,7 @@ class TaskAgentRepository(TaskPayloadMapper):
 
     def list_agent_runs(self, team_id: str, task_id: str, *, access_token: str) -> list[TaskAgentRuntimeRecord]:
         payload = self._request_json(
-            path=(
-                "task_agent_runs"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                f"&task_id=eq.{quote(task_id, safe='')}"
-                "&order=updated_at.desc"
-            ),
+            path=agent_runs_path(team_id, task_id),
             access_token=access_token,
         )
         if not isinstance(payload, list):
@@ -70,14 +67,7 @@ class TaskAgentRepository(TaskPayloadMapper):
     ) -> TaskAgentRuntimeRecord:
         normalized_stage = normalize_workflow_stage(stage)
         existing = self._request_json(
-            path=(
-                "task_agent_runs"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                f"&task_id=eq.{quote(task_id, safe='')}"
-                f"&agent_id=eq.{quote(agent_id, safe='')}"
-                "&order=updated_at.desc"
-                "&limit=1"
-            ),
+            path=agent_run_lookup_path(team_id, task_id, agent_id),
             access_token=access_token,
         )
         existing_record = None
@@ -110,7 +100,7 @@ class TaskAgentRepository(TaskPayloadMapper):
         }
         if existing_record is not None:
             updated_payload = self._request_json(
-                path=f"task_agent_runs?id=eq.{quote(existing_record.id, safe='')}",
+                path=agent_run_update_path(existing_record.id),
                 access_token=access_token,
                 method="PATCH",
                 body=body,
@@ -134,13 +124,7 @@ class TaskAgentRepository(TaskPayloadMapper):
         limit: int = 80,
     ) -> list[TaskAgentEventRecord]:
         payload = self._request_json(
-            path=(
-                "task_agent_events"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                f"&task_id=eq.{quote(task_id, safe='')}"
-                "&order=created_at.desc"
-                f"&limit={max(1, min(limit, 200))}"
-            ),
+            path=agent_events_path(team_id, task_id, limit=limit),
             access_token=access_token,
         )
         if not isinstance(payload, list):
@@ -186,13 +170,7 @@ class TaskAgentRepository(TaskPayloadMapper):
         limit: int = 120,
     ) -> list[TaskAgentMessageRecord]:
         payload = self._request_json(
-            path=(
-                "task_agent_messages"
-                f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                f"&task_id=eq.{quote(task_id, safe='')}"
-                "&order=created_at.desc"
-                f"&limit={max(1, min(limit, 300))}"
-            ),
+            path=agent_messages_path(team_id, task_id, limit=limit),
             access_token=access_token,
         )
         if not isinstance(payload, list):
@@ -217,13 +195,7 @@ class TaskAgentRepository(TaskPayloadMapper):
     ) -> TaskAgentMessageRecord:
         if correlation_id:
             existing = self._request_json(
-                path=(
-                    "task_agent_messages"
-                    f"?select=*&team_id=eq.{quote(team_id, safe='')}"
-                    f"&task_id=eq.{quote(task_id, safe='')}"
-                    f"&correlation_id=eq.{quote(correlation_id, safe='')}"
-                    "&limit=1"
-                ),
+                path=agent_message_correlation_path(team_id, task_id, correlation_id),
                 access_token=access_token,
             )
             if isinstance(existing, list) and existing:
