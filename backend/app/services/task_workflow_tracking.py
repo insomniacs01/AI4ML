@@ -4,7 +4,6 @@ from fastapi import HTTPException, status
 
 from backend.app.core.supabase_auth import TeamAccessContext
 from backend.app.models.task import (
-    PRIMARY_WORKFLOW_STAGES,
     TaskAgentRuntimeRecord,
     TaskHumanRequestRecord,
     TaskRecord,
@@ -12,13 +11,10 @@ from backend.app.models.task import (
     WorkflowStage,
     WorkflowStageRecord,
     WorkflowStageStatus,
-    normalize_workflow_stage,
 )
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
 from backend.app.services.task_agent_collaboration import append_stage_agent_messages
-from backend.app.services.task_agent_definitions import agent_runtime_spec_for_stage
-from backend.app.services.task_agent_status import agent_progress_for_status
-from backend.app.services.task_human_request_status import human_request_is_active
+from backend.app.services.task_agent_runtime_bootstrap import build_missing_agent_runtimes
 from backend.app.services.task_workflow_agent_records import (
     WorkflowStageTrackingContext,
     build_workflow_stage_tracking_context,
@@ -202,48 +198,32 @@ def _ensure_agent_runtime_records(
     agent_runs: list[TaskAgentRuntimeRecord],
 ) -> list[TaskAgentRuntimeRecord]:
     task_store = get_task_store()
-    existing_by_agent = {record.agent_id: record for record in agent_runs}
-    stages_by_key = {normalize_workflow_stage(record.stage).value: record for record in stages}
-    open_request_stages = {
-        normalize_workflow_stage(request.stage).value
-        for request in human_requests
-        if human_request_is_active(request)
-    }
-
     created_records: list[TaskAgentRuntimeRecord] = []
-    for stage in PRIMARY_WORKFLOW_STAGES:
-        stage_key = stage.value
-        if stage_key in existing_by_agent:
-            continue
-        stage_record = stages_by_key.get(stage_key)
-        agent_spec = agent_runtime_spec_for_stage(stage)
-        resolved_status = stage_record.status if stage_record else WorkflowStageStatus.pending
-        if stage_key in open_request_stages:
-            resolved_status = WorkflowStageStatus.waiting_human
-        current_task = (
-            stage_record.summary
-            if stage_record and stage_record.summary
-            else str(agent_spec["description"])
-        )
+    for runtime in build_missing_agent_runtimes(
+        task_id=task.id,
+        stages=stages,
+        human_requests=human_requests,
+        agent_runs=agent_runs,
+    ):
         created_records.append(
             task_store.upsert_agent_run(
                 team_id=task.team_id,
                 task_id=task.id,
-                agent_id=stage_key,
-                stage=stage,
-                name=str(agent_spec["name"]),
-                role=str(agent_spec["role"]),
-                short_role=str(agent_spec["short_role"]),
-                status=resolved_status,
-                progress=agent_progress_for_status(resolved_status),
-                current_task=current_task,
+                agent_id=runtime.agent_id,
+                stage=runtime.stage,
+                name=runtime.name,
+                role=runtime.role,
+                short_role=runtime.short_role,
+                status=runtime.status,
+                progress=runtime.progress,
+                current_task=runtime.current_task,
                 access_token=team_access.access_token,
-                selected_connector_id=stage_record.selected_connector_id if stage_record else None,
-                model_name=stage_record.model_name if stage_record else None,
-                selection_source=stage_record.selection_source if stage_record else None,
-                artifact_refs=stage_record.artifact_refs if stage_record else None,
-                log_excerpt=stage_record.log_excerpt if stage_record else None,
-                worker_id=f"backend-agent-worker:{task.id}:{stage_key}",
+                selected_connector_id=runtime.selected_connector_id,
+                model_name=runtime.model_name,
+                selection_source=runtime.selection_source,
+                artifact_refs=runtime.artifact_refs,
+                log_excerpt=runtime.log_excerpt,
+                worker_id=runtime.worker_id,
             )
         )
     return [*agent_runs, *created_records]
