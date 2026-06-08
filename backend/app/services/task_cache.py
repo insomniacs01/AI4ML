@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
 from backend.app.models.task import TaskRecord, WorkflowStageRecord
-from backend.app.services.task_cache_payloads import (
-    decode_stage_payload,
-    decode_task_payload,
+from backend.app.services.task_cache_reads import (
+    cache_entry_is_fresh,
+    cached_stage_state,
+    cached_task_state,
+    get_cached_task,
+    latest_stage_sync,
+    latest_task_sync,
+    list_cached_stage_records,
+    list_cached_tasks,
+    stale_team_task_ids,
 )
 from backend.app.services.task_cache_schema import ensure_task_cache_schema
 from backend.app.services.task_cache_stage_upsert import (
-    CachedStageState,
     StageUpsertPlan,
     build_stage_upsert_plan,
-    stage_key,
 )
-from backend.app.services.task_cache_upsert import CachedTaskState, TaskUpsertPlan, build_task_upsert_plan
+from backend.app.services.task_cache_upsert import TaskUpsertPlan, build_task_upsert_plan
 from backend.app.services.task_cache_writes import (
     delete_task_rows,
     mark_stage_synced,
@@ -37,38 +42,11 @@ class TaskCache:
 
     def list_tasks(self, team_id: str) -> list[TaskRecord]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT payload
-                FROM task_cache
-                WHERE team_id = ?
-                ORDER BY updated_at DESC
-                """,
-                (team_id,),
-            ).fetchall()
-        tasks: list[TaskRecord] = []
-        for row in rows:
-            task = decode_task_payload(row["payload"])
-            if task is not None:
-                tasks.append(task)
-        return tasks
+            return list_cached_tasks(conn, team_id)
 
     def get_task(self, team_id: str, task_id: str, *, require_detail: bool = False) -> TaskRecord | None:
-        detail_clause = " AND is_detail = 1" if require_detail else ""
         with self._connect() as conn:
-            row = conn.execute(
-                f"""
-                SELECT payload
-                FROM task_cache
-                WHERE team_id = ? AND task_id = ?
-                {detail_clause}
-                LIMIT 1
-                """,
-                (team_id, task_id),
-            ).fetchone()
-        if row is None:
-            return None
-        return decode_task_payload(row["payload"])
+            return get_cached_task(conn, team_id, task_id, require_detail=require_detail)
 
     def upsert_tasks(self, tasks: list[TaskRecord], *, detail: bool = False) -> int:
         if not tasks:
@@ -94,11 +72,7 @@ class TaskCache:
 
     def prune_team_tasks(self, team_id: str, live_task_ids: set[str]) -> int:
         with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT task_id FROM task_cache WHERE team_id = ?",
-                (team_id,),
-            ).fetchall()
-            stale_ids = [str(row["task_id"]) for row in rows if str(row["task_id"]) not in live_task_ids]
+            stale_ids = stale_team_task_ids(conn, team_id, live_task_ids)
             if not stale_ids:
                 return 0
             delete_task_rows(conn, [(team_id, task_id) for task_id in stale_ids])
@@ -106,21 +80,7 @@ class TaskCache:
 
     def list_stage_records(self, team_id: str, task_id: str) -> list[WorkflowStageRecord]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT payload
-                FROM stage_cache
-                WHERE team_id = ? AND task_id = ?
-                ORDER BY updated_at DESC
-                """,
-                (team_id, task_id),
-            ).fetchall()
-        records: list[WorkflowStageRecord] = []
-        for row in rows:
-            record = decode_stage_payload(row["payload"])
-            if record is not None:
-                records.append(record)
-        return records
+            return list_cached_stage_records(conn, team_id, task_id)
 
     def upsert_stage_records(self, records: list[WorkflowStageRecord]) -> int:
         if not records:
@@ -147,17 +107,8 @@ class TaskCache:
 
     def has_fresh_stage_cache(self, team_id: str, task_id: str) -> bool:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT MAX(synced_at) AS synced_at
-                FROM stage_cache
-                WHERE team_id = ? AND task_id = ?
-                """,
-                (team_id, task_id),
-            ).fetchone()
-        if row is None or not row["synced_at"]:
-            return False
-        return self._is_fresh(self._parse_datetime(str(row["synced_at"])))
+            synced_at = latest_stage_sync(conn, team_id, task_id)
+        return cache_entry_is_fresh(synced_at, ttl_seconds=self.ttl_seconds)
 
     def _ensure_schema(self) -> None:
         with self._lock, self._connect() as conn:
@@ -170,18 +121,8 @@ class TaskCache:
         task_id: str | None = None,
         require_detail: bool = False,
     ) -> datetime | None:
-        if task_id:
-            detail_clause = " AND is_detail = 1" if require_detail else ""
-            query = f"SELECT synced_at FROM task_cache WHERE team_id = ? AND task_id = ?{detail_clause} LIMIT 1"
-            params: tuple[str, ...] = (team_id, task_id)
-        else:
-            query = "SELECT MAX(synced_at) AS synced_at FROM task_cache WHERE team_id = ?"
-            params = (team_id,)
         with self._connect() as conn:
-            row = conn.execute(query, params).fetchone()
-        if row is None or not row["synced_at"]:
-            return None
-        return self._parse_datetime(str(row["synced_at"]))
+            return latest_task_sync(conn, team_id=team_id, task_id=task_id, require_detail=require_detail)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -195,59 +136,15 @@ class TaskCache:
         *,
         detail: bool,
     ) -> TaskUpsertPlan:
-        return build_task_upsert_plan(self._cached_task_state(conn, task), task, detail=detail)
-
-    def _cached_task_state(self, conn: sqlite3.Connection, task: TaskRecord) -> CachedTaskState | None:
-        row = conn.execute(
-            """
-            SELECT payload, updated_at, is_detail
-            FROM task_cache
-            WHERE team_id = ? AND task_id = ?
-            LIMIT 1
-            """,
-            (task.team_id, task.id),
-        ).fetchone()
-        if row is None:
-            return None
-        return CachedTaskState(
-            task=decode_task_payload(str(row["payload"])),
-            updated_at=self._parse_datetime(str(row["updated_at"])),
-            is_detail=int(row["is_detail"] or 0) == 1,
-        )
+        return build_task_upsert_plan(cached_task_state(conn, task), task, detail=detail)
 
     def _stage_upsert_plan(self, conn: sqlite3.Connection, record: WorkflowStageRecord) -> StageUpsertPlan:
-        existing = self._cached_stage_state(conn, record)
+        existing = cached_stage_state(conn, record)
         return build_stage_upsert_plan(existing, record.stage, record.updated_at)
-
-    def _cached_stage_state(self, conn: sqlite3.Connection, record: WorkflowStageRecord) -> CachedStageState | None:
-        row = conn.execute(
-            """
-            SELECT updated_at
-            FROM stage_cache
-            WHERE team_id = ? AND task_id = ? AND stage = ?
-            LIMIT 1
-            """,
-            (record.team_id, record.task_id, stage_key(record.stage)),
-        ).fetchone()
-        if row is None:
-            return None
-        return CachedStageState(updated_at=self._parse_datetime(str(row["updated_at"])))
 
     @staticmethod
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    @staticmethod
-    def _parse_datetime(value: str) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-
     def _is_fresh(self, synced_at: datetime | None) -> bool:
-        if synced_at is None:
-            return False
-        return datetime.now(timezone.utc) - synced_at <= timedelta(seconds=self.ttl_seconds)
+        return cache_entry_is_fresh(synced_at, ttl_seconds=self.ttl_seconds)
