@@ -16,8 +16,11 @@ from backend.app.services.governance_team_records import (
     team_settings_from_payload,
 )
 from backend.app.services.governance_team_profiles import list_team_profiles, update_team_profile
+from backend.app.services.governance_team_member_updates import (
+    update_team_member_role,
+    update_team_member_status,
+)
 from backend.app.services.governance_team_queries import (
-    team_member_update_path,
     team_members_path,
     team_path,
     team_update_path,
@@ -142,25 +145,13 @@ class GovernanceTeamRepository:
         return settings, demoted, promoted
 
     def update_member_role(self, team_id: str, user_id: str, role: str, *, access_token: str) -> TeamMemberRecord:
-        payload = self._request_json(
-            path=team_member_update_path(team_id, user_id),
+        return update_team_member_role(
+            self._request_json,
+            self.list_profiles,
+            team_id,
+            user_id,
+            role,
             access_token=access_token,
-            method="PATCH",
-            body={"role": role},
-        )
-        try:
-            updated = self._unwrap_single_record(payload, "team member role update")
-        except ConnectionError as exc:
-            raise RuntimeError(
-                "Supabase team_members update did not return a row. "
-                "Apply the latest team_members update policy from supabase/schema.sql."
-            ) from exc
-        profiles = self.list_profiles([user_id], access_token=access_token)
-        profile = profiles[0] if profiles else None
-        return self._member_record_from_payload(
-            updated,
-            profile=profile,
-            default_role=role,
         )
 
     def update_member_status(
@@ -171,26 +162,13 @@ class GovernanceTeamRepository:
         *,
         access_token: str,
     ) -> TeamMemberRecord:
-        payload = self._request_json(
-            path=team_member_update_path(team_id, user_id),
+        return update_team_member_status(
+            self._request_json,
+            self.list_profiles,
+            team_id,
+            user_id,
+            member_status,
             access_token=access_token,
-            method="PATCH",
-            body={"member_status": member_status},
-        )
-        try:
-            updated = self._unwrap_single_record(payload, "team member status update")
-        except ConnectionError as exc:
-            raise RuntimeError(
-                "Supabase team_members update did not return a row. "
-                "Apply the latest team_members update policy from supabase/schema.sql."
-            ) from exc
-        profiles = self.list_profiles([user_id], access_token=access_token)
-        profile = profiles[0] if profiles else None
-        return self._member_record_from_payload(
-            updated,
-            profile=profile,
-            default_role="business_user",
-            default_status=member_status,
         )
 
     def update_profile(
