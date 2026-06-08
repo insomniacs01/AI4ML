@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access, require_team_admin_access
 from backend.app.api.errors import raise_store_http_error
 from backend.app.models.connector import (
@@ -15,12 +12,11 @@ from backend.app.models.connector import (
     ConnectorHealthCheckResponse,
     ConnectorListResponse,
     ConnectorRecord,
-    ConnectorTestStatus,
     ConnectorTestResponse,
     ConnectorUpdateRequest,
 )
-from backend.app.services.connector_runtime import normalize_provider_config, probe_provider
-from backend.app.services.connector_store import ConnectorStore
+from backend.app.services.connector_health import probe_and_save_connector, probe_and_save_connectors
+from backend.app.services.connector_runtime import normalize_provider_config
 from backend.app.services.service_registry import get_connector_store
 
 
@@ -29,28 +25,6 @@ router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 def _raise_connector_store_http_error(exc: RuntimeError | PermissionError | ConnectionError) -> None:
     raise_store_http_error(exc)
-
-
-def _probe_and_save_connector(
-    connector_store: ConnectorStore,
-    connector,
-    *,
-    team_access: TeamAccessContext,
-) -> tuple[bool, str, bool, bool, ConnectorRecord]:
-    settings = get_settings()
-    result = probe_provider(
-        base_url=connector.base_url,
-        api_key=connector.api_key,
-        model_name=connector.model_name,
-        wire_api=connector.wire_api,
-        timeout_seconds=settings.ai_provider_request_timeout_seconds,
-        user_agent=settings.ai_provider_user_agent,
-    )
-    connector.last_test_status = ConnectorTestStatus.passed if result.ok else ConnectorTestStatus.failed
-    connector.last_test_detail = result.detail
-    connector.last_tested_at = datetime.now(timezone.utc)
-    connector = connector_store.save_connector(connector, access_token=team_access.access_token)
-    return result.ok, result.detail, result.model_listed, result.inference_ok, connector.to_public()
 
 
 @router.get("", response_model=ConnectorListResponse)
@@ -102,26 +76,11 @@ def health_check_connectors(
 ) -> ConnectorHealthCheckResponse:
     connector_store = get_connector_store()
     try:
-        connectors = connector_store.list_connectors(
-            team_access.team_id,
+        results = probe_and_save_connectors(
+            connector_store,
+            team_id=team_access.team_id,
             access_token=team_access.access_token,
         )
-        results: list[ConnectorTestResponse] = []
-        for connector in connectors:
-            ok, detail, model_listed, inference_ok, public_connector = _probe_and_save_connector(
-                connector_store,
-                connector,
-                team_access=team_access,
-            )
-            results.append(
-                ConnectorTestResponse(
-                    ok=ok,
-                    detail=detail,
-                    model_listed=model_listed,
-                    inference_ok=inference_ok,
-                    connector=public_connector,
-                )
-            )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_connector_store_http_error(exc)
 
@@ -183,21 +142,15 @@ def test_connector(
         if connector is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="connector not found")
 
-        ok, detail, model_listed, inference_ok, public_connector = _probe_and_save_connector(
+        result = probe_and_save_connector(
             connector_store,
             connector,
-            team_access=team_access,
+            access_token=team_access.access_token,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         _raise_connector_store_http_error(exc)
 
-    return ConnectorTestResponse(
-        ok=ok,
-        detail=detail,
-        model_listed=model_listed,
-        inference_ok=inference_ok,
-        connector=public_connector,
-    )
+    return result
 
 
 @router.post("/{connector_id}/activate", response_model=ConnectorActivateResponse)
