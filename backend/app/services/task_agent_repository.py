@@ -18,6 +18,7 @@ from backend.app.services.task_agent_repository_paths import (
     agent_run_update_path,
     agent_runs_path,
 )
+from backend.app.services.task_agent_runtime_writes import build_agent_run_payload
 from backend.app.services.task_store_payloads import TaskPayloadMapper
 
 
@@ -77,27 +78,28 @@ class TaskAgentRepository(TaskPayloadMapper):
             existing_record,
             status=status,
         )
-        body = {
-            "team_id": team_id,
-            "task_id": task_id,
-            "agent_id": agent_id,
-            "stage": self._enum_value(normalized_stage),
-            "name": name,
-            "role": role,
-            "short_role": short_role,
-            "status": self._enum_value(status),
-            "progress": max(0, min(int(progress), 100)),
-            "current_task": current_task,
-            "selected_connector_id": selected_connector_id,
-            "model_name": model_name,
-            "selection_source": selection_source,
-            "artifact_refs": artifact_refs,
-            "started_at": started_at.isoformat() if started_at else None,
-            "finished_at": finished_at.isoformat() if finished_at else None,
-            "duration_seconds": duration_seconds,
-            "log_excerpt": log_excerpt if log_excerpt is not None else (existing_record.log_excerpt if existing_record else None),
-            "worker_id": worker_id,
-        }
+        body = build_agent_run_payload(
+            team_id=team_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            stage=normalized_stage,
+            name=name,
+            role=role,
+            short_role=short_role,
+            status=status,
+            progress=progress,
+            current_task=current_task,
+            selected_connector_id=selected_connector_id,
+            model_name=model_name,
+            selection_source=selection_source,
+            artifact_refs=artifact_refs,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=duration_seconds,
+            log_excerpt=log_excerpt,
+            existing_log_excerpt=existing_record.log_excerpt if existing_record else None,
+            worker_id=worker_id,
+        )
         if existing_record is not None:
             updated_payload = self._request_json(
                 path=agent_run_update_path(existing_record.id),
