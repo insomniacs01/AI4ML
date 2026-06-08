@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from backend.app.models.task import RunSummary, TaskRecord, TaskStatus
+from backend.app.models.task import TaskRecord, TaskStatus
 from backend.app.services.task_report_agent_loop import (
-    baseline_experiment_lines,
-    compare_task_to_baseline,
-    comparison_sentence,
+    agent_loop,
+    checklist_report_lines,
+    quality_gate_report_lines,
+    stop_condition_report_lines,
+    tuning_attempt_report_lines,
+    workflow_report_lines,
 )
 
 
@@ -21,56 +24,51 @@ def _task() -> TaskRecord:
         label_column="target",
         problem_type="classification",
         status=TaskStatus.completed,
+        structured_requirements={"agent_loop": {"workflow": [{"label": "数据检查", "status": "completed"}]}},
         created_at=now,
         updated_at=now,
     )
 
 
-def test_baseline_experiment_lines_render_class_distribution_and_notes() -> None:
-    lines = baseline_experiment_lines(
-        {
-            "baseline": {
-                "status": "completed",
-                "label": "多数类简单对照",
-                "problem_type": "classification",
-                "target_column": "target",
-                "train_count": 10,
-                "validation_count": 4,
-                "metric_name": "accuracy",
-                "metric_value": 0.7,
-                "majority_label": "yes",
-                "majority_ratio": 0.7,
-                "class_distribution": {"yes": 7, "no": 3},
-                "notes": ["使用训练集多数类作为预测。"],
+def test_agent_loop_returns_structured_agent_loop_only() -> None:
+    assert agent_loop(_task()) == {"workflow": [{"label": "数据检查", "status": "completed"}]}
+
+
+def test_agent_loop_report_lines_render_tables_and_fallbacks() -> None:
+    assert workflow_report_lines({}) == ["- 尚未记录自动建模执行流程。"]
+    assert checklist_report_lines({}) == ["- 尚未记录任务检查清单。"]
+    assert quality_gate_report_lines({}) == ["- 尚未形成结果检查结论。"]
+    assert stop_condition_report_lines({}) == ["- 尚未记录停止条件。"]
+    assert tuning_attempt_report_lines({}) == ["- 尚未记录优化尝试。"]
+
+    payload = {
+        "workflow": [{"label": "数据检查", "status": "completed", "detail": "profile ready"}],
+        "checklist": [{"title": "目标列确认", "status": "passed", "detail": "target"}],
+        "quality_gates": [{"title": "优于简单对照", "status": "passed", "detail": "better"}],
+        "tuning_attempts": [
+            {
+                "attempt_index": 1,
+                "kind": "model_run",
+                "status": "accepted",
+                "hypothesis": "linear baseline",
+                "action": "fit ridge",
+                "metric_before": {"metric_name": "mae", "metric_value": 3.0},
+                "metric_after": {"metric_name": "mae", "metric_value": 2.0},
+                "notes": "accepted",
             }
+        ],
+        "stop_conditions": {
+            "max_attempts": 5,
+            "min_relative_improvement": 0.01,
+            "max_consecutive_failed_or_unhelpful_attempts": 2,
+            "current_model_attempts": 1,
+            "recent_failed_or_unhelpful_attempts": 0,
+            "should_stop": False,
         },
-        _task(),
-    )
+    }
 
-    text = "\n".join(lines)
-
-    assert "| 多数类 | yes |" in text
-    assert "| 多数类训练占比 | 70.0% |" in text
-    assert "多数类简单对照的训练集类别分布如下。" in text
-    assert "- 使用训练集多数类作为预测。" in text
-
-
-def test_compare_task_to_baseline_reports_lower_metric_improvement() -> None:
-    task = _task()
-    task.last_run = RunSummary(
-        best_model="ridge",
-        metric_name="mae",
-        metric_value=2.0,
-        output_dir="D:/runs/task",
-    )
-
-    comparison = compare_task_to_baseline(
-        task,
-        {"status": "completed", "metric_name": "mae", "metric_value": 3.0},
-    )
-
-    assert comparison is not None
-    assert comparison["better"] is True
-    assert comparison["direction"] == "lower"
-    assert comparison["relative_delta"] == 1 / 3
-    assert comparison_sentence(comparison) == "模型 mae = 2，简单对照 = 3，相对简单对照降低 33.3%"
+    assert "| 数据检查 | 已完成 | profile ready |" in "\n".join(workflow_report_lines(payload))
+    assert "| 目标列确认 | 通过 | target |" in "\n".join(checklist_report_lines(payload))
+    assert "| 优于简单对照 | 通过 | better |" in "\n".join(quality_gate_report_lines(payload))
+    assert "mae=3 -> mae=2" in "\n".join(tuning_attempt_report_lines(payload))
+    assert "| 最大模型尝试次数 | 5 |" in "\n".join(stop_condition_report_lines(payload))

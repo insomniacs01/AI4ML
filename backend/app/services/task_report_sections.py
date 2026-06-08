@@ -17,9 +17,9 @@ from backend.app.services.task_report_dataset import (
     field_quality_table_lines as _field_quality_table_lines,
     task_background_lines as _task_background_lines,
 )
+from backend.app.services.task_report_baseline import baseline_experiment_lines as _baseline_experiment_lines
 from backend.app.services.task_report_agent_loop import (
     agent_loop as _agent_loop,
-    baseline_experiment_lines as _baseline_experiment_lines,
     checklist_report_lines as _checklist_report_lines,
     quality_gate_report_lines as _quality_gate_report_lines,
     stop_condition_report_lines as _stop_condition_report_lines,

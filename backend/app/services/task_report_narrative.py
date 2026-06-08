@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.models.task import DatasetProfile, FeatureImportanceEntry, TaskRecord
-from backend.app.services.task_report_agent_loop import (
+from backend.app.services.task_report_baseline import (
     compare_task_to_baseline,
     comparison_sentence,
 )
