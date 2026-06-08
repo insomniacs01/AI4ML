@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from backend.app.models.governance import TeamMemberRecord
 from backend.app.models.task import (
     HumanInteractionDecisionAction,
-    HumanInteractionRequestStatus,
     InteractionAssigneeType,
     TaskHumanCollaborationResponse,
     TaskHumanRequestCreateRequest,
@@ -19,17 +18,15 @@ from backend.app.models.task import (
 )
 from backend.app.services.task_human_access import (
     ResolvedHumanAssignee,
-    assert_actor_can_decide_human_request,
     resolve_human_request_assignee,
 )
 from backend.app.services.task_human_context import (
     append_task_human_decision,
 )
 from backend.app.services.task_human_expiration import (
-    expire_human_request,
     expire_overdue_human_requests,
-    is_overdue_human_request,
 )
+from backend.app.services.task_human_decision_requests import require_decidable_human_request
 from backend.app.services.task_human_parameters import apply_human_decision_parameters
 from backend.app.services.task_human_payloads import (
     build_human_decision_history_entry,
@@ -45,7 +42,6 @@ from backend.app.services.task_human_post_decision import (
 from backend.app.services.task_human_reassignment import reassign_human_request
 from backend.app.services.task_human_stages import (
     HumanStageSnapshotBuilder,
-    is_active_request,
     sort_stages,
     stage_key,
 )
@@ -195,19 +191,14 @@ class TaskHumanCollaborationService:
         actor_role: str = "admin",
         team_members: list[TeamMemberRecord] | None = None,
     ) -> TaskHumanCollaborationResponse:
-        request = self.task_store.get_human_request(task.team_id, task.id, request_id, access_token=access_token)
-        if request is None:
-            raise ValueError("human request not found")
-        now = datetime.now(timezone.utc)
-        if is_overdue_human_request(request, now=now):
-            expire_human_request(request, expired_at=now)
-            self.task_store.update_human_request(request, access_token=access_token)
-            raise RuntimeError("human request has expired")
-        if not is_active_request(request):
-            raise RuntimeError("human request has already been closed")
-
-        assert_actor_can_decide_human_request(request, actor_id=decided_by, actor_role=actor_role)
-
+        request = require_decidable_human_request(
+            self.task_store,
+            task,
+            request_id,
+            access_token=access_token,
+            actor_id=decided_by,
+            actor_role=actor_role,
+        )
         if payload.action == HumanInteractionDecisionAction.reassign:
             return self._reassign_request(
                 task,
