@@ -13,16 +13,11 @@ from backend.app.services.codex_backend import (
     resume_codex_task,
     start_codex_task,
 )
-from backend.app.services.platform_limits import (
-    PlatformLimitError,
-    assert_time_budget_within_limit,
-    assert_user_can_start_task,
-)
+from backend.app.services.platform_limits import PlatformLimitError
 from backend.app.services.quota_runtime_guard import clear_quota_guard, quota_token_budget
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
 from backend.app.services.task_codex_metadata import update_codex_structured_metadata
 from backend.app.services.task_codex_sync import sync_codex_task_state
-from backend.app.services.task_human_parameter_guidance import resolve_task_run_time_limit
 from backend.app.services.task_routing import _assert_quota_allows_action
 from backend.app.services.task_runtime_activity import (
     ActiveCodexTaskConflict,
@@ -42,15 +37,10 @@ from backend.app.services.task_runtime_resume import (
     has_open_human_confirmation_requests,
     resume_note_for_improvement_decision,
 )
+from backend.app.services.task_run_preflight import assert_task_run_preflight
 
 
 router = APIRouter(tags=["task-runtime"])
-
-
-def _task_requested_time_limit(task: TaskRecord, payload: TaskRunRequest) -> int | None:
-    if payload.time_limit is not None:
-        return payload.time_limit
-    return resolve_task_run_time_limit(task, None)
 
 
 def _assert_codex_task_can_control_current_activity(
@@ -76,19 +66,7 @@ def run_task(
     if not task.dataset_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="dataset has not been uploaded")
     try:
-        all_tasks = task_store.list_tasks(
-            team_access.team_id,
-            access_token=team_access.access_token,
-            lightweight=True,
-            prefer_cache=False,
-        )
-        assert_user_can_start_task(
-            get_settings(),
-            tasks=all_tasks,
-            user_id=team_access.user.id,
-            task_id=task.id,
-        )
-        assert_time_budget_within_limit(get_settings(), _task_requested_time_limit(task, payload))
+        assert_task_run_preflight(task_store, task, payload, team_access, settings=get_settings())
     except PlatformLimitError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (RuntimeError, PermissionError, ConnectionError) as exc:
