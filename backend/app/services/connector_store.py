@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 from backend.app.core.config import Settings
 from backend.app.core.secret_box import decrypt_secret, encrypt_secret, is_encrypted_secret
@@ -15,11 +12,13 @@ from backend.app.models.connector import (
     ConnectorWireApi,
     StoredConnectorRecord,
 )
+from backend.app.services.connector_http import ConnectorHttpClient, unwrap_single_record
 
 
 class ConnectorStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.http = ConnectorHttpClient(settings)
 
     def list_connectors(self, team_id: str, *, access_token: str) -> list[StoredConnectorRecord]:
         payload = self._request_json(
@@ -61,7 +60,7 @@ class ConnectorStore:
                 "is_active": False,
             },
         )
-        return self._connector_from_payload(self._unwrap_single_record(created_payload, "connector create"))
+        return self._connector_from_payload(unwrap_single_record(created_payload, "connector create"))
 
     def get_connector(self, team_id: str, connector_id: str, *, access_token: str) -> StoredConnectorRecord | None:
         payload = self._request_json(
@@ -119,7 +118,7 @@ class ConnectorStore:
                 "last_test_detail": connector.last_test_detail,
             },
         )
-        return self._connector_from_payload(self._unwrap_single_record(updated_payload, "connector update"))
+        return self._connector_from_payload(unwrap_single_record(updated_payload, "connector update"))
 
     def update_connector(
         self,
@@ -157,7 +156,7 @@ class ConnectorStore:
                 "target_connector_id": connector_id,
             },
         )
-        return self._connector_from_payload(self._unwrap_single_record(activated_payload, "connector activate"))
+        return self._connector_from_payload(unwrap_single_record(activated_payload, "connector activate"))
 
     def deactivate_connector(self, team_id: str, connector_id: str, *, access_token: str) -> StoredConnectorRecord:
         payload = self._request_json(
@@ -170,7 +169,7 @@ class ConnectorStore:
             method="PATCH",
             body={"is_active": False},
         )
-        return self._connector_from_payload(self._unwrap_single_record(payload, "connector deactivate"))
+        return self._connector_from_payload(unwrap_single_record(payload, "connector deactivate"))
 
     def delete_connector(self, team_id: str, connector_id: str, *, access_token: str) -> bool:
         self._request_json(
@@ -209,69 +208,13 @@ class ConnectorStore:
         body: dict[str, Any] | None = None,
         expect_json: bool = True,
     ) -> Any:
-        self._ensure_configured()
-
-        url = f"{self.settings.supabase_rest_url.rstrip('/')}/{path.lstrip('/')}"
-        headers = {
-            "Accept": "application/json",
-            "apikey": self.settings.supabase_publishable_key,
-            "Authorization": f"Bearer {access_token}",
-            "Accept-Profile": "public",
-            "Content-Profile": "public",
-        }
-        data = None
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-            headers["Prefer"] = "return=representation"
-            data = json.dumps(body).encode("utf-8")
-
-        request = Request(url, data=data, headers=headers, method=method)
-
-        try:
-            with urlopen(request, timeout=self.settings.supabase_timeout_seconds) as response:  # noqa: S310
-                raw_body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            payload = exc.read().decode("utf-8", errors="ignore")
-            if exc.code in (401, 403):
-                raise PermissionError("Supabase rejected the connector storage request.") from exc
-            if "ai_connectors" in payload and "does not exist" in payload:
-                raise RuntimeError(
-                    "Supabase ai_connectors schema is missing. "
-                    "Apply supabase/schema.sql before using connector storage."
-                ) from exc
-            if "activate_ai_connector" in payload and "Could not find the function" in payload:
-                raise RuntimeError(
-                    "Supabase activate_ai_connector RPC is missing. "
-                    "Apply supabase/schema.sql before using connector activation."
-                ) from exc
-            raise ConnectionError(
-                f"Supabase connector request failed with HTTP {exc.code}. Response: {payload or '<empty>'}"
-            ) from exc
-        except (URLError, TimeoutError, OSError) as exc:
-            raise ConnectionError("Could not reach Supabase to read or write connector records.") from exc
-
-        if not expect_json:
-            return None
-        if not raw_body:
-            return None
-
-        try:
-            return json.loads(raw_body)
-        except json.JSONDecodeError as exc:
-            raise ConnectionError("Supabase connector response was not valid JSON.") from exc
-
-    def _ensure_configured(self) -> None:
-        if self.settings.supabase_configured:
-            return
-        raise RuntimeError(
-            "Supabase connector storage is not configured. "
-            "Set AI4ML_SUPABASE_URL / AI4ML_SUPABASE_PUBLISHABLE_KEY or keep frontend/.env.local available."
+        return self.http.request_json(
+            path=path,
+            access_token=access_token,
+            method=method,
+            body=body,
+            expect_json=expect_json,
         )
 
-    @staticmethod
-    def _unwrap_single_record(payload: Any, action: str) -> dict[str, Any]:
-        if isinstance(payload, dict):
-            return payload
-        if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
-            return payload[0]
-        raise ConnectionError(f"Unexpected Supabase response shape during {action}.")
+    def _ensure_configured(self) -> None:
+        self.http._ensure_configured()  # noqa: SLF001
