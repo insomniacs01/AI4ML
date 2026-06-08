@@ -12,14 +12,11 @@ from backend.app.models.governance import (
 from backend.app.services.governance_http import unwrap_single_record
 from backend.app.services.governance_team_ownership import resolve_ownership_transfer
 from backend.app.services.governance_team_records import (
-    profile_records_from_payload,
     team_member_from_payload,
     team_settings_from_payload,
 )
+from backend.app.services.governance_team_profiles import list_team_profiles, update_team_profile
 from backend.app.services.governance_team_queries import (
-    normalized_profile_ids,
-    profile_update_path,
-    profiles_path,
     team_member_update_path,
     team_members_path,
     team_path,
@@ -32,7 +29,6 @@ RequestJson = Callable[..., Any]
 class GovernanceTeamRepository:
     _team_settings_from_payload = staticmethod(team_settings_from_payload)
     _member_record_from_payload = staticmethod(team_member_from_payload)
-    _profile_records_from_payload = staticmethod(profile_records_from_payload)
     _resolve_ownership_transfer = staticmethod(resolve_ownership_transfer)
     _unwrap_single_record = staticmethod(unwrap_single_record)
 
@@ -204,27 +200,16 @@ class GovernanceTeamRepository:
         display_name: str | None,
         access_token: str,
     ) -> TeamProfileRecord:
-        payload = self._request_json(
-            path=profile_update_path(user_id),
+        return update_team_profile(
+            self._request_json,
+            user_id,
+            display_name=display_name,
             access_token=access_token,
-            method="PATCH",
-            body={"display_name": display_name.strip() if display_name else None},
-        )
-        row = self._unwrap_single_record(payload, "profile update")
-        return TeamProfileRecord(
-            user_id=str(row.get("user_id")),
-            email=str(row.get("email")) if row.get("email") else None,
-            display_name=str(row.get("display_name")) if row.get("display_name") else None,
         )
 
     def list_profiles(self, user_ids: list[str], *, access_token: str) -> list[TeamProfileRecord]:
-        normalized_ids = normalized_profile_ids(user_ids)
-        if not normalized_ids:
-            return []
-        payload = self._request_json(
-            path=profiles_path(normalized_ids),
+        return list_team_profiles(
+            self._request_json,
+            user_ids,
             access_token=access_token,
         )
-        if not isinstance(payload, list):
-            raise ConnectionError("Unexpected profile response from Supabase.")
-        return self._profile_records_from_payload(payload)
