@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import math
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,11 +19,17 @@ from backend.app.services.task_agent_baseline_metrics import (
     resolve_regression_metric,
     validation_score,
 )
+from backend.app.services.task_agent_baseline_scoring import (
+    class_distribution,
+    classification_scores,
+    deterministic_split,
+    finite_numeric_values,
+    regression_scores,
+)
 from backend.app.services.task_targets import target_columns_from_task
 
 
 MAX_BASELINE_ROWS = 50_000
-MAX_PREVIEW_DISTINCT_VALUES = 200
 __all__ = [
     "baseline_completed",
     "compare_metric",
@@ -85,14 +90,14 @@ def _compute_regression_baseline(
     metric_name: str,
     target_column: str,
 ) -> dict[str, Any]:
-    numeric_values = _finite_numeric_values(raw_values)
+    numeric_values = finite_numeric_values(raw_values)
     if len(numeric_values) < 5:
         return _baseline_blocked("目标列无法稳定转换为数值，不能计算回归简单对照。")
-    train, validation = _deterministic_split(numeric_values)
+    train, validation = deterministic_split(numeric_values)
     if not train or not validation:
         return _baseline_blocked("样本划分后训练集或验证集为空。")
     prediction = sum(train) / len(train)
-    scores = _regression_scores(validation, prediction)
+    scores = regression_scores(validation, prediction)
     resolved_metric, metric_value = resolve_regression_metric(metric_name, scores)
     return {
         "status": "completed",
@@ -117,46 +122,20 @@ def _compute_regression_baseline(
     }
 
 
-def _finite_numeric_values(raw_values: list[str]) -> list[float]:
-    numeric_values: list[float] = []
-    for value in raw_values:
-        try:
-            numeric = float(value)
-        except ValueError:
-            continue
-        if math.isfinite(numeric):
-            numeric_values.append(numeric)
-    return numeric_values
-
-
-def _regression_scores(validation: list[float], prediction: float) -> dict[str, float]:
-    errors = [value - prediction for value in validation]
-    squared_errors = [error * error for error in errors]
-    mean_validation = sum(validation) / len(validation)
-    total_ss = sum((value - mean_validation) ** 2 for value in validation)
-    residual_ss = sum(squared_errors)
-    return {
-        "rmse": math.sqrt(residual_ss / len(errors)),
-        "mae": sum(abs(error) for error in errors) / len(errors),
-        "mse": residual_ss / len(errors),
-        "r2": 1 - residual_ss / total_ss if total_ss > 0 else 0.0,
-    }
-
-
 def _compute_classification_baseline(
     task: TaskRecord,
     raw_values: list[str],
     metric_name: str,
     target_column: str,
 ) -> dict[str, Any]:
-    train, validation = _deterministic_split(raw_values)
+    train, validation = deterministic_split(raw_values)
     if not train or not validation:
         return _baseline_blocked("样本划分后训练集或验证集为空。")
     counts = Counter(train)
     majority_label, majority_count = counts.most_common(1)[0]
-    scores = _classification_scores(train, validation, majority_label)
+    scores = classification_scores(train, validation, majority_label)
     resolved_metric, metric_value = resolve_classification_metric(metric_name, scores)
-    distribution = _class_distribution(counts)
+    distribution = class_distribution(counts)
     return {
         "status": "completed",
         "method": "majority_class_baseline",
@@ -180,53 +159,6 @@ def _compute_classification_baseline(
             "如果正式模型没有明显超过多数类简单对照，应检查类别不均衡、目标列和特征有效性。",
         ],
     }
-
-
-def _classification_scores(train: list[str], validation: list[str], majority_label: str) -> dict[str, float]:
-    predictions = [majority_label for _value in validation]
-    accuracy = _accuracy(predictions, validation)
-    scores = {
-        "accuracy": accuracy,
-        "balanced_accuracy": _balanced_accuracy(predictions, validation, accuracy),
-    }
-    if len(set(train)) == 2:
-        scores["f1"] = _binary_f1(predictions, validation, majority_label)
-    return scores
-
-
-def _accuracy(predictions: list[str], validation: list[str]) -> float:
-    return sum(1 for prediction, actual in zip(predictions, validation) if prediction == actual) / len(validation)
-
-
-def _balanced_accuracy(predictions: list[str], validation: list[str], fallback: float) -> float:
-    recalls = []
-    for label in sorted(set(validation)):
-        total = sum(1 for value in validation if value == label)
-        correct = sum(1 for prediction, actual in zip(predictions, validation) if actual == label and prediction == actual)
-        recalls.append(correct / total if total else 0.0)
-    return sum(recalls) / len(recalls) if recalls else fallback
-
-
-def _binary_f1(predictions: list[str], validation: list[str], positive: str) -> float:
-    tp = sum(1 for prediction, actual in zip(predictions, validation) if prediction == positive and actual == positive)
-    fp = sum(1 for prediction, actual in zip(predictions, validation) if prediction == positive and actual != positive)
-    fn = sum(1 for prediction, actual in zip(predictions, validation) if prediction != positive and actual == positive)
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
-    return 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-
-
-def _class_distribution(counts: Counter[str]) -> dict[str, int]:
-    return {str(label): count for label, count in counts.most_common(MAX_PREVIEW_DISTINCT_VALUES)}
-
-
-def _deterministic_split(values: list[Any]) -> tuple[list[Any], list[Any]]:
-    validation = [value for index, value in enumerate(values) if index % 5 == 0]
-    train = [value for index, value in enumerate(values) if index % 5 != 0]
-    if not validation and values:
-        validation = values[-1:]
-        train = values[:-1]
-    return train, validation
 
 
 def _baseline_blocked(detail: str) -> dict[str, Any]:
