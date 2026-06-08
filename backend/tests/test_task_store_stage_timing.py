@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import TestCase
 
 from backend.app.models.task import WorkflowStage, WorkflowStageRecord, WorkflowStageStatus
-from backend.app.services.task_store import TaskStore
+from backend.app.services.task_store_stage_timing import resolve_stage_timing
 
 
 class TaskStoreStageTimingTests(TestCase):
@@ -26,13 +26,15 @@ class TaskStoreStageTimingTests(TestCase):
             updated_at=previous_finished_at,
         )
 
-        started_at, finished_at, duration_seconds = TaskStore._resolve_stage_timing(
+        now = previous_finished_at + timedelta(minutes=10)
+
+        started_at, finished_at, duration_seconds = resolve_stage_timing(
             existing,
             status=WorkflowStageStatus.running,
+            now=now,
         )
 
-        self.assertIsNotNone(started_at)
-        self.assertGreater(started_at, previous_finished_at)
+        self.assertEqual(started_at, now)
         self.assertIsNone(finished_at)
         self.assertIsNone(duration_seconds)
 
@@ -52,13 +54,14 @@ class TaskStoreStageTimingTests(TestCase):
             updated_at=created_at,
         )
 
-        started_at, finished_at, duration_seconds = TaskStore._resolve_stage_timing(
+        now = created_at + timedelta(minutes=15)
+
+        started_at, finished_at, duration_seconds = resolve_stage_timing(
             existing,
             status=WorkflowStageStatus.completed,
+            now=now,
         )
 
         self.assertEqual(started_at, created_at)
-        self.assertIsNotNone(finished_at)
-        self.assertGreater(finished_at, created_at)
-        self.assertIsNotNone(duration_seconds)
-        self.assertGreater(duration_seconds, 0)
+        self.assertEqual(finished_at, now)
+        self.assertEqual(duration_seconds, 900)

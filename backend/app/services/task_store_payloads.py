@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime
 from typing import Any
-from urllib.parse import quote
 
 from backend.app.models.task import (
     HumanInteractionRequestStatus,
@@ -22,68 +19,8 @@ from backend.app.models.task import (
     WorkflowStageStatus,
     normalize_workflow_stage,
 )
+from backend.app.services.task_store_stage_timing import resolve_stage_timing
 from backend.app.services.token_usage import get_task_analysis_token_usage
-
-
-def _stage_timing_bounds(
-    existing: WorkflowStageRecord | TaskAgentRuntimeRecord | None,
-    *,
-    status: WorkflowStageStatus,
-    now: datetime,
-) -> tuple[datetime | None, datetime | None]:
-    if status == WorkflowStageStatus.running:
-        return _running_stage_timing_bounds(existing, now)
-    if status in {WorkflowStageStatus.completed, WorkflowStageStatus.failed}:
-        return _terminal_stage_timing_bounds(existing, now)
-    if status in {WorkflowStageStatus.pending, WorkflowStageStatus.waiting_human}:
-        return _inactive_stage_timing_bounds(existing)
-    return _existing_stage_timing_bounds(existing)
-
-
-def _running_stage_timing_bounds(
-    existing: WorkflowStageRecord | TaskAgentRuntimeRecord | None,
-    now: datetime,
-) -> tuple[datetime | None, datetime | None]:
-    started_at = existing.started_at if existing else None
-    if existing is None or existing.status != WorkflowStageStatus.running:
-        started_at = now
-    return started_at, None
-
-
-def _terminal_stage_timing_bounds(
-    existing: WorkflowStageRecord | TaskAgentRuntimeRecord | None,
-    now: datetime,
-) -> tuple[datetime | None, datetime | None]:
-    started_at = existing.started_at if existing else None
-    finished_at = existing.finished_at if existing else None
-    if started_at is None:
-        started_at = existing.created_at if existing else now
-    if finished_at is None:
-        finished_at = now
-    return started_at, finished_at
-
-
-def _inactive_stage_timing_bounds(
-    existing: WorkflowStageRecord | TaskAgentRuntimeRecord | None,
-) -> tuple[datetime | None, datetime | None]:
-    started_at, finished_at = _existing_stage_timing_bounds(existing)
-    if started_at is None:
-        finished_at = None
-    return started_at, finished_at
-
-
-def _existing_stage_timing_bounds(
-    existing: WorkflowStageRecord | TaskAgentRuntimeRecord | None,
-) -> tuple[datetime | None, datetime | None]:
-    if existing is None:
-        return None, None
-    return existing.started_at, existing.finished_at
-
-
-def _stage_duration_seconds(started_at: datetime | None, finished_at: datetime | None) -> float | None:
-    if started_at is None or finished_at is None:
-        return None
-    return max((finished_at - started_at).total_seconds(), 0.0)
 
 
 class TaskPayloadMapper:
@@ -177,9 +114,7 @@ class TaskPayloadMapper:
         *,
         status: WorkflowStageStatus,
     ) -> tuple[datetime | None, datetime | None, float | None]:
-        now = datetime.now(timezone.utc)
-        started_at, finished_at = _stage_timing_bounds(existing, status=status, now=now)
-        return started_at, finished_at, _stage_duration_seconds(started_at, finished_at)
+        return resolve_stage_timing(existing, status=status)
 
     @classmethod
     def _human_request_from_payload(cls, payload: dict[str, Any]) -> TaskHumanRequestRecord:
