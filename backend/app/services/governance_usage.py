@@ -9,21 +9,20 @@ from backend.app.models.governance import (
     TeamQuotaRecord,
     TokenLedgerRecord,
 )
-from backend.app.services.governance_http import unwrap_single_record
+from backend.app.services.governance_quota_accounts import (
+    read_existing_quota_account,
+    upsert_quota_account,
+)
+from backend.app.services.governance_quota_listing import build_quota_records
 from backend.app.services.governance_quota_records import (
-    QuotaScope,
     quota_record_from_payload,
     quota_scope,
 )
-from backend.app.services.governance_quota_listing import build_quota_records
-from backend.app.services.governance_quota_writes import build_quota_account_payload
 from backend.app.services.governance_token_ledger_listing import list_token_ledger_records
 from backend.app.services.governance_usage_queries import (
     connector_names_path,
     member_quota_filter,
     quota_accounts_path,
-    quota_existing_path,
-    quota_update_path,
     scope_quota_filter,
 )
 
@@ -72,12 +71,14 @@ class GovernanceUsageRepository:
     ) -> TeamQuotaRecord:
         scope = quota_scope("member", user_id)
         filter_path = member_quota_filter(user_id)
-        existing_row = self._existing_quota_row(
+        existing_row = read_existing_quota_account(
+            self._request_json,
             team_id,
+            filter_path,
             access_token=access_token,
-            filter_path=filter_path,
         )
-        row = self._write_quota_account(
+        row = upsert_quota_account(
+            self._request_json,
             team_id,
             scope,
             token_quota=token_quota,
@@ -107,17 +108,20 @@ class GovernanceUsageRepository:
     ) -> TeamQuotaRecord:
         scope = quota_scope(scope_type, scope_key)
         scope_filter = scope_quota_filter(scope.scope_type, scope.scope_key)
-        row = self._write_quota_account(
+        existing_row = read_existing_quota_account(
+            self._request_json,
+            team_id,
+            scope_filter,
+            access_token=access_token,
+        )
+        row = upsert_quota_account(
+            self._request_json,
             team_id,
             scope,
             token_quota=token_quota,
             status=status,
             warning_threshold=warning_threshold,
-            existing_row=self._existing_quota_row(
-                team_id,
-                access_token=access_token,
-                filter_path=scope_filter,
-            ),
+            existing_row=existing_row,
             update_filter=scope_filter,
             access_token=access_token,
             action="quota scope adjust",
@@ -146,50 +150,6 @@ class GovernanceUsageRepository:
             user_id=user_id,
             task_id=task_id,
         )
-
-    def _existing_quota_row(self, team_id: str, *, access_token: str, filter_path: str) -> dict[str, Any]:
-        existing = self._request_json(
-            path=quota_existing_path(team_id, filter_path),
-            access_token=access_token,
-        )
-        return existing[0] if isinstance(existing, list) and existing else {}
-
-    def _write_quota_account(
-        self,
-        team_id: str,
-        scope: QuotaScope,
-        *,
-        token_quota: int | None,
-        status: str | None,
-        warning_threshold: int | None,
-        existing_row: dict[str, Any],
-        update_filter: str,
-        access_token: str,
-        action: str,
-    ) -> dict[str, Any]:
-        payload = build_quota_account_payload(
-            team_id,
-            scope,
-            token_quota=token_quota,
-            status=status,
-            warning_threshold=warning_threshold,
-            existing_row=existing_row,
-        )
-        if existing_row:
-            updated = self._request_json(
-                path=quota_update_path(team_id, update_filter),
-                access_token=access_token,
-                method="PATCH",
-                body=payload,
-            )
-        else:
-            updated = self._request_json(
-                path="quota_accounts",
-                access_token=access_token,
-                method="POST",
-                body=payload,
-            )
-        return unwrap_single_record(updated, action)
 
     def _connector_map(self, team_id: str, *, access_token: str) -> dict[str, str]:
         payload = self._request_json(
