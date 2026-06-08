@@ -6,10 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.app.services.codex_progress_snapshot import (
-    PROGRESS_EVENTS_RELATIVE_PATH,
-    build_progress_snapshot,
-    normalize_progress_event,
+from backend.app.services.codex_progress_definitions import PROGRESS_EVENTS_RELATIVE_PATH
+from backend.app.services.codex_progress_snapshot import build_progress_snapshot, normalize_progress_event
+from backend.app.services.codex_progress_snapshot_repair import (
     repair_progress_snapshot_from_events,
     should_repair_progress_snapshot,
 )

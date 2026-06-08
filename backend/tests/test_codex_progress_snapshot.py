@@ -3,6 +3,8 @@ from __future__ import annotations
 from backend.app.services.codex_progress_snapshot import (
     build_progress_snapshot,
     normalize_progress_event,
+)
+from backend.app.services.codex_progress_snapshot_repair import (
     repair_progress_snapshot_from_events,
     should_repair_progress_snapshot,
 )
