@@ -14,11 +14,9 @@ from backend.app.models.task import (
     WorkflowStageStatus,
     normalize_workflow_stage,
 )
-from backend.app.services.task_agent_collaboration import (
-    append_stage_agent_messages,
-    agent_runtime_spec_for_stage,
-)
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
+from backend.app.services.task_agent_collaboration import append_stage_agent_messages
+from backend.app.services.task_agent_definitions import agent_runtime_spec_for_stage
 from backend.app.services.task_human_request_status import human_request_is_active
 
 
