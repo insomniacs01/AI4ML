@@ -84,6 +84,34 @@ def test_codex_summary_falls_back_to_overview_prediction_error(tmp_path: Path) -
     assert summary.metric_value == 0.42
 
 
+def test_codex_summary_reads_candidate_results_and_holdout_refit(tmp_path: Path) -> None:
+    metrics = {
+        "candidate_results": {
+            "dummy_most_frequent": {
+                "model_name": "dummy_most_frequent",
+                "validation": {"accuracy": 0.33, "macro_f1": 0.16},
+            },
+            "gradient_boosting": {
+                "model_name": "gradient_boosting",
+                "validation": {"accuracy": 0.96, "macro_f1": 0.95},
+            },
+        },
+        "selected_model": {
+            "model_name": "gradient_boosting",
+            "selection_rule": "优先比较 validation accuracy，其次 validation macro F1。",
+            "holdout_test_after_refit": {"accuracy": 0.9666666666666667, "macro_f1": 0.9665831244778613},
+        },
+    }
+
+    summary = build_codex_run_summary(str(tmp_path), metrics)
+
+    assert summary is not None
+    assert summary.best_model == "gradient_boosting"
+    assert summary.metric_name == "accuracy"
+    assert summary.metric_value == 0.9666666666666667
+    assert [row["model"] for row in summary.leaderboard] == ["dummy_most_frequent", "gradient_boosting"]
+
+
 def test_primary_metric_reads_cross_validation_mean() -> None:
     metric_name, metric_value = primary_metric(
         {"name": "ridge", "cross_validation": {"macro_f1": {"mean": 0.91}}},

@@ -44,7 +44,7 @@ def leaderboard_from_metrics(metrics: dict[str, Any]) -> list[TaskRunProgressLea
         _metric_name, metric_value = primary_metric(item, metrics)
         rows.append(
             TaskRunProgressLeaderboardRow(
-                model=str(item.get("name") or item.get("type") or f"candidate_{index}"),
+                model=str(item.get("name") or item.get("model_name") or item.get("type") or f"candidate_{index}"),
                 validation_score=metric_value,
                 rank=index,
             )
@@ -90,6 +90,22 @@ def primary_metric(model_payload: dict[str, Any], metrics: dict[str, Any]) -> tu
     metric_name, metric_value = _flat_primary_metric(model_payload, metrics)
     if metric_value is not None:
         return metric_name, metric_value
+    selected_metric = _selected_metric_name(model_payload, metrics)
+    metric_names = [
+        selected_metric,
+        "selection_metric_value",
+        "signed_log_mae",
+        "signed_log_rmse",
+        "median_absolute_error",
+        "macro_f1_mean",
+        "accuracy_mean",
+        "macro_f1",
+        "accuracy",
+        "r2",
+        "rmse",
+        "mae",
+    ]
+    metric_names = [name for index, name in enumerate(metric_names) if name and name not in metric_names[:index]]
     for container_name in (
         "test",
         "test_metrics",
@@ -97,28 +113,18 @@ def primary_metric(model_payload: dict[str, Any], metrics: dict[str, Any]) -> tu
         "validation_metrics",
         "metrics",
         "cross_validation",
+        "cv",
         "holdout",
         "holdout_metrics",
+        "holdout_test_after_refit",
     ):
         container = model_payload.get(container_name)
         if not isinstance(container, dict):
             continue
-        for metric_name in (
-            "selection_metric_value",
-            "signed_log_mae",
-            "signed_log_rmse",
-            "median_absolute_error",
-            "macro_f1_mean",
-            "accuracy_mean",
-            "macro_f1",
-            "accuracy",
-            "r2",
-            "rmse",
-            "mae",
-        ):
+        for metric_name in metric_names:
             value = _metric_value(container, metric_name)
             if value is not None:
-                return _display_metric_name(metric_name, _selected_metric_name(model_payload, metrics)), value
+                return _display_metric_name(metric_name, selected_metric), value
     validation = metrics.get("validation") if isinstance(metrics.get("validation"), dict) else {}
     for metric_name in (
         "metric_value",
@@ -158,7 +164,7 @@ def primary_metric_from_overview(overview: dict[str, Any] | None) -> tuple[str, 
 
 
 def candidate_model_items(metrics: dict[str, Any]) -> list[dict[str, Any]]:
-    for key in ("candidate_models", "candidates", "models"):
+    for key in ("candidate_models", "candidate_results", "candidates", "models"):
         value = metrics.get(key)
         if isinstance(value, dict):
             return [
@@ -222,6 +228,8 @@ def _selected_metric_name(model_payload: dict[str, Any], metrics: dict[str, Any]
         or model_payload.get("primary_metric")
         or metrics.get("selection_metric")
         or metrics.get("primary_metric")
+        or _metric_from_text(model_payload.get("selection_rule"))
+        or _metric_from_text(metrics.get("selection_rule"))
         or ""
     ).strip()
 
@@ -262,14 +270,14 @@ def _candidate_by_name(metrics: dict[str, Any], model_name: str) -> dict[str, An
     if not model_name:
         return {}
     for item in candidate_model_items(metrics):
-        item_name = str(item.get("name") or item.get("type") or "").strip()
+        item_name = str(item.get("name") or item.get("model_name") or item.get("type") or "").strip()
         if item_name == model_name:
             return item
     return {}
 
 
 def _best_model_name(selected: dict[str, Any], metrics: dict[str, Any]) -> str:
-    selected_name = str(selected.get("name") or "").strip()
+    selected_name = str(selected.get("name") or selected.get("model_name") or "").strip()
     if selected_name:
         return selected_name
     for key in ("best_model", "final_model", "selected_model_name", "best_model_name", "model_name"):
@@ -279,3 +287,20 @@ def _best_model_name(selected: dict[str, Any], metrics: dict[str, Any]) -> str:
         if isinstance(value, dict) and str(value.get("name") or "").strip():
             return str(value["name"]).strip()
     return "codex_model"
+
+
+def _metric_from_text(value: Any) -> str:
+    text = str(value or "").casefold()
+    for metric_name in (
+        "signed_log_mae",
+        "signed_log_rmse",
+        "median_absolute_error",
+        "macro_f1",
+        "accuracy",
+        "rmse",
+        "mae",
+        "r2",
+    ):
+        if metric_name.casefold() in text:
+            return metric_name
+    return ""
