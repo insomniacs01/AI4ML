@@ -501,6 +501,34 @@ describe('api client compatibility helpers', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
+  it('serves stale team admin settings immediately while refreshing in the background', async () => {
+    localStorage.setItem('ai4ml-active-team-id', 'team-1')
+    localStorage.setItem('ai4ml-team-admin-cache-v1:team-1:settings', JSON.stringify({
+      cached_at: Date.now() - 11 * 60 * 1000,
+      value: { id: 'team-1', name: 'Cached Team', invite_code: 'OLD' },
+    }))
+    const refresh = deferred()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const text = String(url)
+      if (text.endsWith('/api/teams/team-1/settings')) return refresh.promise
+      throw new Error(`unexpected fetch: ${text}`)
+    })
+
+    const settings = await getTeamSettings()
+
+    expect(settings.name).toBe('Cached Team')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    refresh.resolve(response({ team: { id: 'team-1', name: 'Fresh Team', invite_code: 'NEW' } }))
+    await nextTick()
+    await nextTick()
+
+    const refreshedSettings = await getTeamSettings()
+
+    expect(refreshedSettings.name).toBe('Fresh Team')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('deduplicates concurrent team admin warmup and reads', async () => {
     localStorage.setItem('ai4ml-active-team-id', 'team-1')
     let settingsCalls = 0

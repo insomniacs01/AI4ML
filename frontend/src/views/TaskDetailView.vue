@@ -106,9 +106,9 @@ const isFinished = computed(() => isFinishedTaskStatus(task.value?.status))
 const isRuntimeActive = computed(() => runtimeActiveStatuses.has(task.value?.status))
 const canControlTask = computed(() => !readOnlyMode.value && !isFinished.value)
 const isLiveCodexRun = computed(() => isCurrentActiveTask.value && !isFinished.value && isRuntimeActive.value)
-const hasCodexSession = computed(() => Boolean(taskRun.value?.codex?.session_id || task.value?.codex_session_id))
 const hasCodexSnapshotSteps = computed(() => Array.isArray(taskRun.value?.codex?.steps) && taskRun.value.codex.steps.length > 0)
-const showRealtime = computed(() => isLiveCodexRun.value || hasCodexSession.value || hasCodexSnapshotSteps.value)
+const shouldConnectRealtime = computed(() => isLiveCodexRun.value)
+const showRealtime = computed(() => isLiveCodexRun.value || hasCodexSnapshotSteps.value || codexRealtime.value.events.length > 0)
 const pausable = computed(() => isCurrentActiveTask.value && task.value?.status === 'running')
 const waitingStep = computed(() => firstWaitingHumanStep(steps.value))
 const isWaitingHuman = computed(() => hasPendingHumanConfirmation(task.value, taskRun.value, steps.value))
@@ -271,7 +271,7 @@ async function load() {
     syncPlanTextFromDetail(detail, { overwrite: true })
     loadedSections.value.overview = true
     ensureActiveTabLoaded({ silent: true })
-    if (showRealtime.value) connectStream()
+    if (shouldConnectRealtime.value) connectStream()
     else closeStream()
     scheduleSnapshotRefresh()
     loadPeerTasksInBackground()
@@ -292,7 +292,7 @@ async function refreshRuntimeSnapshot(options = {}) {
   if (hasObjectContent(detail.task_run?.overview)) overview.value = detail.task_run.overview
   steps.value = detail.task_run?.steps || steps.value
   if (detail.task_run?.metrics) metrics.value = { values: detail.task_run.metrics }
-  if (showRealtime.value) connectStream()
+  if (shouldConnectRealtime.value) connectStream()
   else closeStream()
 }
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from backend.app.models.task import TaskRecord, WorkflowStageRecord
+from backend.app.models.task import TaskHumanRequestRecord, TaskRecord, WorkflowStageRecord
 
 
 def encode_task_payload(task: TaskRecord) -> str:
@@ -23,5 +23,16 @@ def encode_stage_payload(record: WorkflowStageRecord) -> str:
 def decode_stage_payload(payload: str) -> WorkflowStageRecord | None:
     try:
         return WorkflowStageRecord.model_validate(json.loads(payload))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def encode_human_request_payload(request: TaskHumanRequestRecord) -> str:
+    return json.dumps(request.model_dump(mode="json"), ensure_ascii=False)
+
+
+def decode_human_request_payload(payload: str) -> TaskHumanRequestRecord | None:
+    try:
+        return TaskHumanRequestRecord.model_validate(json.loads(payload))
     except (json.JSONDecodeError, TypeError, ValueError):
         return None

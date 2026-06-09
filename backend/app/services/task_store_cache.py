@@ -86,6 +86,22 @@ class TaskStoreCacheMixin:
             logger.debug("Stage records cache refresh failed for task %s/%s: %s", team_id, task_id, exc)
             return
 
+    def _refresh_human_requests_cache_in_background(self, team_id: str, task_id: str, *, access_token: str) -> None:
+        _CACHE_REFRESH_EXECUTOR.submit(self._refresh_human_requests_cache, team_id, task_id, access_token)
+
+    def _refresh_human_requests_cache(self, team_id: str, task_id: str, access_token: str) -> None:
+        try:
+            self.__class__(self.settings).list_human_requests(
+                team_id,
+                task_id,
+                access_token=access_token,
+                prefer_cache=False,
+                allow_stale_cache=False,
+            )
+        except Exception as exc:
+            logger.debug("Human request cache refresh failed for task %s/%s: %s", team_id, task_id, exc)
+            return
+
     def _request_json(
         self,
         *,

@@ -72,7 +72,13 @@ class TaskHumanCollaborationService:
         actor_role: str | None = None,
         allow_stale_stage_cache: bool = False,
     ) -> TaskHumanCollaborationResponse:
-        requests = expire_overdue_human_requests(self.task_store, task, access_token=access_token)
+        requests = expire_overdue_human_requests(
+            self.task_store,
+            task,
+            access_token=access_token,
+            prefer_cache=allow_stale_stage_cache,
+            allow_stale_cache=allow_stale_stage_cache,
+        )
         stage_kwargs: dict[str, object] = {"access_token": access_token}
         if allow_stale_stage_cache:
             stage_kwargs["allow_stale_cache"] = True

@@ -5,14 +5,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-from backend.app.models.task import TaskRecord, WorkflowStageRecord
+from backend.app.models.task import TaskHumanRequestRecord, TaskRecord, WorkflowStageRecord
 from backend.app.services.task_cache_reads import (
     cache_entry_is_fresh,
     cached_stage_state,
     cached_task_state,
     get_cached_task,
+    latest_human_request_sync,
     latest_stage_sync,
     latest_task_sync,
+    list_cached_human_requests,
     list_cached_stage_records,
     list_cached_tasks,
     stale_team_task_ids,
@@ -24,9 +26,11 @@ from backend.app.services.task_cache_stage_upsert import (
 )
 from backend.app.services.task_cache_upsert import TaskUpsertPlan, build_task_upsert_plan
 from backend.app.services.task_cache_writes import (
+    delete_human_request_cache,
     delete_task_rows,
     mark_stage_synced,
     mark_task_synced,
+    replace_human_request_cache,
     write_stage_cache,
     write_task_cache,
 )
@@ -97,6 +101,24 @@ class TaskCache:
                 changed += 1
         return changed
 
+    def list_human_requests(self, team_id: str, task_id: str) -> list[TaskHumanRequestRecord]:
+        with self._connect() as conn:
+            return list_cached_human_requests(conn, team_id, task_id)
+
+    def replace_human_requests(
+        self,
+        team_id: str,
+        task_id: str,
+        requests: list[TaskHumanRequestRecord],
+    ) -> None:
+        synced_at = self._now_iso()
+        with self._lock, self._connect() as conn:
+            replace_human_request_cache(conn, team_id, task_id, requests, synced_at=synced_at)
+
+    def invalidate_human_requests(self, team_id: str, task_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            delete_human_request_cache(conn, team_id, task_id)
+
     def has_fresh_team_cache(self, team_id: str) -> bool:
         synced_at = self._latest_sync(team_id=team_id)
         return self._is_fresh(synced_at)
@@ -108,6 +130,15 @@ class TaskCache:
     def has_fresh_stage_cache(self, team_id: str, task_id: str) -> bool:
         with self._connect() as conn:
             synced_at = latest_stage_sync(conn, team_id, task_id)
+        return cache_entry_is_fresh(synced_at, ttl_seconds=self.ttl_seconds)
+
+    def has_human_request_cache(self, team_id: str, task_id: str) -> bool:
+        with self._connect() as conn:
+            return latest_human_request_sync(conn, team_id, task_id) is not None
+
+    def has_fresh_human_request_cache(self, team_id: str, task_id: str) -> bool:
+        with self._connect() as conn:
+            synced_at = latest_human_request_sync(conn, team_id, task_id)
         return cache_entry_is_fresh(synced_at, ttl_seconds=self.ttl_seconds)
 
     def _ensure_schema(self) -> None:

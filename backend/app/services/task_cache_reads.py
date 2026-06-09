@@ -3,10 +3,15 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from backend.app.models.task import TaskRecord, WorkflowStageRecord
-from backend.app.services.task_cache_payloads import decode_stage_payload, decode_task_payload
+from backend.app.models.task import TaskHumanRequestRecord, TaskRecord, WorkflowStageRecord
+from backend.app.services.task_cache_payloads import (
+    decode_human_request_payload,
+    decode_stage_payload,
+    decode_task_payload,
+)
 from backend.app.services.task_cache_stage_upsert import CachedStageState, stage_key
 from backend.app.services.task_cache_upsert import CachedTaskState
+from backend.app.services.task_human_request_status import ACTIVE_HUMAN_REQUEST_STATUSES
 
 
 def list_cached_tasks(conn: sqlite3.Connection, team_id: str) -> list[TaskRecord]:
@@ -76,6 +81,34 @@ def list_cached_stage_records(conn: sqlite3.Connection, team_id: str, task_id: s
     return records
 
 
+def list_cached_human_requests(
+    conn: sqlite3.Connection,
+    team_id: str,
+    task_id: str,
+) -> list[TaskHumanRequestRecord]:
+    rows = conn.execute(
+        """
+        SELECT payload
+        FROM human_request_cache
+        WHERE team_id = ? AND task_id = ?
+        ORDER BY updated_at DESC
+        """,
+        (team_id, task_id),
+    ).fetchall()
+    requests: list[TaskHumanRequestRecord] = []
+    for row in rows:
+        request = decode_human_request_payload(row["payload"])
+        if request is not None:
+            requests.append(request)
+    return sorted(
+        requests,
+        key=lambda item: (
+            0 if item.status in ACTIVE_HUMAN_REQUEST_STATUSES else 1,
+            -item.updated_at.timestamp(),
+        ),
+    )
+
+
 def latest_task_sync(
     conn: sqlite3.Connection,
     *,
@@ -102,6 +135,21 @@ def latest_stage_sync(conn: sqlite3.Connection, team_id: str, task_id: str) -> d
         SELECT MAX(synced_at) AS synced_at
         FROM stage_cache
         WHERE team_id = ? AND task_id = ?
+        """,
+        (team_id, task_id),
+    ).fetchone()
+    if row is None or not row["synced_at"]:
+        return None
+    return parse_cache_datetime(str(row["synced_at"]))
+
+
+def latest_human_request_sync(conn: sqlite3.Connection, team_id: str, task_id: str) -> datetime | None:
+    row = conn.execute(
+        """
+        SELECT synced_at
+        FROM human_request_cache_state
+        WHERE team_id = ? AND task_id = ?
+        LIMIT 1
         """,
         (team_id, task_id),
     ).fetchone()

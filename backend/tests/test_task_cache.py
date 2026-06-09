@@ -5,7 +5,16 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest import TestCase
 
-from backend.app.models.task import RunSummary, TaskRecord, TaskStatus, WorkflowStage, WorkflowStageRecord, WorkflowStageStatus
+from backend.app.models.task import (
+    HumanInteractionRequestStatus,
+    RunSummary,
+    TaskHumanRequestRecord,
+    TaskRecord,
+    TaskStatus,
+    WorkflowStage,
+    WorkflowStageRecord,
+    WorkflowStageStatus,
+)
 from backend.app.services.task_cache import TaskCache
 
 
@@ -38,6 +47,24 @@ def _stage(
         stage=stage,
         status=status,
         summary=summary,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _human_request(
+    request_id: str = "request-1",
+    *,
+    status: HumanInteractionRequestStatus = HumanInteractionRequestStatus.pending,
+    updated_at: datetime | None = None,
+) -> TaskHumanRequestRecord:
+    now = updated_at or datetime.now(timezone.utc)
+    return TaskHumanRequestRecord(
+        id=request_id,
+        team_id="team-1",
+        task_id="task-1",
+        stage=WorkflowStage.training_validation,
+        status=status,
         created_at=now,
         updated_at=now,
     )
@@ -113,6 +140,26 @@ class TaskCacheTests(TestCase):
             cache.delete_task("team-1", "task-1")
 
             self.assertEqual(cache.list_stage_records("team-1", "task-1"), [])
+
+    def test_human_request_cache_round_trip_empty_list_and_delete_task(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            cache = TaskCache(Path(temp_dir) / "task_cache.sqlite3", ttl_seconds=60)
+            cache.upsert_task(_task())
+
+            cache.replace_human_requests("team-1", "task-1", [])
+
+            self.assertEqual(cache.list_human_requests("team-1", "task-1"), [])
+            self.assertTrue(cache.has_human_request_cache("team-1", "task-1"))
+            self.assertTrue(cache.has_fresh_human_request_cache("team-1", "task-1"))
+
+            cache.replace_human_requests("team-1", "task-1", [_human_request()])
+
+            self.assertEqual([item.id for item in cache.list_human_requests("team-1", "task-1")], ["request-1"])
+
+            cache.delete_task("team-1", "task-1")
+
+            self.assertEqual(cache.list_human_requests("team-1", "task-1"), [])
+            self.assertFalse(cache.has_human_request_cache("team-1", "task-1"))
 
     def test_older_stage_payload_does_not_overwrite_newer_cache(self) -> None:
         with TemporaryDirectory() as temp_dir:

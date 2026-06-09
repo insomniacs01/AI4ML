@@ -3,6 +3,7 @@ import { getActiveTeamHint, nativeRole, normalizeRole } from '@/api/session'
 
 const TEAM_ADMIN_CACHE_PREFIX = 'ai4ml-team-admin-cache-v1'
 const TEAM_ADMIN_CACHE_TTL_MS = 10 * 60 * 1000
+const TEAM_ADMIN_STALE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const TEAM_ADMIN_CACHE_SCOPES = ['settings', 'members', 'quotas', 'platform-limits']
 const pendingTeamAdminReads = new Map()
 let teamAdminCacheGeneration = 0
@@ -189,6 +190,15 @@ export async function updatePlatformLimits(payload) {
 async function readThroughTeamAdminCache(scope, loader) {
   const cached = readTeamAdminCache(scope)
   if (cached) return cached
+  const staleCached = readTeamAdminCache(scope, { allowStale: true })
+  if (staleCached) {
+    refreshTeamAdminCacheInBackground(scope, loader)
+    return staleCached
+  }
+  return fetchTeamAdminCache(scope, loader)
+}
+
+function fetchTeamAdminCache(scope, loader) {
   if (pendingTeamAdminReads.has(scope)) return pendingTeamAdminReads.get(scope)
   const generation = teamAdminCacheGeneration
   const pending = loader()
@@ -203,17 +213,23 @@ async function readThroughTeamAdminCache(scope, loader) {
   return pending
 }
 
+function refreshTeamAdminCacheInBackground(scope, loader) {
+  fetchTeamAdminCache(scope, loader).catch(() => null)
+}
+
 function teamAdminCacheKey(scope) {
   const teamId = getActiveTeamHint()?.id || 'default'
   return `${TEAM_ADMIN_CACHE_PREFIX}:${teamId}:${scope}`
 }
 
-function readTeamAdminCache(scope) {
+function readTeamAdminCache(scope, options = {}) {
   if (typeof localStorage === 'undefined') return null
   try {
     const payload = JSON.parse(localStorage.getItem(teamAdminCacheKey(scope)) || 'null')
     if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'value')) return null
-    if (Date.now() - Number(payload.cached_at || 0) >= TEAM_ADMIN_CACHE_TTL_MS) return null
+    const age = Date.now() - Number(payload.cached_at || 0)
+    if (age >= TEAM_ADMIN_STALE_CACHE_TTL_MS) return null
+    if (age >= TEAM_ADMIN_CACHE_TTL_MS && options.allowStale !== true) return null
     return payload.value
   } catch {
     return null

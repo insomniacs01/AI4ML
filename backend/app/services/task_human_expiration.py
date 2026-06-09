@@ -28,9 +28,25 @@ def expire_overdue_human_requests(
     task: TaskRecord,
     *,
     access_token: str,
+    prefer_cache: bool = False,
+    allow_stale_cache: bool = False,
 ) -> list[TaskHumanRequestRecord]:
-    requests = task_store.list_human_requests(task.team_id, task.id, access_token=access_token)
+    list_kwargs: dict[str, Any] = {"access_token": access_token}
+    if prefer_cache or allow_stale_cache:
+        list_kwargs["prefer_cache"] = prefer_cache
+        list_kwargs["allow_stale_cache"] = allow_stale_cache
+    requests = task_store.list_human_requests(
+        task.team_id,
+        task.id,
+        **list_kwargs,
+    )
     now = datetime.now(timezone.utc)
+    if allow_stale_cache and any(is_overdue_human_request(request, now=now) for request in requests):
+        requests = task_store.list_human_requests(
+            task.team_id,
+            task.id,
+            access_token=access_token,
+        )
     expired_any = False
     for request in requests:
         if not is_overdue_human_request(request, now=now):

@@ -43,6 +43,35 @@ def ensure_task_cache_schema(conn: sqlite3.Connection) -> None:
         ON stage_cache(team_id, task_id, updated_at DESC)
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS human_request_cache (
+            team_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            synced_at TEXT NOT NULL,
+            PRIMARY KEY (team_id, task_id, request_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_human_request_cache_task_updated
+        ON human_request_cache(team_id, task_id, updated_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS human_request_cache_state (
+            team_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            synced_at TEXT NOT NULL,
+            PRIMARY KEY (team_id, task_id)
+        )
+        """
+    )
 
 
 def _ensure_task_detail_column(conn: sqlite3.Connection) -> None:

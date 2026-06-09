@@ -170,6 +170,8 @@ def _human_request_counts(task_store: Any, task: TaskRecord, team_access: TeamAc
             task.team_id,
             task.id,
             access_token=team_access.access_token,
+            prefer_cache=True,
+            allow_stale_cache=True,
         )
     except (AttributeError, RuntimeError, PermissionError, ConnectionError):
         return {}

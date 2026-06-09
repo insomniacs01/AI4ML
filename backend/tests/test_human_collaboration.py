@@ -164,7 +164,15 @@ class FakeTaskStore:
         self.stage_records[key] = record
         return record.model_copy(deep=True)
 
-    def list_human_requests(self, team_id: str, task_id: str, *, access_token: str) -> list[TaskHumanRequestRecord]:
+    def list_human_requests(
+        self,
+        team_id: str,
+        task_id: str,
+        *,
+        access_token: str,
+        prefer_cache: bool = False,
+        allow_stale_cache: bool = False,
+    ) -> list[TaskHumanRequestRecord]:
         items = [
             request.model_copy(deep=True)
             for key, request in self.requests.items()
