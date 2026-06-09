@@ -16,7 +16,6 @@ const PROFILE_QUOTA_CACHE_PREFIX = 'ai4ml-profile-quota-cache-v1'
 const PROFILE_QUOTA_CACHE_TTL_MS = 60 * 1000
 const PROFILE_QUOTA_STALE_CACHE_TTL_MS = 10 * 60 * 1000
 const pendingProfileQuotaRefreshes = new Map()
-let lastProfileQuotaWarmupAt = 0
 let pendingTeamMembershipRefresh = null
 
 async function ensureTeamMembership() {
@@ -46,7 +45,6 @@ export async function login(payload) {
   await resetAuthCaches({ clearStoredMemberships: false })
   setCachedAuth(data.session, data.user)
   refreshTeamMembershipSoon(0)
-  warmupProfileQuotaSoon(12000)
   return profileFromAuthUser(data.user)
 }
 
@@ -65,7 +63,6 @@ export async function register(payload) {
   setCachedAuth(data.session || null, data.user || null)
   if (data.session?.access_token) {
     await ensureTeamMembership()
-    warmupProfileQuotaSoon(12000)
   }
   return { user: data.user, session: data.session || null }
 }
@@ -182,15 +179,6 @@ export async function updateProfile(payload) {
 
 export async function warmupProfileQuota() {
   return getProfile()
-}
-
-export function warmupProfileQuotaSoon(delayMs = 0) {
-  const now = Date.now()
-  if (now - lastProfileQuotaWarmupAt < 30_000) return
-  lastProfileQuotaWarmupAt = now
-  globalThis.setTimeout(() => {
-    warmupProfileQuota().catch(() => {})
-  }, delayMs)
 }
 
 async function fetchProfileQuota(cacheKey) {

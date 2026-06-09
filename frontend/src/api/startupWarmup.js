@@ -6,14 +6,6 @@ export function warmupAuthenticatedExperienceSoon(options = {}) {
   if (now - lastAuthenticatedWarmupAt < STARTUP_WARMUP_TTL_MS) return
   lastAuthenticatedWarmupAt = now
 
-  const isAdmin = options.isAdmin === true
-  scheduleWarmup(1800, () => import('@/api/community').then((module) => (
-    module.warmupCommunityAssetCaches({ includePending: isAdmin })
-  )))
-  scheduleWarmup(3200, () => import('@/api/teamAdmin').then((module) => (
-    module.warmupTeamAdminCaches({ includeSystemAdmin: isAdmin })
-  )))
-  scheduleWarmup(4800, () => import('@/api/auth').then((module) => module.warmupProfileQuota()))
   warmupRouteChunksSoon(6000)
 }
 
