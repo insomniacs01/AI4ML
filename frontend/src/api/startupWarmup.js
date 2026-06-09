@@ -7,16 +7,14 @@ export function warmupAuthenticatedExperienceSoon(options = {}) {
   lastAuthenticatedWarmupAt = now
 
   const isAdmin = options.isAdmin === true
-  scheduleWarmup(1200, () => import('@/api/workspaceWarmup').then((module) => module.warmupWorkspaceCache()))
-  scheduleWarmup(2200, () => import('@/api/taskCache').then((module) => module.warmupTaskCache()))
-  scheduleWarmup(3200, () => import('@/api/community').then((module) => (
+  scheduleWarmup(1800, () => import('@/api/community').then((module) => (
     module.warmupCommunityAssetCaches({ includePending: isAdmin })
   )))
-  scheduleWarmup(4500, () => import('@/api/teamAdmin').then((module) => (
+  scheduleWarmup(3200, () => import('@/api/teamAdmin').then((module) => (
     module.warmupTeamAdminCaches({ includeSystemAdmin: isAdmin })
   )))
-  scheduleWarmup(6000, () => import('@/api/auth').then((module) => module.warmupProfileQuota()))
-  warmupRouteChunksSoon(7000)
+  scheduleWarmup(4800, () => import('@/api/auth').then((module) => module.warmupProfileQuota()))
+  warmupRouteChunksSoon(6000)
 }
 
 function warmupRouteChunksSoon(delayMs = 0) {
