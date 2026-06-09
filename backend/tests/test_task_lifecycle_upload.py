@@ -21,13 +21,14 @@ class _FakeTaskStore:
         self.task = task
         self.storage = storage
         self.list_kwargs: dict[str, object] = {}
+        self.get_kwargs: dict[str, object] = {}
 
     def list_tasks(self, team_id: str, **kwargs: object) -> list[TaskRecord]:
         self.list_kwargs = kwargs
         return [self.task] if team_id == self.task.team_id else []
 
     def get_task(self, team_id: str, task_id: str, *, access_token: str, **kwargs: object) -> TaskRecord | None:
-        _ = kwargs
+        self.get_kwargs = kwargs
         return self.task if team_id == self.task.team_id and task_id == self.task.id and access_token else None
 
     def clear_dataset_upload_dir(self, team_id: str, task_id: str) -> Path:
@@ -236,3 +237,32 @@ def test_get_task_can_skip_codex_sync(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     assert result is task
     assert result.executor_type == "codex"
+    assert store.get_kwargs["prefer_cache"] is True
+    assert store.get_kwargs["allow_stale_cache"] is True
+
+
+def test_get_task_sync_reads_authoritative_task_before_codex_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task = _task()
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+
+    def sync_task(task_arg: TaskRecord, settings: object, **kwargs: object) -> tuple[TaskRecord, dict[str, object]]:
+        assert task_arg is task
+        assert kwargs["task_store"] is store
+        return task_arg, {}
+
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+    monkeypatch.setattr(task_lifecycle, "get_settings", lambda: object())
+    monkeypatch.setattr(task_lifecycle, "sync_codex_task_state", sync_task)
+
+    result = task_lifecycle.get_task(
+        task.id,
+        sync=True,
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+
+    assert result is task
+    assert store.get_kwargs["prefer_cache"] is False
+    assert store.get_kwargs["allow_stale_cache"] is False

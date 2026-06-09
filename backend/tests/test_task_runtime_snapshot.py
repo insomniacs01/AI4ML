@@ -247,6 +247,49 @@ def test_reconcile_codex_runtime_activity_keeps_verified_running_task(monkeypatc
     assert reconciled.codex_status == "running"
 
 
+def test_runtime_snapshot_sync_reads_authoritative_task_before_codex_sync(monkeypatch) -> None:
+    task = _task()
+    task.executor_type = "codex"
+    task.codex_workspace_path = "D:/workspaces/task-runtime-snapshot"
+    task.codex_status = "waiting_plan_approval"
+    get_task_kwargs = []
+
+    class Store:
+        def get_task(self, team_id, task_id, **kwargs):
+            assert team_id == "team-1"
+            assert task_id == task.id
+            get_task_kwargs.append(kwargs)
+            return task
+
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.get_task_store", lambda: Store())
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.get_settings", lambda: object())
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.is_codex_task", lambda task_arg, settings: True)
+    monkeypatch.setattr(
+        "backend.app.services.task_runtime_snapshot.sync_codex_runtime_snapshot",
+        lambda task_store, task_arg, team_access, settings: (task_arg, None, {}, {}),
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_runtime_snapshot.safe_reconcile_codex_runtime_activity",
+        lambda task_store, task_arg, team_access, settings: task_arg,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_runtime_snapshot.build_codex_run_progress",
+        lambda task_arg, settings: None,
+    )
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.codex_plan_text", lambda task_arg, settings: "")
+    team_access = SimpleNamespace(
+        team_id="team-1",
+        access_token="token",
+        user=SimpleNamespace(id="user-1"),
+    )
+
+    response = build_task_runtime_snapshot_response(task.id, team_access, sync_runtime=True)
+
+    assert response.task.id == task.id
+    assert get_task_kwargs[0]["prefer_cache"] is False
+    assert get_task_kwargs[0]["allow_stale_cache"] is False
+
+
 def test_runtime_snapshot_returns_cached_state_when_codex_sync_fails(monkeypatch) -> None:
     task = _task()
     task.executor_type = "codex"

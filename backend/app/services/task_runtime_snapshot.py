@@ -46,7 +46,8 @@ def build_task_runtime_snapshot_response(
         team_access.team_id,
         task_id,
         access_token=team_access.access_token,
-        allow_stale_cache=True,
+        prefer_cache=not sync_runtime,
+        allow_stale_cache=not sync_runtime,
     )
     if task is None:
         raise TaskRuntimeSnapshotNotFound("task not found")

@@ -152,7 +152,8 @@ def get_task(
             team_access.team_id,
             task_id,
             access_token=team_access.access_token,
-            allow_stale_cache=True,
+            prefer_cache=not sync,
+            allow_stale_cache=not sync,
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         raise_store_http_error(exc)
