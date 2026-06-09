@@ -458,6 +458,7 @@ def test_completed_runtime_snapshot_sync_true_uses_lightweight_summary_artifacts
         encoding="utf-8",
     )
     task.codex_workspace_path = str(workspace)
+    saved_tasks = []
 
     class Store:
         def get_task(self, team_id, task_id, **kwargs):
@@ -466,6 +467,11 @@ def test_completed_runtime_snapshot_sync_true_uses_lightweight_summary_artifacts
             assert team_id == "team-1"
             assert task_id == task.id
             return task
+
+        def save_task(self, task_arg, **kwargs):
+            assert kwargs["access_token"] == "token"
+            saved_tasks.append(task_arg.model_copy(deep=True))
+            return task_arg
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("completed sync=true snapshot must not call full live Codex sync")
@@ -491,8 +497,13 @@ def test_completed_runtime_snapshot_sync_true_uses_lightweight_summary_artifacts
 
     assert response.task.status == TaskStatus.completed
     assert response.task_run["progress_percent"] == 100
+    assert response.task.last_run is not None
+    assert response.task_run["metrics"] == {"rmse": 0.3679}
     assert response.task_run["overview"]["task_summary"]["conclusion"] == "完成态轻量读取。"
     assert response.task_run["codex"]["token_usage"] == {"total": {"total_tokens": 638727}}
+    assert len(saved_tasks) == 1
+    assert saved_tasks[0].last_run is not None
+    assert saved_tasks[0].last_run.metric_name == "rmse"
 
 
 def test_completed_runtime_snapshot_sync_false_derives_overview_from_last_run_when_workspace_missing(

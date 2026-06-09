@@ -5,13 +5,20 @@ from typing import Any, Literal
 
 from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext
-from backend.app.models.task import TaskRecord, TaskRuntimeSnapshotResponse, TaskRuntimeSummaryRecord, TaskStatus
+from backend.app.models.task import (
+    RunAttempt,
+    TaskRecord,
+    TaskRuntimeSnapshotResponse,
+    TaskRuntimeSummaryRecord,
+    TaskStatus,
+)
 from backend.app.services.codex_backend import (
     build_codex_run_progress,
     codex_plan_text,
     read_codex_artifacts,
 )
 from backend.app.services.codex_common import read_json
+from backend.app.services.codex_metrics import build_codex_run_summary
 from backend.app.services.codex_overview import build_codex_overview_from_artifacts
 from backend.app.services.codex_workspace_artifacts import read_codex_workspace_overview_artifacts
 from backend.app.services.codex_workspace_resolution import resolve_known_codex_workspace_path
@@ -61,6 +68,12 @@ def build_task_runtime_snapshot_response(
         if task.status == TaskStatus.completed:
             codex_artifacts = _safe_read_known_codex_summary_artifacts(task, settings)
             if codex_artifacts:
+                task = _safe_backfill_completed_codex_summary(
+                    task_store,
+                    task,
+                    team_access,
+                    codex_artifacts,
+                )
                 codex_overview = build_codex_overview_from_artifacts(codex_artifacts)
         elif sync_runtime:
             try:
@@ -155,6 +168,32 @@ def _safe_read_known_codex_summary_artifacts(task: TaskRecord, settings: Any) ->
     if isinstance(token_usage, dict):
         artifacts["token_usage"] = token_usage
     return artifacts
+
+
+def _safe_backfill_completed_codex_summary(
+    task_store: Any,
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    artifacts: dict[str, Any],
+) -> TaskRecord:
+    if task.last_run is not None:
+        return task
+    metrics = artifacts.get("metrics") if isinstance(artifacts.get("metrics"), dict) else {}
+    overview = artifacts.get("overview") if isinstance(artifacts.get("overview"), dict) else None
+    workspace = artifacts.get("workspace") if isinstance(artifacts.get("workspace"), dict) else {}
+    workspace_path = str(workspace.get("path") or task.codex_workspace_path or "").strip()
+    summary = build_codex_run_summary(workspace_path, metrics, overview=overview)
+    if summary is None:
+        return task
+    task.last_run = summary
+    task.last_run_attempt = RunAttempt(output_dir=summary.output_dir, token_usage=summary.token_usage)
+    task.codex_workspace_path = task.codex_workspace_path or summary.output_dir
+    task.codex_status = "completed"
+    try:
+        return task_store.save_task(task, access_token=team_access.access_token)
+    except (AttributeError, RuntimeError, PermissionError, ConnectionError) as exc:
+        logger.warning("Could not persist completed Codex summary for task %s: %s", task.id, exc)
+        return task
 
 
 def _list_stage_records_for_snapshot(task_store: Any, task_id: str, team_access: TeamAccessContext) -> list[Any]:

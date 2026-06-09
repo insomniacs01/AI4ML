@@ -118,7 +118,8 @@ def _complete_codex_task(
     *,
     activity_status: str,
 ) -> None:
-    summary = build_codex_run_summary(context.workspace_path, context.metrics)
+    overview = artifacts.get("overview") if isinstance(artifacts.get("overview"), dict) else None
+    summary = build_codex_run_summary(context.workspace_path, context.metrics, overview=overview)
     if summary is not None:
         task.last_run = summary
         task.last_run_attempt = RunAttempt(output_dir=summary.output_dir, token_usage=summary.token_usage)
