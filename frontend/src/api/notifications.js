@@ -1,13 +1,36 @@
 import { getProfile } from '@/api/auth'
+import { getActiveTeamHint, getCachedUser } from '@/api/session'
 import { getTasks } from '@/api/tasks'
 
 const NOTIFICATION_READ_KEY = 'ai4ml-read-system-notifications'
+const NOTIFICATION_CACHE_PREFIX = 'ai4ml-notification-cache-v1'
+const NOTIFICATION_CACHE_TTL_MS = 30 * 1000
 const HUMAN_WAITING_STATUSES = new Set(['waiting_human', 'paused_for_review'])
+let pendingNotificationRefresh = null
+let lastNotificationWarmupAt = 0
 
-export async function getNotifications() {
+export async function getNotifications(options = {}) {
+  const cacheKey = notificationCacheKey()
+  if (!options.forceRefresh) {
+    const cached = readNotificationCache(cacheKey)
+    if (cached) return cached
+    if (pendingNotificationRefresh) return pendingNotificationRefresh
+  }
+  pendingNotificationRefresh = buildNotifications()
+    .then((data) => {
+      writeNotificationCache(cacheKey, data.items || [])
+      return data
+    })
+    .finally(() => {
+      pendingNotificationRefresh = null
+    })
+  return pendingNotificationRefresh
+}
+
+async function buildNotifications() {
   const [profile, tasks] = await Promise.all([
     getProfile(),
-    getTasks(),
+    getTasks({ runtimeOnly: true }),
   ])
   const readIds = readNotificationIds()
   const items = quotaNotificationsFromProfile(profile, readIds)
@@ -31,6 +54,19 @@ export async function getNotifications() {
 
   items.sort((a, b) => Number(a.is_read) - Number(b.is_read) || new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   return { items }
+}
+
+export async function warmupNotifications() {
+  return getNotifications()
+}
+
+export function warmupNotificationsSoon(delayMs = 0) {
+  const now = Date.now()
+  if (now - lastNotificationWarmupAt < 30_000) return
+  lastNotificationWarmupAt = now
+  globalThis.setTimeout(() => {
+    warmupNotifications().catch(() => {})
+  }, delayMs)
 }
 
 export async function getUnreadNotificationCount() {
@@ -67,6 +103,43 @@ function readNotificationIds() {
   } catch {
     return new Set()
   }
+}
+
+function notificationCacheKey() {
+  const teamId = getActiveTeamHint()?.id || 'default'
+  const user = getCachedUser()
+  const userId = user?.id || user?.user_id || 'default'
+  return `${NOTIFICATION_CACHE_PREFIX}:${teamId}:${userId}`
+}
+
+function readNotificationCache(cacheKey) {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const payload = JSON.parse(localStorage.getItem(cacheKey) || 'null')
+    if (!payload || !Array.isArray(payload.items)) return null
+    if (Date.now() - Number(payload.cached_at || 0) >= NOTIFICATION_CACHE_TTL_MS) return null
+    return { items: applyNotificationReadState(payload.items) }
+  } catch {
+    return null
+  }
+}
+
+function writeNotificationCache(cacheKey, items) {
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(cacheKey, JSON.stringify({
+    cached_at: Date.now(),
+    items: Array.isArray(items) ? items : [],
+  }))
+}
+
+function applyNotificationReadState(items) {
+  const readIds = readNotificationIds()
+  return items
+    .map((item) => ({
+      ...item,
+      is_read: Boolean(item.is_read || readIds.has(item.notification_id)),
+    }))
+    .sort((a, b) => Number(a.is_read) - Number(b.is_read) || new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 }
 
 function quotaNotificationsFromProfile(profile, readIds = readNotificationIds()) {

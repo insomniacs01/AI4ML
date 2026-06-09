@@ -69,13 +69,24 @@ TASK_LIST_SELECT = ",".join(
 )
 
 
-def task_list_path(team_id: str, *, lightweight: bool, limit: int | None, offset: int) -> str:
+def task_list_path(
+    team_id: str,
+    *,
+    lightweight: bool,
+    limit: int | None,
+    offset: int,
+    statuses: tuple[str, ...] | None = None,
+) -> str:
     query_parts = [
         "ai_tasks",
         f"?select={TASK_SUMMARY_SELECT if lightweight else TASK_LIST_SELECT}",
         f"&team_id=eq.{quote(team_id, safe='')}",
-        "&order=created_at.desc",
     ]
+    if statuses:
+        values = ",".join(quote(str(status), safe="") for status in statuses if str(status))
+        if values:
+            query_parts.append(f"&status=in.({values})")
+    query_parts.append("&order=created_at.desc")
     if limit is not None:
         query_parts.append(f"&limit={max(1, min(int(limit), 500))}")
     if offset:

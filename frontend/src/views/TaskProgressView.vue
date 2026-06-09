@@ -9,7 +9,8 @@ import LoadingBlock from '@/components/LoadingBlock.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import TaskFlowSteps from '@/components/TaskFlowSteps.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
-import { getHitl, getTaskRuntimeSnapshot, pauseTask, rerunTask } from '@/api/client'
+import { getHitl } from '@/api/taskHuman'
+import { getTaskRuntimeSnapshot, pauseTask, rerunTask } from '@/api/tasks'
 import { createCodexRealtimeStream } from '@/composables/useCodexRealtimeStream'
 import { displayTaskTitle } from '@/utils/labels'
 import { createCodexRealtimeState, seedCodexRealtimeFromSnapshot } from '@/utils/codexRealtime'
@@ -37,11 +38,13 @@ let pollTimer = null
 const pausableStatuses = new Set(['running'])
 const runtimeActiveStatuses = new Set(['running'])
 const startableStatuses = new Set(['uploaded', 'planning'])
+const SNAPSHOT_POLL_MS = 30000
 
 const finished = computed(() => isFinishedTaskStatus(task.value?.status))
 const canPauseRun = computed(() => pausableStatuses.has(task.value?.status))
 const isStartableTask = computed(() => startableStatuses.has(task.value?.status))
 const isRuntimeActive = computed(() => runtimeActiveStatuses.has(task.value?.status))
+const shouldAutoRefreshRuntime = computed(() => isRuntimeActive.value)
 const runActionLabel = computed(() => (isStartableTask.value ? '启动运行' : '继续运行'))
 const waitingStep = computed(() => firstWaitingHumanStep(steps.value))
 const isWaitingHuman = computed(() => hasPendingHumanConfirmation(task.value, taskRun.value, steps.value))
@@ -114,14 +117,14 @@ function mergeRealtimeEvent(payload) {
   if (update.taskPatch && task.value) task.value = { ...task.value, ...update.taskPatch }
   if (Object.prototype.hasOwnProperty.call(update, 'taskRun')) taskRun.value = update.taskRun
   if (update.closeStream) closeStream()
-  if (update.refreshSnapshot) refreshSnapshot({ force: true })
+  if (update.refreshSnapshot) refreshSnapshot({ force: true, sync: true })
 }
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const detail = await getTaskRuntimeSnapshot(props.taskId)
+    const detail = await getTaskRuntimeSnapshot(props.taskId, { sync: false, taskDetail: 'summary' })
     task.value = detail.task || detail
     taskRun.value = detail.task_run || null
     steps.value = detail.task_run?.steps || []
@@ -135,9 +138,16 @@ async function load() {
 }
 
 async function refreshSnapshot(options = {}) {
-  if (loading.value || (finished.value && !options.force)) return
+  if (
+    loading.value
+    || (finished.value && !options.force)
+    || (!options.force && !shouldAutoRefreshRuntime.value)
+  ) return
   try {
-    const detail = await getTaskRuntimeSnapshot(props.taskId)
+    const detail = await getTaskRuntimeSnapshot(props.taskId, {
+      sync: options.sync === true,
+      taskDetail: 'summary',
+    })
     task.value = detail.task || detail
     taskRun.value = detail.task_run || taskRun.value
     steps.value = detail.task_run?.steps || steps.value
@@ -234,7 +244,8 @@ function closeStream() {
 
 onMounted(async () => {
   await load()
-  pollTimer = window.setInterval(refreshSnapshot, 2500)
+  if (task.value?.status === 'running') refreshSnapshot({ force: true, sync: true })
+  pollTimer = window.setInterval(refreshSnapshot, SNAPSHOT_POLL_MS)
 })
 onUnmounted(() => {
   closeStream()

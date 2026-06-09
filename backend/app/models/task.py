@@ -166,7 +166,7 @@ class TaskStepSummaryRecord(BaseModel):
 
 
 class TaskRuntimeSnapshotResponse(BaseModel):
-    task: "TaskRecord"
+    task: "TaskRecord | TaskRuntimeSummaryRecord"
     task_run: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -216,6 +216,14 @@ class TaskModelReportResponse(BaseModel):
     overview: dict[str, Any] = Field(default_factory=dict)
     artifact_paths: list[str] = Field(default_factory=list)
     report_markdown: str = ""
+
+
+class TaskCodexPlanResponse(BaseModel):
+    task_id: str
+    task_name: str
+    available: bool = False
+    plan_text: str = ""
+    workspace_path: Optional[str] = None
 
 
 class TaskPredictionDemoRequest(BaseModel):
@@ -527,8 +535,61 @@ class TaskRecord(BaseModel):
         return "codex"
 
 
+class TaskSummaryRecord(BaseModel):
+    id: str
+    team_id: str
+    created_by: str
+    creator_user_id: str | None = None
+    name: str
+    label_column: Optional[str] = None
+    problem_type: Optional[Literal["classification", "regression"]] = None
+    status: TaskStatus = TaskStatus.draft
+    dataset_filename: Optional[str] = None
+    dataset_path: Optional[str] = None
+    codex_status: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskCompactListItemRecord(BaseModel):
+    id: str
+    created_by: str
+    name: str
+    label_column: Optional[str] = None
+    problem_type: Optional[Literal["classification", "regression"]] = None
+    status: TaskStatus = TaskStatus.draft
+    dataset_filename: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskRuntimeSummaryRecord(BaseModel):
+    id: str
+    team_id: str
+    created_by: str
+    creator_user_id: str | None = None
+    name: str
+    description: str
+    label_column: Optional[str] = None
+    problem_type: Optional[Literal["classification", "regression"]] = None
+    status: TaskStatus = TaskStatus.draft
+    dataset_filename: Optional[str] = None
+    dataset_path: Optional[str] = None
+    notes: Optional[str] = None
+    last_run: Optional[RunSummary] = None
+    executor_type: Optional[Literal["codex"]] = "codex"
+    codex_workspace_path: Optional[str] = None
+    codex_session_id: Optional[str] = None
+    codex_thread_id: Optional[str] = None
+    codex_status: Optional[str] = None
+    codex_started_at: Optional[datetime] = None
+    codex_finished_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class TaskListResponse(BaseModel):
-    items: list[TaskRecord]
+    items: list[TaskSummaryRecord | TaskCompactListItemRecord]
 
 
 class TaskHumanCollaborationResponse(BaseModel):

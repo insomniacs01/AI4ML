@@ -2,7 +2,7 @@ import { detailFromTask } from '@/api/mappers'
 import { request } from '@/api/request'
 
 export async function getDelivery(taskId) {
-  const task = await request(`/tasks/${taskId}`)
+  const task = await request(`/tasks/${taskId}?sync=false`)
   const detail = detailFromTask(task)
   const profile = detail.task.dataset_profile || {}
   const targets = new Set(detail.task.target_columns || (detail.task.target_column ? [detail.task.target_column] : []))

@@ -1,4 +1,4 @@
-import { getTaskRuntimeSnapshot, getMyTasks } from '@/api/tasks'
+import { getTaskRuntimeSnapshot, getWorkspaceTasks } from '@/api/tasks'
 import { getActiveTeamHint, getCachedUser } from '@/api/session'
 import { pickActiveTask, taskIdOf } from '@/utils/taskRecords'
 import { writeWorkspaceCache } from '@/utils/workspaceCache'
@@ -21,7 +21,7 @@ export async function warmupWorkspaceCache() {
   const context = workspaceCacheContext()
   if (!context) return false
   lastWorkspaceWarmupAt = Date.now()
-  const tasks = await getMyTasks()
+  const tasks = await getWorkspaceTasks()
   const activeTask = pickActiveTask(tasks)
   const activeTaskId = taskIdOf(activeTask)
   let task = activeTask || null
@@ -29,7 +29,7 @@ export async function warmupWorkspaceCache() {
   let steps = []
 
   if (activeTaskId) {
-    const detail = await getTaskRuntimeSnapshot(activeTaskId, { sync: false })
+    const detail = await getTaskRuntimeSnapshot(activeTaskId, { sync: false, taskDetail: 'summary' })
     task = detail.task || task
     taskRun = detail.task_run || null
     steps = Array.isArray(detail.task_run?.steps) ? detail.task_run.steps : []

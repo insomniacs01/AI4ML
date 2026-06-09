@@ -6,11 +6,17 @@ import pytest
 from fastapi import HTTPException
 
 from backend.app.services.task_local_storage import TaskLocalStorage
-from backend.app.services.task_uploads import validate_upload_filename
+from backend.app.services.task_uploads import is_csv_upload_filename, validate_upload_filename
 
 
 def test_validate_upload_filename_accepts_excel_files() -> None:
     assert validate_upload_filename("ENB2012_data.xlsx") == "ENB2012_data.xlsx"
+
+
+def test_delimited_text_upload_detection_accepts_csv_and_data_files() -> None:
+    assert is_csv_upload_filename("train.csv") is True
+    assert is_csv_upload_filename("parkinsons_updrs.data") is True
+    assert is_csv_upload_filename("ENB2012_data.xlsx") is False
 
 
 def test_validate_upload_filename_rejects_path_separators() -> None:

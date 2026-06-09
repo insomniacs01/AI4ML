@@ -147,3 +147,12 @@ def test_column_names_falls_back_to_csv_header(tmp_path: Path) -> None:
     names = column_names(_task(dataset_path=str(dataset_path)), {})
 
     assert names == ["age", "income", "target"]
+
+
+def test_column_names_falls_back_to_semicolon_csv_header(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "train.csv"
+    dataset_path.write_text("Date;CO(GT);T;;\n10/03/2004;2,6;13,6;;\n", encoding="utf-8")
+
+    names = column_names(_task(dataset_path=str(dataset_path)), {})
+
+    assert names == ["Date", "CO(GT)", "T"]

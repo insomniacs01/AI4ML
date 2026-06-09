@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
@@ -71,21 +73,24 @@ def _refresh_codex_task_for_human_snapshot(task: TaskRecord, team_access: TeamAc
 @router.get("/{task_id}/human-collaboration", response_model=TaskHumanCollaborationResponse)
 def get_task_human_collaboration(
     task_id: str,
+    sync: Annotated[bool, Query()] = False,
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> TaskHumanCollaborationResponse:
     task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    task = _refresh_codex_task_for_human_snapshot(task, team_access)
-    runtime_context = _build_runtime_context(team_access)
-    stage_selection_map = _build_stage_selection_map(task, team_access, runtime_context)
-    _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
-    refreshed_task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token) or task
+    if sync:
+        task = _refresh_codex_task_for_human_snapshot(task, team_access)
+        runtime_context = _build_runtime_context(team_access)
+        stage_selection_map = _build_stage_selection_map(task, team_access, runtime_context)
+        _sync_task_human_collaboration(task, team_access, stage_selection_map=stage_selection_map)
+        task = get_task_store().get_task(team_access.team_id, task_id, access_token=team_access.access_token) or task
     return get_task_human_collaboration_service().get_snapshot(
-        refreshed_task,
+        task,
         access_token=team_access.access_token,
         actor_id=team_access.user.id,
         actor_role=team_access.role,
+        allow_stale_stage_cache=not sync,
     )
 
 

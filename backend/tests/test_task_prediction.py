@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from backend.app.models.task import TaskPredictionDemoRequest, TaskRecord
+from backend.app.services import codex_workspace_resolution, task_prediction
 from backend.app.services.task_prediction import _build_generated_code_prediction_response
 
 
@@ -85,3 +89,30 @@ def test_generated_code_prediction_filters_structured_multi_targets(tmp_path: Pa
     assert response.supported is True
     assert response.prediction["features"] == {"X1": 1}
     assert response.prediction["label"] == ["X1"]
+
+
+def test_prediction_demo_fast_path_does_not_scan_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        codex_workspace_root=tmp_path / "workspaces",
+        run_output_dir=tmp_path / "runs",
+    )
+    task = _task()
+    task.executor_type = "codex"
+    task.codex_started_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def fail_if_full_workspace_scan_runs(*args: object, **kwargs: object) -> None:
+        raise AssertionError("prediction demo must not scan the workspace root")
+
+    monkeypatch.setattr(task_prediction, "get_settings", lambda: settings)
+    monkeypatch.setattr(codex_workspace_resolution, "latest_started_workspace", fail_if_full_workspace_scan_runs)
+
+    response = task_prediction.build_prediction_demo_response(
+        task,
+        TaskPredictionDemoRequest(features={"age": 40}),
+    )
+
+    assert response.supported is False
+    assert "还没有成功结果" in response.detail

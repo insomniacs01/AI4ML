@@ -26,24 +26,18 @@ import {
 } from '@/utils/taskDetail'
 import {
   deleteTask,
-  getActiveTask,
-  getDelivery,
-  getFeatureImportance,
-  getHitl,
-  getMetrics,
+  getCodexPlan,
   getMyTasks,
-  getOperationCode,
   getReport,
-  getTaskOverview,
   getTaskRuntimeSnapshot,
+  getWorkspaceTasks,
   pauseTask,
-  predict,
-  publishPlan,
-  publishPrompt,
   rerunTask,
-  updateOperationCode,
-  validateOperationCode,
-} from '@/api/client'
+} from '@/api/tasks'
+import { publishPlan, publishPrompt } from '@/api/community'
+import { getOperationCode, updateOperationCode, validateOperationCode } from '@/api/taskCodeArtifacts'
+import { getHitl } from '@/api/taskHuman'
+import { getDelivery, predict } from '@/api/taskPredictionDemo'
 import { useTaskDetailOverview } from '@/composables/useTaskDetailOverview'
 import { createCodexRealtimeStream } from '@/composables/useCodexRealtimeStream'
 import { optionalLoad } from '@/utils/async'
@@ -51,7 +45,7 @@ import { createCodexRealtimeState, seedCodexRealtimeFromSnapshot } from '@/utils
 import { modelDisplayName } from '@/utils/modelProfile'
 import { continueRunOptions } from '@/utils/taskRunControl'
 import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
-import { isFinishedTaskStatus, taskIdOf } from '@/utils/taskRecords'
+import { isFinishedTaskStatus, pickBlockingRuntimeTask, taskIdOf } from '@/utils/taskRecords'
 
 const props = defineProps({ taskId: { type: String, required: true } })
 const route = useRoute()
@@ -74,6 +68,8 @@ const importance = ref(null)
 const overview = ref(null)
 const report = ref('')
 const code = ref('')
+const codeEditable = ref(false)
+const codeLoadDetail = ref('')
 const delivery = ref(null)
 const hitl = ref(null)
 const peerTasks = ref([])
@@ -98,8 +94,10 @@ const planEditorOpen = ref(false)
 const loadedSections = ref({ overview: false, report: false, demo: false, code: false, publish: false })
 const activeTaskId = ref('')
 let snapshotRefreshTimer = null
+let peerTaskLoadVersion = 0
 const runtimeActiveStatuses = new Set(['running'])
 const startableStatuses = new Set(['uploaded', 'planning'])
+const reportFetchStatuses = new Set(['completed', 'failed', 'published'])
 
 const isCurrentActiveTask = computed(() => activeTaskId.value && activeTaskId.value === props.taskId)
 const hasAnotherActiveTask = computed(() => activeTaskId.value && activeTaskId.value !== props.taskId)
@@ -121,8 +119,7 @@ const canContinueRun = computed(() => (
 ))
 const runActionLabel = computed(() => (startableStatuses.has(task.value?.status) ? '启动运行' : '继续运行'))
 const canHandleHitl = computed(() => canControlTask.value && isWaitingHuman.value)
-const canEditCode = computed(() => !readOnlyMode.value)
-const llmUsageText = computed(() => formatTokenCount(task.value?.llm_usage?.total_tokens))
+const canEditCode = computed(() => !readOnlyMode.value && codeEditable.value)
 const codexRunStrategy = computed(() => taskRun.value?.codex?.run_strategy || null)
 const strategyExecutionLimits = computed(() => codexRunStrategy.value?.execution_limits || {})
 const strategyOverview = computed(() => {
@@ -148,6 +145,7 @@ const codexTokenUsage = computed(() => (
   || normalizeTokenUsage(task.value?.llm_usage)
   || null
 ))
+const llmUsageText = computed(() => formatTokenCount(codexTokenUsage.value?.total_tokens))
 const tokenComparison = computed(() => buildTokenComparison(codexTokenUsage.value, peerTasks.value, task.value))
 const tokenObservability = computed(() => buildTokenObservability({
   usage: codexTokenUsage.value || {},
@@ -223,8 +221,25 @@ function reconcileActiveTaskAfterSnapshot() {
   }
 }
 
-async function refreshPlanText({ overwrite = false } = {}) {
-  const detail = await getTaskRuntimeSnapshot(props.taskId)
+function hasGeneratedReportCandidate() {
+  return Boolean(
+    report.value.trim()
+    || reportFetchStatuses.has(task.value?.status)
+    || task.value?.last_run
+    || taskRun.value?.artifacts?.has_run_summary
+    || taskRun.value?.codex?.status === 'completed',
+  )
+}
+
+async function refreshPlanText({ overwrite = false, sync = false } = {}) {
+  if (sync) {
+    const plan = await getCodexPlan(props.taskId)
+    if (plan?.plan_text && (overwrite || !planText.value.trim())) {
+      planText.value = plan.plan_text
+    }
+    return planText.value
+  }
+  const detail = await getTaskRuntimeSnapshot(props.taskId, { sync })
   if (detail.task) task.value = detail.task
   if (detail.task_run) taskRun.value = detail.task_run
   syncPlanTextFromDetail(detail, { overwrite })
@@ -235,10 +250,13 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const currentActiveTask = await optionalLoad(() => getActiveTask())
+    const [runtimeTasks, detail] = await Promise.all([
+      optionalLoad(() => getWorkspaceTasks(), []),
+      getTaskRuntimeSnapshot(props.taskId, { sync: false, taskDetail: 'summary' }),
+    ])
+    const currentActiveTask = pickBlockingRuntimeTask(runtimeTasks)
     activeTaskId.value = taskIdOf(currentActiveTask)
-    peerTasks.value = await optionalLoad(() => getMyTasks(), peerTasks.value)
-    const detail = await getTaskRuntimeSnapshot(props.taskId)
+    if (!peerTasks.value.length && Array.isArray(runtimeTasks)) peerTasks.value = runtimeTasks
     task.value = detail.task || detail
     taskRun.value = detail.task_run || null
     reconcileActiveTaskAfterSnapshot()
@@ -256,6 +274,7 @@ async function load() {
     if (showRealtime.value) connectStream()
     else closeStream()
     scheduleSnapshotRefresh()
+    loadPeerTasksInBackground()
   } catch (err) {
     error.value = err.message
   } finally {
@@ -263,8 +282,8 @@ async function load() {
   }
 }
 
-async function refreshRuntimeSnapshot() {
-  const detail = await getTaskRuntimeSnapshot(props.taskId)
+async function refreshRuntimeSnapshot(options = {}) {
+  const detail = await getTaskRuntimeSnapshot(props.taskId, { sync: options.sync === true, taskDetail: 'summary' })
   task.value = detail.task || detail
   taskRun.value = detail.task_run || taskRun.value
   reconcileActiveTaskAfterSnapshot()
@@ -272,26 +291,33 @@ async function refreshRuntimeSnapshot() {
   syncPlanTextFromDetail(detail)
   if (hasObjectContent(detail.task_run?.overview)) overview.value = detail.task_run.overview
   steps.value = detail.task_run?.steps || steps.value
+  if (detail.task_run?.metrics) metrics.value = { values: detail.task_run.metrics }
   if (showRealtime.value) connectStream()
   else closeStream()
 }
 
+async function loadPeerTasksInBackground() {
+  const version = ++peerTaskLoadVersion
+  try {
+    const taskList = await optionalLoad(() => getMyTasks(), peerTasks.value)
+    if (version !== peerTaskLoadVersion) return
+    peerTasks.value = Array.isArray(taskList) ? taskList : []
+  } catch {
+    // Peer tasks only power comparison hints; the detail page must stay interactive without them.
+  }
+}
+
 async function loadOverviewDetails() {
-  if (loadedSections.value.overview && importance.value && hasObjectContent(overview.value)) return
-  const [metricData, featureData, overviewData] = await Promise.all([
-    optionalLoad(() => getMetrics(props.taskId)),
-    optionalLoad(() => getFeatureImportance(props.taskId)),
-    optionalLoad(() => getTaskOverview(props.taskId), {}),
-  ])
-  metrics.value = metricData || metrics.value
-  importance.value = featureData || importance.value
-  if (hasObjectContent(overviewData)) overview.value = overviewData
-  else if (hasObjectContent(featureData?.overview)) overview.value = featureData.overview
   loadedSections.value.overview = true
 }
 
 async function loadReportSection() {
   if (loadedSections.value.report) return
+  if (!hasGeneratedReportCandidate()) {
+    report.value = ''
+    loadedSections.value.report = true
+    return
+  }
   const reportData = await optionalLoad(() => getReport(props.taskId), { content: '' })
   report.value = reportData.content || ''
   loadedSections.value.report = true
@@ -306,15 +332,29 @@ async function loadDemoSection() {
 
 async function loadCodeSection() {
   if (loadedSections.value.code) return
-  const codeData = await optionalLoad(() => getOperationCode(props.taskId), { content: '' })
+  const codeData = await optionalLoad(() => getOperationCode(props.taskId), {
+    content: '',
+    editable: false,
+    detail: '当前任务还没有可编辑源码。',
+  })
   code.value = codeData.content || ''
+  codeEditable.value = Boolean(codeData.editable)
+  codeLoadDetail.value = codeData.detail || ''
   loadedSections.value.code = true
+}
+
+function codeActionBlockedMessage(actionName) {
+  if (readOnlyMode.value) return `当前有其他任务正在进行，历史任务不能${actionName}源码。`
+  return codeLoadDetail.value || '当前任务还没有可编辑源码。'
 }
 
 async function loadPublishSection() {
   if (loadedSections.value.publish) return
+  const reportPromise = hasGeneratedReportCandidate()
+    ? optionalLoad(() => getReport(props.taskId), { content: '' })
+    : Promise.resolve({ content: '' })
   const [reportData] = await Promise.all([
-    optionalLoad(() => getReport(props.taskId), { content: '' }),
+    reportPromise,
     refreshPlanText().catch(() => planText.value),
   ])
   if (reportData?.content && !planDescription.value.trim()) planDescription.value = reportData.content.slice(0, 180)
@@ -379,7 +419,7 @@ async function runPredict(rows = null) {
 
 async function saveCode() {
   if (!canEditCode.value) {
-    error.value = '当前有其他任务正在进行，历史任务源码只能查看，不能保存。'
+    error.value = codeActionBlockedMessage('保存')
     return
   }
   try {
@@ -392,7 +432,7 @@ async function saveCode() {
 
 async function validateCode() {
   if (!canEditCode.value) {
-    error.value = '当前有其他任务正在进行，历史任务不能触发源码验证。'
+    error.value = codeActionBlockedMessage('验证')
     return
   }
   try {
@@ -428,12 +468,15 @@ async function publishTaskPlan() {
     return
   }
   try {
-    if (!planText.value.trim()) await refreshPlanText()
+    if (!planText.value.trim()) await refreshPlanText({ sync: true })
     if (!planText.value.trim()) throw new Error(`当前任务还没有可发布的 ${modelDisplayName.value} 执行方案。`)
     await publishPlan(props.taskId, {
       name: planName.value,
       description: planDescription.value,
       plan_text: planText.value,
+      task_category: task.value?.task_type || task.value?.problem_type || '',
+      target_column: task.value?.target_column || '',
+      metric: task.value?.metric || '',
     })
     message.value = '执行方案已提交审核，管理员通过后会出现在社区广场。'
   } catch (err) {
@@ -444,7 +487,7 @@ async function publishTaskPlan() {
 async function openPlanEditor() {
   error.value = ''
   try {
-    if (!planText.value.trim()) await refreshPlanText()
+    if (!planText.value.trim()) await refreshPlanText({ sync: true })
     if (!planText.value.trim()) throw new Error(`当前任务还没有加载到 ${modelDisplayName.value} 执行方案。`)
     planEditorOpen.value = true
   } catch (err) {
@@ -660,6 +703,7 @@ onUnmounted(() => {
       <button class="secondary-action" type="button" :disabled="!canEditCode" @click="validateCode"><Play :size="18" />验证</button>
       <button class="secondary-action" type="button" :disabled="!canEditCode" @click="saveCode"><Save :size="18" />保存</button>
     </div>
+    <p v-if="codeLoadDetail && !codeEditable" class="muted">{{ codeLoadDetail }}</p>
     <pre v-if="codeValidation">{{ JSON.stringify(codeValidation, null, 2) }}</pre>
     <textarea v-model="code" class="code-editor" rows="24" :readonly="!canEditCode" />
   </section>
@@ -691,7 +735,7 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-      <button class="primary-action" type="button" :disabled="readOnlyMode || !planName || !planText.trim()" @click="publishTaskPlan">
+      <button class="primary-action" type="button" :disabled="readOnlyMode || !planName" @click="publishTaskPlan">
         <Send :size="18" />提交审核
       </button>
     </div>

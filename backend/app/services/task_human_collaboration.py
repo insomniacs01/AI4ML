@@ -70,11 +70,19 @@ class TaskHumanCollaborationService:
         access_token: str,
         actor_id: str | None = None,
         actor_role: str | None = None,
+        allow_stale_stage_cache: bool = False,
     ) -> TaskHumanCollaborationResponse:
         requests = expire_overdue_human_requests(self.task_store, task, access_token=access_token)
+        stage_kwargs: dict[str, object] = {"access_token": access_token}
+        if allow_stale_stage_cache:
+            stage_kwargs["allow_stale_cache"] = True
         existing_records = {
             stage_key(record.stage): record
-            for record in self.task_store.list_stage_records(task.team_id, task.id, access_token=access_token)
+            for record in self.task_store.list_stage_records(
+                task.team_id,
+                task.id,
+                **stage_kwargs,
+            )
         }
         stages = self._stage_builder.build_stage_snapshot(
             task,

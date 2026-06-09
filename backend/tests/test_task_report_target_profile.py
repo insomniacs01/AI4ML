@@ -38,6 +38,26 @@ def test_build_target_profile_summarizes_numeric_dataset_column(tmp_path) -> Non
     assert profile["median"] == 3.0
 
 
+def test_build_target_profile_reads_semicolon_csv(tmp_path) -> None:
+    dataset = tmp_path / "train.csv"
+    dataset.write_text(
+        "Date;CO(GT);T;;\n"
+        "10/03/2004;2,6;13,6;;\n"
+        "11/03/2004;2,0;13,3;;\n"
+        "12/03/2004;2,2;13,1;;\n"
+        "13/03/2004;2,4;12,9;;\n"
+        "14/03/2004;2,8;12,7;;\n",
+        encoding="utf-8",
+    )
+
+    profile = build_target_profile(_task(dataset_path=str(dataset), label_column="CO(GT)"), None)
+
+    assert profile["status"] == "available"
+    assert profile["source"] == "dataset_file"
+    assert profile["kind"] == "numeric"
+    assert profile["count"] == 5
+
+
 def test_build_target_profile_reports_missing_dataset_target_column(tmp_path) -> None:
     dataset = tmp_path / "train.csv"
     dataset.write_text("feature,other\nA,1\n", encoding="utf-8")

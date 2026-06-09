@@ -10,6 +10,7 @@ from backend.app.models.governance import (
     PlatformAssetPublishRequest,
     PlatformAssetRecord,
     PlatformAssetReviewRequest,
+    PlatformAssetSummaryRecord,
     TeamProfileRecord,
 )
 from backend.app.services.governance_asset_payloads import (
@@ -120,6 +121,39 @@ def test_asset_from_payload_attaches_creator_profile_and_sanitizes_fields() -> N
     assert record.visibility == "private"
     assert record.creator_display_name == "Ada"
     assert record.creator_email == "ada@example.com"
+
+
+def test_asset_summary_payload_excludes_detail_only_fields() -> None:
+    record = _asset_record(
+        asset_type="plan",
+        model_card={"long": "x" * 1000},
+        metadata={"plan_text": "x" * 10000, "metric": "accuracy"},
+        storage_path="storage/full/artifact",
+    )
+
+    payload = PlatformAssetSummaryRecord(
+        id=record.id,
+        team_id=record.team_id,
+        created_by=record.created_by,
+        asset_type=record.asset_type,
+        title=record.title,
+        description=record.description,
+        category=record.category,
+        tags=record.tags,
+        visibility=record.visibility,
+        version=record.version,
+        source_task_id=record.source_task_id,
+        source_asset_id=record.source_asset_id,
+        review_status=record.review_status,
+        published_at=record.published_at,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    ).model_dump(exclude_none=True)
+
+    assert "metadata" not in payload
+    assert "model_card" not in payload
+    assert "storage_path" not in payload
+    assert payload["id"] == "asset-1"
 
 
 def test_unwrap_single_record_rejects_unexpected_shapes() -> None:

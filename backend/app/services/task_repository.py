@@ -33,17 +33,24 @@ class TaskRepository(TaskPayloadMapper):
         lightweight: bool = True,
         limit: int | None = 100,
         offset: int = 0,
+        statuses: tuple[str, ...] | None = None,
         prefer_cache: bool = True,
         allow_stale_cache: bool = False,
     ) -> list[TaskRecord]:
         cached_tasks = self.cache.list_tasks(team_id)
         if prefer_cache and lightweight and cached_tasks:
             if allow_stale_cache or self.cache.has_fresh_team_cache(team_id):
-                return cached_tasks
+                return self._lightweight_records(self._filter_by_status(cached_tasks, statuses))
 
         try:
             payload = self._request_json(
-                path=task_list_path(team_id, lightweight=lightweight, limit=limit, offset=offset),
+                path=task_list_path(
+                    team_id,
+                    lightweight=lightweight,
+                    limit=limit,
+                    offset=offset,
+                    statuses=statuses,
+                ),
                 access_token=access_token,
             )
         except ConnectionError:
@@ -54,8 +61,38 @@ class TaskRepository(TaskPayloadMapper):
             raise ConnectionError("Unexpected task list response from Supabase.")
         tasks = [self._task_from_payload(item) for item in payload]
         self.cache.upsert_tasks(tasks, detail=not lightweight)
-        self.cache.prune_team_tasks(team_id, {task.id for task in tasks})
+        if not statuses:
+            self.cache.prune_team_tasks(team_id, {task.id for task in tasks})
         return tasks
+
+    @staticmethod
+    def _lightweight_records(tasks: list[TaskRecord]) -> list[TaskRecord]:
+        records: list[TaskRecord] = []
+        for task in tasks:
+            record = task.model_copy(deep=True)
+            record.dataset_profile = None
+            record.analysis_token_usage = None
+            record.last_run = None
+            record.last_run_attempt = None
+            record.structured_requirements = None
+            record.stage_routing = []
+            record.interaction_policies = []
+            records.append(record)
+        return records
+
+    @staticmethod
+    def _filter_by_status(
+        tasks: list[TaskRecord],
+        statuses: tuple[str, ...] | None,
+    ) -> list[TaskRecord]:
+        if not statuses:
+            return list(tasks)
+        allowed = {str(status) for status in statuses}
+        return [
+            task
+            for task in tasks
+            if (task.status.value if hasattr(task.status, "value") else str(task.status)) in allowed
+        ]
 
     @staticmethod
     def _task_summary_select() -> str:

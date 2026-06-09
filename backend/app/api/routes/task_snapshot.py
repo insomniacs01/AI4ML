@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.app.core.supabase_auth import TeamAccessContext, require_team_access
@@ -18,10 +20,16 @@ router = APIRouter(tags=["task-lifecycle"])
 def get_task_runtime_snapshot(
     task_id: str,
     sync: bool = Query(True),
+    task_detail: Literal["full", "summary"] = Query("full"),
     team_access: TeamAccessContext = Depends(require_team_access),
 ) -> TaskRuntimeSnapshotResponse:
     try:
-        return build_task_runtime_snapshot_response(task_id, team_access, sync_runtime=sync)
+        return build_task_runtime_snapshot_response(
+            task_id,
+            team_access,
+            sync_runtime=sync,
+            task_detail=task_detail,
+        )
     except TaskRuntimeSnapshotNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TaskRuntimeSnapshotSyncError as exc:

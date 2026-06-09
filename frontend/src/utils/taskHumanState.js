@@ -26,6 +26,17 @@ function hasOpenRequestCount(source) {
   return counts.some((value) => Number(value || 0) > 0)
 }
 
+function hasRequestCountField(source) {
+  return (
+    Object.prototype.hasOwnProperty.call(source || {}, 'open_request_count')
+    || Object.prototype.hasOwnProperty.call(source || {}, 'my_open_request_count')
+  )
+}
+
+function hasRequestListField(source) {
+  return Array.isArray(source?.requests) || Array.isArray(source?.my_requests)
+}
+
 function hasOpenRequestList(source) {
   const requests = [
     ...(Array.isArray(source?.requests) ? source.requests : []),
@@ -36,6 +47,10 @@ function hasOpenRequestList(source) {
 
 function hasOpenHumanRequest(source) {
   return hasOpenRequestCount(source) || hasOpenRequestList(source)
+}
+
+function hasExplicitRequestState(...sources) {
+  return sources.some((source) => hasRequestCountField(source) || hasRequestListField(source))
 }
 
 function taskRunHasHumanWaitingStatus(taskRun) {
@@ -73,9 +88,10 @@ export function hasPendingHumanConfirmation(task, taskRun = null, steps = []) {
   const taskStatus = statusValue(task?.status)
   const hasOpenRequest = hasOpenHumanRequest(task) || hasOpenHumanRequest(taskRun)
   if (FINISHED_TASK_STATUSES.has(taskStatus)) return hasOpenRequest
+  if (hasOpenRequest) return true
+  if (hasExplicitRequestState(task, taskRun)) return false
   return (
     isHumanWaitingStatus(taskStatus)
-    || hasOpenRequest
     || taskHasHumanWaitingStatus(task)
     || taskRunHasHumanWaitingStatus(taskRun)
     || Boolean(firstWaitingHumanStep(steps))

@@ -32,14 +32,18 @@ export async function getHitl(taskId) {
   const snapshot = await request(`/tasks/${taskId}/human-collaboration`)
   const requestRecord = (snapshot.my_requests || snapshot.requests || []).find((item) => ['pending', 'open'].includes(item.status))
     || snapshot.requests?.find((item) => ['pending', 'open'].includes(item.status))
-    || snapshot.requests?.[0]
   const task = mapTask(snapshot.task)
-  const mappedRequest = mapHumanRequest(requestRecord, task)
+  const mappedRequest = requestRecord ? mapHumanRequest(requestRecord, task) : null
   return {
     status: requestRecord?.status || (snapshot.open_request_count ? 'pending' : 'none'),
     request: mappedRequest,
-    task_spec: mappedRequest.task_spec,
-    train_plan: mappedRequest.train_plan,
+    task_spec: mappedRequest?.task_spec || {
+      target_column: task?.target_column || task?.label_column || '',
+      task_type: task?.task_type || task?.problem_type || '',
+      metric: task?.metric || task?.last_run?.metric_name || '',
+      time_budget_s: '',
+    },
+    train_plan: mappedRequest?.train_plan || { time_budget_s: '' },
     open_request_count: snapshot.open_request_count || 0,
   }
 }
@@ -82,7 +86,7 @@ export async function submitHitl(taskId, payload) {
     && (isCodexPlanApproval || isCodexImprovementReview || !['paused_for_review', 'waiting_human'].includes(decision.task.status))
   )
   if (shouldContinueRun) {
-    const runTask = await request(`/tasks/${taskId}/run`, {
+    const runTask = await request(`/tasks/${taskId}/run?async_start=true`, {
       method: 'POST',
       body: JSON.stringify({
         resume_after_human: isCodexImprovementReview ? false : isCodexPlanApproval ? action === 'approve' : action !== 'revise',

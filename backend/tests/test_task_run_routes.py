@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 from fastapi import FastAPI
 
 from backend.app.api.router import register_api_routes
@@ -65,3 +65,138 @@ def test_run_task_maps_preflight_permission_errors_to_forbidden(monkeypatch: pyt
 
     assert raised.value.status_code == status.HTTP_403_FORBIDDEN
     assert raised.value.detail == "Supabase rejected task preflight."
+
+
+def test_run_task_async_start_returns_before_codex_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = _task()
+    saved_tasks: list[TaskRecord] = []
+    start_calls: list[TaskRecord] = []
+
+    class Store:
+        def get_task(self, team_id: str, task_id: str, *, access_token: str) -> TaskRecord | None:
+            return task
+
+        def save_task(self, task: TaskRecord, *, access_token: str) -> TaskRecord:
+            saved_tasks.append(task)
+            return task
+
+    class HumanService:
+        def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
+            return None
+
+    def start_codex(task: TaskRecord, settings: object, *, token_budget: int | None = None) -> dict:
+        start_calls.append(task)
+        return {"sessionId": "session-1", "threadId": "thread-1", "workspacePath": "D:/runs/task"}
+
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_task_store", lambda: Store())
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_settings", lambda: object())
+    monkeypatch.setattr("backend.app.api.routes.task_run.assert_task_run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run._assert_codex_task_can_control_current_activity", lambda task, team_access: task)
+    monkeypatch.setattr("backend.app.api.routes.task_run._assert_quota_allows_action", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_task_human_collaboration_service", lambda: HumanService())
+    monkeypatch.setattr("backend.app.api.routes.task_run.record_codex_running_stages", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run.start_codex_task", start_codex)
+
+    team_access = SimpleNamespace(
+        team_id="team-1",
+        access_token="token",
+        user=SimpleNamespace(id="user-1"),
+    )
+    background_tasks = BackgroundTasks()
+
+    result = run_task(
+        task.id,
+        TaskRunRequest(),
+        team_access,
+        background_tasks=background_tasks,
+        async_start=True,
+    )
+
+    assert result.status == TaskStatus.running
+    assert result.codex_status == "starting"
+    assert saved_tasks == [result]
+    assert start_calls == []
+    assert len(background_tasks.tasks) == 1
+
+
+@pytest.mark.parametrize(
+    ("payload", "action", "note"),
+    [
+        (
+            TaskRunRequest(regenerate_plan=True),
+            "regenerate_plan",
+            "Codex 正在后台根据人工反馈重新生成建模计划。",
+        ),
+        (
+            TaskRunRequest(resume_interrupted=True, improvement_decision="stop_and_report"),
+            "resume_interrupted",
+            "Codex 正在后台恢复任务执行。",
+        ),
+        (
+            TaskRunRequest(resume_after_human=True, plan_text="1. Train and validate a small baseline."),
+            "resume_after_human",
+            "Codex 正在后台接收人工确认并继续执行。",
+        ),
+    ],
+)
+def test_run_task_async_continue_returns_before_codex_continue(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: TaskRunRequest,
+    action: str,
+    note: str,
+) -> None:
+    task = _task()
+    task.status = TaskStatus.paused_for_review
+    task.codex_workspace_path = "D:/runs/task"
+    saved_tasks: list[TaskRecord] = []
+
+    class Store:
+        def get_task(self, team_id: str, task_id: str, *, access_token: str) -> TaskRecord | None:
+            return task
+
+        def save_task(self, task: TaskRecord, *, access_token: str) -> TaskRecord:
+            saved_tasks.append(task)
+            return task
+
+    class HumanService:
+        def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
+            return None
+
+    def fail_if_called(*args: object, **kwargs: object) -> TaskRecord:
+        raise AssertionError("Codex continue path was called before the response returned.")
+
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_task_store", lambda: Store())
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_settings", lambda: object())
+    monkeypatch.setattr("backend.app.api.routes.task_run.assert_task_run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run._assert_codex_task_can_control_current_activity", lambda task, team_access: task)
+    monkeypatch.setattr("backend.app.api.routes.task_run._assert_quota_allows_action", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_task_human_collaboration_service", lambda: HumanService())
+    monkeypatch.setattr("backend.app.api.routes.task_run.record_codex_running_stages", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run._regenerate_codex_plan_and_save", fail_if_called)
+    monkeypatch.setattr("backend.app.api.routes.task_run._resume_interrupted_codex_task", fail_if_called)
+    monkeypatch.setattr("backend.app.api.routes.task_run._approve_codex_plan_and_save", fail_if_called)
+
+    team_access = SimpleNamespace(
+        team_id="team-1",
+        access_token="token",
+        user=SimpleNamespace(id="user-1"),
+    )
+    background_tasks = BackgroundTasks()
+
+    result = run_task(
+        task.id,
+        payload,
+        team_access,
+        background_tasks=background_tasks,
+        async_start=True,
+    )
+
+    queued_call = background_tasks.tasks[0]
+    assert result.status == TaskStatus.running
+    assert result.codex_status == "starting"
+    assert result.notes == note
+    assert saved_tasks == [result]
+    assert len(background_tasks.tasks) == 1
+    assert queued_call.args[0] == action
+    assert queued_call.args[1].status == TaskStatus.paused_for_review
+    assert queued_call.args[2] == payload

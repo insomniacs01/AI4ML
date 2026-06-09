@@ -10,7 +10,8 @@ import LoadingBlock from '@/components/LoadingBlock.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import TaskFlowSteps from '@/components/TaskFlowSteps.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
-import { getHitl, getMyTasks, getTaskRuntimeSnapshot, pauseTask, rerunTask } from '@/api/client'
+import { getHitl } from '@/api/taskHuman'
+import { getTaskRuntimeSnapshot, getWorkspaceTasks, pauseTask, rerunTask } from '@/api/tasks'
 import { getActiveTeamHint, getCachedUser } from '@/api/session'
 import { createCodexRealtimeStream } from '@/composables/useCodexRealtimeStream'
 import { displayTaskTitle } from '@/utils/labels'
@@ -51,6 +52,8 @@ const taskRun = ref(null)
 const codexRealtime = ref(createCodexRealtimeState())
 let pollTimer = null
 let disposed = false
+let snapshotLoadVersion = 0
+let snapshotRefreshingTaskId = ''
 const pausableStatuses = new Set(['running'])
 const runtimeActiveStatuses = new Set(['running'])
 const startableStatuses = new Set(['uploaded', 'planning'])
@@ -77,6 +80,7 @@ const isRuntimeStateFromStaleCache = computed(() => (
   && isRuntimeActive.value
   && !isWorkspaceRuntimeCacheFresh(cacheSyncedAt.value)
 ))
+const shouldAutoRefreshRuntime = computed(() => isRuntimeActive.value || isRuntimeStateFromStaleCache.value)
 const canContinueRun = computed(() => (
   (isStartableTask.value || isPausedRun.value) && !isWaitingHuman.value
 ))
@@ -210,7 +214,7 @@ function mergeRealtimeEvent(payload) {
   if (Object.prototype.hasOwnProperty.call(update, 'taskRun')) taskRun.value = update.taskRun
   if (update.persist) persistWorkspaceCache()
   if (update.closeStream) closeStream()
-  if (update.refreshSnapshot) refreshSnapshot({ force: true })
+  if (update.refreshSnapshot) refreshSnapshot({ force: true, sync: true })
 }
 
 function mergeSnapshot(data) {
@@ -222,13 +226,17 @@ function mergeSnapshot(data) {
 }
 
 async function loadTask(taskId, options = {}) {
+  const loadVersion = ++snapshotLoadVersion
   if (!taskId) {
     clearActiveWorkspace()
     persistWorkspaceCache()
-    return
+    return false
   }
-  const detail = await getTaskRuntimeSnapshot(taskId, { sync: options.sync !== false })
-  if (disposed) return
+  const detail = await getTaskRuntimeSnapshot(taskId, {
+    sync: options.sync === true,
+    taskDetail: 'summary',
+  })
+  if (disposed || loadVersion !== snapshotLoadVersion || taskIdOf(task.value) !== taskId) return false
   const freshTask = detail.task || detail
   tasks.value = tasks.value.map((item) => (
     taskIdOf(item) === taskId
@@ -241,7 +249,7 @@ async function loadTask(taskId, options = {}) {
   if (!WORKSPACE_TASK_STATUSES.has(freshTask?.status)) {
     clearActiveWorkspace()
     persistWorkspaceCache()
-    return
+    return true
   }
   task.value = {
     ...(task.value || {}),
@@ -253,6 +261,34 @@ async function loadTask(taskId, options = {}) {
   connectStream()
   hydratedFromCache.value = false
   persistWorkspaceCache()
+  return true
+}
+
+async function runSnapshotLoad(taskId, options = {}) {
+  try {
+    const applied = await loadTask(taskId, options)
+    if (applied && options.refreshAfterLoad && !disposed && taskIdOf(task.value) === taskId) {
+      if (snapshotRefreshingTaskId === taskId) {
+        snapshotRefreshing.value = false
+        snapshotRefreshingTaskId = ''
+      }
+      await refreshSnapshot({ force: true, sync: true })
+    }
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    if (snapshotRefreshingTaskId === taskId) {
+      snapshotRefreshing.value = false
+      snapshotRefreshingTaskId = ''
+    }
+  }
+}
+
+function startSnapshotLoad(taskId, options = {}) {
+  if (!taskId || snapshotRefreshingTaskId === taskId) return
+  snapshotRefreshing.value = true
+  snapshotRefreshingTaskId = taskId
+  runSnapshotLoad(taskId, options)
 }
 
 async function load(options = {}) {
@@ -261,7 +297,7 @@ async function load(options = {}) {
   else loading.value = true
   error.value = ''
   try {
-    const data = await getMyTasks()
+    const data = await getWorkspaceTasks()
     if (disposed) return
     tasks.value = Array.isArray(data) ? data : []
     const selected = pickActiveTask(tasks.value)
@@ -270,8 +306,16 @@ async function load(options = {}) {
       if (taskIdOf(task.value) !== selectedTaskId) {
         clearActiveWorkspace()
       }
-      await loadTask(selectedTaskId, { sync: false })
-      refreshSnapshot({ force: true })
+      task.value = {
+        ...(task.value || {}),
+        ...selected,
+      }
+      hydratedFromCache.value = false
+      persistWorkspaceCache()
+      startSnapshotLoad(selectedTaskId, {
+        sync: false,
+        refreshAfterLoad: selected?.status === 'running',
+      })
     } else {
       clearActiveWorkspace()
       persistWorkspaceCache()
@@ -285,25 +329,26 @@ async function load(options = {}) {
   }
 }
 
-function realtimeIsLive() {
-  return ['connected', 'running', 'replaying'].includes(codexRealtime.value.status)
-}
-
 async function refreshSnapshot(options = {}) {
   if (
     loading.value
     || snapshotRefreshing.value
     || !activeTaskId.value
     || (finished.value && !options.force)
-    || (!options.force && realtimeIsLive() && codexRealtime.value.events.length)
+    || (!options.force && !shouldAutoRefreshRuntime.value)
   ) return
   snapshotRefreshing.value = true
+  const taskId = activeTaskId.value
+  snapshotRefreshingTaskId = taskId
   try {
-    await loadTask(activeTaskId.value)
+    await loadTask(taskId, { sync: options.sync === true })
   } catch (err) {
     error.value = err.message
   } finally {
-    snapshotRefreshing.value = false
+    if (snapshotRefreshingTaskId === taskId) {
+      snapshotRefreshing.value = false
+      snapshotRefreshingTaskId = ''
+    }
   }
 }
 

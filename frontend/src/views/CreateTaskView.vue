@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Brain, ClipboardList, FileText, UploadCloud, X } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import TaskFlowSteps from '@/components/TaskFlowSteps.vue'
-import { createTask, getPlanDetail, getPlans, getPromptDetail, getPrompts, uploadDataset } from '@/api/client'
+import { getCommunityAssets, getPlanDetail, getPromptDetail } from '@/api/community'
+import { createTask, uploadDataset } from '@/api/tasks'
 import { modelDisplayName } from '@/utils/modelProfile'
 
 const router = useRouter()
@@ -17,6 +18,7 @@ const selectedPrompt = ref(null)
 const selectedPlan = ref(null)
 const communityPrompts = ref([])
 const communityPlans = ref([])
+const assetSelectionLoading = ref(false)
 const form = ref({
   title: '',
   requirement: '请帮我基于这份表格数据训练一个预测模型，并输出业务可读的模型性能和特征重要性解释。',
@@ -129,41 +131,64 @@ function clearPlan() {
 }
 
 function selectPromptById(promptId) {
-  const prompt = communityPrompts.value.find((item) => item.prompt_id === promptId)
-  if (prompt) applyPrompt(prompt)
+  void applyPromptById(promptId)
 }
 
 function selectPlanById(planId) {
-  const plan = communityPlans.value.find((item) => item.plan_id === planId)
-  if (plan) applyPlan(plan)
-  else clearPlan()
+  void applyPlanById(planId)
+}
+
+async function applyPromptById(promptId) {
+  const id = String(promptId || '').trim()
+  if (!id) {
+    clearPrompt()
+    return
+  }
+  assetSelectionLoading.value = true
+  error.value = ''
+  try {
+    applyPrompt(await getPromptDetail(id))
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    assetSelectionLoading.value = false
+  }
+}
+
+async function applyPlanById(planId) {
+  const id = String(planId || '').trim()
+  if (!id) {
+    clearPlan()
+    return
+  }
+  assetSelectionLoading.value = true
+  error.value = ''
+  try {
+    applyPlan(await getPlanDetail(id))
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    assetSelectionLoading.value = false
+  }
 }
 
 async function loadRoutePrompt() {
   const promptId = String(route.query.prompt_id || '').trim()
   if (!promptId) return
-  try {
-    applyPrompt(await getPromptDetail(promptId))
-  } catch (err) {
-    error.value = err.message
-  }
+  await applyPromptById(promptId)
 }
 
 async function loadRoutePlan() {
   const planId = String(route.query.plan_id || '').trim()
   if (!planId) return
-  try {
-    applyPlan(await getPlanDetail(planId))
-  } catch (err) {
-    error.value = err.message
-  }
+  await applyPlanById(planId)
 }
 
 async function loadRouteInputs() {
   try {
-    const [promptData, planData] = await Promise.all([getPrompts(false), getPlans(false)])
-    communityPrompts.value = promptData.items || []
-    communityPlans.value = planData.items || []
+    const assets = await getCommunityAssets(false)
+    communityPrompts.value = assets.prompts || []
+    communityPlans.value = assets.plans || []
   } catch (err) {
     communityPrompts.value = []
     communityPlans.value = []
@@ -199,7 +224,7 @@ onMounted(loadRouteInputs)
         <div v-if="communityPrompts.length" class="start-task-secondary">
           <label class="field">
             <span>从提示词广场导入</span>
-            <select :value="selectedPrompt?.prompt_id || ''" @change="selectPromptById($event.target.value)">
+            <select :value="selectedPrompt?.prompt_id || ''" :disabled="assetSelectionLoading" @change="selectPromptById($event.target.value)">
               <option value="">不使用提示词</option>
               <option v-for="item in communityPrompts" :key="item.prompt_id" :value="item.prompt_id">
                 {{ item.name }}
@@ -236,7 +261,7 @@ onMounted(loadRouteInputs)
         <div v-if="showAdvanced" class="form-stack start-advanced">
           <label v-if="communityPlans.length" class="field">
             <span>使用方案广场方案</span>
-            <select :value="selectedPlan?.plan_id || ''" @change="selectPlanById($event.target.value)">
+            <select :value="selectedPlan?.plan_id || ''" :disabled="assetSelectionLoading" @change="selectPlanById($event.target.value)">
               <option value="">不使用社区方案</option>
               <option v-for="item in communityPlans" :key="item.plan_id" :value="item.plan_id">
                 {{ item.name }}

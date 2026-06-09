@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from hashlib import sha256
+from threading import Lock
+import time
 from typing import Any
 
 from backend.app.models.governance import (
@@ -27,6 +30,8 @@ from backend.app.services.governance_team_queries import (
 )
 
 RequestJson = Callable[..., Any]
+TEAM_MEMBER_CACHE_TTL_SECONDS = 30.0
+TEAM_SETTINGS_CACHE_TTL_SECONDS = 30.0
 
 
 class GovernanceTeamRepository:
@@ -37,8 +42,17 @@ class GovernanceTeamRepository:
 
     def __init__(self, *, request_json: RequestJson) -> None:
         self._request_json = request_json
+        self._member_cache: dict[tuple[str, str], tuple[float, list[TeamMemberRecord]]] = {}
+        self._member_cache_lock = Lock()
+        self._settings_cache: dict[tuple[str, str], tuple[float, TeamSettingsRecord]] = {}
+        self._settings_cache_lock = Lock()
 
     def list_members(self, team_id: str, *, access_token: str) -> list[TeamMemberRecord]:
+        cache_key = self._member_cache_key(team_id, access_token=access_token)
+        cached = self._cached_members(cache_key)
+        if cached is not None:
+            return cached
+
         member_payload = self._request_json(
             path=team_members_path(team_id),
             access_token=access_token,
@@ -51,7 +65,7 @@ class GovernanceTeamRepository:
             access_token=access_token,
         )
         profile_map = {item.user_id: item for item in profiles}
-        return [
+        records = [
             self._member_record_from_payload(
                 item,
                 profile=profile_map.get(str(item.get("user_id"))),
@@ -59,6 +73,8 @@ class GovernanceTeamRepository:
             for item in member_payload
             if isinstance(item, dict)
         ]
+        self._store_member_cache(cache_key, records)
+        return list(records)
 
     def get_team(self, team_id: str, *, access_token: str) -> dict[str, Any] | None:
         payload = self._request_json(
@@ -70,11 +86,18 @@ class GovernanceTeamRepository:
         return payload[0] if payload else None
 
     def get_team_settings(self, team_id: str, *, access_token: str) -> TeamSettingsRecord | None:
+        cache_key = self._team_cache_key(team_id, access_token=access_token)
+        cached = self._cached_settings(cache_key)
+        if cached is not None:
+            return cached
+
         team = self.get_team(team_id, access_token=access_token)
         if team is None:
             return None
         members = self.list_members(team_id, access_token=access_token)
-        return self._team_settings_from_payload(team, members)
+        settings = self._team_settings_from_payload(team, members)
+        self._store_settings_cache(cache_key, settings)
+        return settings
 
     def update_team_settings(
         self,
@@ -104,7 +127,9 @@ class GovernanceTeamRepository:
         )
         updated = self._unwrap_single_record(updated_payload, "team settings update")
         members = self.list_members(team_id, access_token=access_token)
-        return self._team_settings_from_payload(updated, members)
+        settings = self._team_settings_from_payload(updated, members)
+        self._store_settings_cache(self._team_cache_key(team_id, access_token=access_token), settings)
+        return settings
 
     def transfer_ownership(
         self,
@@ -139,13 +164,14 @@ class GovernanceTeamRepository:
             "admin",
             access_token=access_token,
         )
+        self._invalidate_settings_cache(team_id)
         settings = self.get_team_settings(team_id, access_token=access_token)
         if settings is None:
             raise ValueError("team not found")
         return settings, demoted, promoted
 
     def update_member_role(self, team_id: str, user_id: str, role: str, *, access_token: str) -> TeamMemberRecord:
-        return update_team_member_role(
+        member = update_team_member_role(
             self._request_json,
             self.list_profiles,
             team_id,
@@ -153,6 +179,9 @@ class GovernanceTeamRepository:
             role,
             access_token=access_token,
         )
+        self._invalidate_member_cache(team_id)
+        self._invalidate_settings_cache(team_id)
+        return member
 
     def update_member_status(
         self,
@@ -162,7 +191,7 @@ class GovernanceTeamRepository:
         *,
         access_token: str,
     ) -> TeamMemberRecord:
-        return update_team_member_status(
+        member = update_team_member_status(
             self._request_json,
             self.list_profiles,
             team_id,
@@ -170,6 +199,9 @@ class GovernanceTeamRepository:
             member_status,
             access_token=access_token,
         )
+        self._invalidate_member_cache(team_id)
+        self._invalidate_settings_cache(team_id)
+        return member
 
     def update_profile(
         self,
@@ -178,12 +210,15 @@ class GovernanceTeamRepository:
         display_name: str | None,
         access_token: str,
     ) -> TeamProfileRecord:
-        return update_team_profile(
+        profile = update_team_profile(
             self._request_json,
             user_id,
             display_name=display_name,
             access_token=access_token,
         )
+        self._invalidate_member_cache()
+        self._invalidate_settings_cache()
+        return profile
 
     def list_profiles(self, user_ids: list[str], *, access_token: str) -> list[TeamProfileRecord]:
         return list_team_profiles(
@@ -191,3 +226,60 @@ class GovernanceTeamRepository:
             user_ids,
             access_token=access_token,
         )
+
+    def _cached_members(self, cache_key: tuple[str, str]) -> list[TeamMemberRecord] | None:
+        with self._member_cache_lock:
+            cached = self._member_cache.get(cache_key)
+            if not cached:
+                return None
+            cached_at, records = cached
+            if time.monotonic() - cached_at >= TEAM_MEMBER_CACHE_TTL_SECONDS:
+                self._member_cache.pop(cache_key, None)
+                return None
+            return list(records)
+
+    def _store_member_cache(self, cache_key: tuple[str, str], records: list[TeamMemberRecord]) -> None:
+        with self._member_cache_lock:
+            self._member_cache[cache_key] = (time.monotonic(), list(records))
+
+    def _invalidate_member_cache(self, team_id: str | None = None) -> None:
+        with self._member_cache_lock:
+            if team_id is None:
+                self._member_cache.clear()
+                return
+            stale_keys = [key for key in self._member_cache if key[1] == team_id]
+            for key in stale_keys:
+                self._member_cache.pop(key, None)
+
+    @staticmethod
+    def _member_cache_key(team_id: str, *, access_token: str) -> tuple[str, str]:
+        return GovernanceTeamRepository._team_cache_key(team_id, access_token=access_token)
+
+    def _cached_settings(self, cache_key: tuple[str, str]) -> TeamSettingsRecord | None:
+        with self._settings_cache_lock:
+            cached = self._settings_cache.get(cache_key)
+            if not cached:
+                return None
+            cached_at, record = cached
+            if time.monotonic() - cached_at >= TEAM_SETTINGS_CACHE_TTL_SECONDS:
+                self._settings_cache.pop(cache_key, None)
+                return None
+            return record.model_copy(deep=True)
+
+    def _store_settings_cache(self, cache_key: tuple[str, str], record: TeamSettingsRecord) -> None:
+        with self._settings_cache_lock:
+            self._settings_cache[cache_key] = (time.monotonic(), record.model_copy(deep=True))
+
+    def _invalidate_settings_cache(self, team_id: str | None = None) -> None:
+        with self._settings_cache_lock:
+            if team_id is None:
+                self._settings_cache.clear()
+                return
+            stale_keys = [key for key in self._settings_cache if key[1] == team_id]
+            for key in stale_keys:
+                self._settings_cache.pop(key, None)
+
+    @staticmethod
+    def _team_cache_key(team_id: str, *, access_token: str) -> tuple[str, str]:
+        token_key = sha256(access_token.encode("utf-8")).hexdigest()
+        return token_key, team_id

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { CheckCircle2, FileText, RefreshCw, X } from 'lucide-vue-next'
-import { submitHitl } from '@/api/client'
+import { submitHitl } from '@/api/taskHuman'
 import { renderMarkdown } from '@/utils/markdown'
 import { modelDisplayName } from '@/utils/modelProfile'
 
@@ -51,6 +51,7 @@ const improvementPlanForm = reactive({
 })
 
 const requestPayload = computed(() => props.hitl?.request || {})
+const hasOpenRequest = computed(() => ['pending', 'open'].includes(String(props.hitl?.status || requestPayload.value.status || '').toLowerCase()))
 const isCodexPlanApproval = computed(() => requestPayload.value.request_type === 'codex_plan_approval')
 const isCodexImprovementReview = computed(() => requestPayload.value.request_type === 'codex_improvement_review')
 const stage = computed(() => normalizeStage(requestPayload.value.stage || props.hitl?.approval?.stage || 'training_validation'))
@@ -108,7 +109,7 @@ const requestDescription = computed(() => requestPayload.value.summary || stageM
 const suggestedAction = computed(() => requestPayload.value.suggested_action || requestPayload.value.default_action || stageMeta.value.defaultAction)
 const parameterDefaults = computed(() => requestPayload.value.parameters || requestPayload.value.details?.parameters || {})
 const riskNotes = computed(() => requestPayload.value.risk_notes || props.hitl?.risk_notes || [])
-const submittingDisabled = computed(() => busy.value || props.loading || Boolean(props.loadError))
+const submittingDisabled = computed(() => busy.value || props.loading || Boolean(props.loadError) || !hasOpenRequest.value)
 const renderedCodexPlan = computed(() => renderMarkdown(codexPlanForm.plan_text || `等待 ${modelDisplayName.value} 写入 output/plan.md`))
 const renderedImprovementPlan = computed(() => renderMarkdown(improvementPlanForm.plan_text || '等待 Codex 写入 output/improvement_plan.md'))
 const advisorSummary = computed(() => {
@@ -238,6 +239,7 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
         </div>
 
         <p v-if="error || loadError" class="form-error">{{ error || loadError }}</p>
+        <p v-else-if="!loading && !hasOpenRequest" class="form-error">当前没有待处理的人工确认请求。</p>
 
         <div v-if="loading" class="form-warning progress-alert">
           <RefreshCw class="spinning" :size="17" />

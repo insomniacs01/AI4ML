@@ -7,11 +7,10 @@ import LoadingBlock from '@/components/LoadingBlock.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import {
   forkPlan,
+  getCommunityAssets,
   getPlanDetail,
-  getPlans,
   getPromptDetail,
-  getPrompts,
-} from '@/api/client'
+} from '@/api/community'
 import { optionalLoad } from '@/utils/async'
 import { assetIdForItem, assetIntro, assetTypeForItem, assetTypeLabel, searchableAssetText } from '@/utils/communityAssets'
 import { modelDisplayName } from '@/utils/modelProfile'
@@ -24,8 +23,11 @@ const prompts = ref([])
 const plans = ref([])
 const selectedAsset = ref(null)
 const loading = ref(false)
+const detailLoading = ref(false)
 const error = ref('')
 const message = ref('')
+const assetDetails = new Map()
+let assetDetailRequestId = 0
 
 const currentItems = computed(() => {
   const source = active.value === 'plans' ? plans.value : prompts.value
@@ -52,12 +54,9 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [promptData, planData] = await Promise.all([
-      optionalLoad(() => getPrompts(false), { items: [] }),
-      optionalLoad(() => getPlans(false), { items: [] }),
-    ])
-    prompts.value = promptData.items || []
-    plans.value = planData.items || []
+    const assets = await optionalLoad(() => getCommunityAssets(false), { prompts: [], plans: [] })
+    prompts.value = assets.prompts || []
+    plans.value = assets.plans || []
     applyRouteSelection()
   } catch (err) {
     error.value = err.message
@@ -66,16 +65,31 @@ async function load() {
   }
 }
 
+const selectedAssetReady = computed(() => Boolean(selectedAsset.value?.loaded))
+
 async function selectAsset(item) {
   const type = assetTypeForItem(item)
+  const assetId = assetIdForItem(item)
+  const requestId = ++assetDetailRequestId
   error.value = ''
+  const cacheKey = `${type}:${assetId}`
+  const cached = assetDetails.get(cacheKey)
+  selectedAsset.value = { type, item: cached || item, loaded: Boolean(cached) }
+  if (cached || !assetId) {
+    detailLoading.value = false
+    return
+  }
+  detailLoading.value = true
   try {
-    const detail = type === 'plan'
-      ? await getPlanDetail(assetIdForItem(item))
-      : await getPromptDetail(assetIdForItem(item))
-    selectedAsset.value = { type, item: detail }
+    const detail = type === 'plan' ? await getPlanDetail(assetId) : await getPromptDetail(assetId)
+    assetDetails.set(cacheKey, detail)
+    if (requestId === assetDetailRequestId) {
+      selectedAsset.value = { type, item: detail, loaded: true }
+    }
   } catch (err) {
-    error.value = err.message
+    if (requestId === assetDetailRequestId) error.value = err.message
+  } finally {
+    if (requestId === assetDetailRequestId) detailLoading.value = false
   }
 }
 
@@ -225,8 +239,8 @@ onMounted(load)
           <textarea :value="selectedAsset.item.prompt_description || selectedAsset.item.description" rows="8" readonly />
         </label>
         <div class="form-actions">
-          <button class="primary-action" type="button" @click="usePrompt(selectedAsset.item)">用此提示词开始任务</button>
-          <button class="secondary-action" type="button" @click="copyText(`${selectedAsset.item.prompt_title || selectedAsset.item.name}\n\n${selectedAsset.item.prompt_description || selectedAsset.item.description || ''}`, '提示词已复制')">
+          <button class="primary-action" type="button" :disabled="!selectedAssetReady" @click="usePrompt(selectedAsset.item)">用此提示词开始任务</button>
+          <button class="secondary-action" type="button" :disabled="!selectedAssetReady" @click="copyText(`${selectedAsset.item.prompt_title || selectedAsset.item.name}\n\n${selectedAsset.item.prompt_description || selectedAsset.item.description || ''}`, '提示词已复制')">
             <CopyPlus :size="17" />复制提示词
           </button>
         </div>
@@ -236,14 +250,15 @@ onMounted(load)
         <div class="divider-line"></div>
         <label class="field">
           <span>{{ modelDisplayName }} 执行方案</span>
-          <textarea :value="selectedAsset.item.plan_text" rows="14" readonly />
+          <textarea :value="selectedAsset.item.plan_text || ''" rows="14" readonly />
         </label>
+        <LoadingBlock v-if="detailLoading" />
         <div class="form-actions">
-          <button class="primary-action" type="button" @click="usePlan(selectedAsset.item)">用此方案开始任务</button>
-          <button class="secondary-action" type="button" @click="forkSelectedPlan(selectedAsset.item)">
+          <button class="primary-action" type="button" :disabled="!selectedAssetReady" @click="usePlan(selectedAsset.item)">用此方案开始任务</button>
+          <button class="secondary-action" type="button" :disabled="!selectedAssetReady" @click="forkSelectedPlan(selectedAsset.item)">
             <GitFork :size="17" />复制方案
           </button>
-          <button class="secondary-action" type="button" @click="copyText(selectedAsset.item.plan_text, '方案已复制')">
+          <button class="secondary-action" type="button" :disabled="!selectedAssetReady" @click="copyText(selectedAsset.item.plan_text, '方案已复制')">
             <CopyPlus :size="17" />复制文本
           </button>
         </div>

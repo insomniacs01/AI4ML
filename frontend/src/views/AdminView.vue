@@ -33,6 +33,8 @@ const {
   pendingPlanCount,
   pendingPromptCount,
   platformLimits,
+  platformLimitsLoading,
+  quotaLoading,
   refreshTeam,
   removeAsset,
   resetPassword,
@@ -46,6 +48,8 @@ const {
   saveTeamMemberStatus,
   saveUser,
   savingModelConfig,
+  sectionLoading,
+  setActiveSection,
   teamLoading,
   teamMemberName,
   teamMembers,
@@ -60,8 +64,8 @@ const {
 <template>
   <PageHeader :title="pageTitle">
     <template #actions>
-      <button class="secondary-action refresh-action" type="button" :disabled="loading" @click="load">
-        <RefreshCw :class="{ spinning: loading }" :size="18" />刷新
+      <button class="secondary-action refresh-action" type="button" :disabled="loading || sectionLoading" @click="load">
+        <RefreshCw :class="{ spinning: loading || sectionLoading }" :size="18" />刷新
       </button>
     </template>
   </PageHeader>
@@ -73,12 +77,15 @@ const {
 
   <template v-else>
     <section class="admin-tabs">
-      <button :class="{ active: activeSection === 'team' }" type="button" @click="activeSection = 'team'"><Users :size="17" />团队管理</button>
-      <button :class="{ active: activeSection === 'community' }" type="button" @click="activeSection = 'community'"><ClipboardList :size="17" />社区审核</button>
-      <button v-if="isSystemAdmin" :class="{ active: activeSection === 'model' }" type="button" @click="activeSection = 'model'"><Settings2 :size="17" />模型配置</button>
-      <button v-if="isSystemAdmin" :class="{ active: activeSection === 'users' }" type="button" @click="activeSection = 'users'"><UserRound :size="17" />用户与额度</button>
+      <button :class="{ active: activeSection === 'team' }" type="button" @click="setActiveSection('team')"><Users :size="17" />团队管理</button>
+      <button :class="{ active: activeSection === 'community' }" type="button" @click="setActiveSection('community')"><ClipboardList :size="17" />社区审核</button>
+      <button v-if="isSystemAdmin" :class="{ active: activeSection === 'model' }" type="button" @click="setActiveSection('model')"><Settings2 :size="17" />模型配置</button>
+      <button v-if="isSystemAdmin" :class="{ active: activeSection === 'users' }" type="button" @click="setActiveSection('users')"><UserRound :size="17" />用户与额度</button>
     </section>
 
+    <LoadingBlock v-if="sectionLoading" />
+
+    <template v-else>
     <section v-if="activeSection === 'team'" class="team-admin-stack">
       <div class="panel team-overview-panel">
         <div class="team-section-head">
@@ -221,12 +228,12 @@ const {
             <option value="community_admin">社区管理员</option>
             <option value="admin">系统管理员</option>
           </select>
-          <input v-model.number="user.token_quota" type="number" min="0" />
-          <span class="quota-chip">已用 {{ user.token_used || 0 }} / 余 {{ quotaRemaining(user) }}</span>
-          <input v-model.number="user.warning_threshold" type="number" min="0" />
+          <input v-model.number="user.token_quota" type="number" min="0" :disabled="quotaLoading && !user.quota_loaded" />
+          <span class="quota-chip">{{ user.quota_loaded ? `已用 ${user.token_used || 0} / 余 ${quotaRemaining(user)}` : '同步中' }}</span>
+          <input v-model.number="user.warning_threshold" type="number" min="0" :disabled="quotaLoading && !user.quota_loaded" />
           <label class="admin-user-toggle"><input v-model="user.is_active" type="checkbox" />启用</label>
           <div class="admin-user-actions">
-            <button class="secondary-action" type="button" :disabled="isSavingUser(user, 'save')" @click="saveUser(user)">
+            <button class="secondary-action" type="button" :disabled="isSavingUser(user, 'save') || (quotaLoading && !user.quota_loaded)" @click="saveUser(user)">
               {{ isSavingUser(user, 'save') ? '保存中' : '保存' }}
             </button>
             <input v-model="resetPasswords[user.user_id]" type="password" placeholder="新密码" />
@@ -239,10 +246,10 @@ const {
       <div class="divider-line"></div>
       <div class="panel-title"><span>任务资源限制</span></div>
       <div class="resource-limit-grid">
-        <label class="field"><span>同时运行任务数</span><input v-model.number="platformLimits.max_concurrent_tasks_per_user" type="number" min="0" /></label>
-        <label class="field"><span>待启动任务数</span><input v-model.number="platformLimits.max_queued_tasks_per_user" type="number" min="0" /></label>
-        <label class="field"><span>最大训练预算（秒）</span><input v-model.number="platformLimits.max_task_time_budget_s" type="number" min="0" /></label>
-        <button class="secondary-action" type="button" @click="savePlatformLimits">保存限制</button>
+        <label class="field"><span>同时运行任务数</span><input v-model.number="platformLimits.max_concurrent_tasks_per_user" type="number" min="0" :disabled="platformLimitsLoading" /></label>
+        <label class="field"><span>待启动任务数</span><input v-model.number="platformLimits.max_queued_tasks_per_user" type="number" min="0" :disabled="platformLimitsLoading" /></label>
+        <label class="field"><span>最大训练预算（秒）</span><input v-model.number="platformLimits.max_task_time_budget_s" type="number" min="0" :disabled="platformLimitsLoading" /></label>
+        <button class="secondary-action" type="button" :disabled="platformLimitsLoading" @click="savePlatformLimits">{{ platformLimitsLoading ? '同步中' : '保存限制' }}</button>
       </div>
     </section>
 
@@ -320,5 +327,6 @@ const {
         </div>
       </div>
     </section>
+    </template>
   </template>
 </template>

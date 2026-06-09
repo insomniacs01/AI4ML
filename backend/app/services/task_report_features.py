@@ -15,16 +15,12 @@ logger = logging.getLogger(__name__)
 def codex_feature_importance(metrics: dict[str, Any], *, source: str) -> list[FeatureImportanceEntry]:
     selected = metrics.get("selected_model") if isinstance(metrics.get("selected_model"), dict) else {}
     raw = selected.get("feature_importance")
-    if not isinstance(raw, dict):
-        return []
-    entries: list[FeatureImportanceEntry] = []
-    for feature, value in raw.items():
-        try:
-            importance = float(value)
-        except (TypeError, ValueError):
-            continue
-        if isinstance(feature, str) and feature.strip():
-            entries.append(FeatureImportanceEntry(feature=feature.strip(), importance=importance, source=source))
+    if not raw:
+        final_model = metrics.get("final_model") if isinstance(metrics.get("final_model"), dict) else {}
+        raw = final_model.get("feature_importance")
+    if not raw:
+        raw = metrics.get("feature_importance")
+    entries = parse_feature_importance_payload(raw, source=source)
     return sorted(entries, key=lambda item: abs(item.importance), reverse=True)[:20]
 
 

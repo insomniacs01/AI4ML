@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-const DEFAULT_MODEL_DISPLAY_NAME = 'Codex'
+const DEFAULT_MODEL_DISPLAY_NAME = 'OURAI'
 
 const STORAGE_KEY = 'ai4ml-model-display-name'
 

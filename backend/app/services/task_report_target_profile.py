@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import DatasetProfile, TaskRecord
+from backend.app.services.dataset_profile import read_dataset_rows
+from backend.app.services.tabular_numeric import parse_tabular_float
 from backend.app.services.task_targets import target_columns_display, target_columns_from_task
 
 
@@ -71,22 +73,19 @@ def _read_dataset_target_values(dataset_path: Path, target_column: str) -> _Targ
     if not dataset_path.exists() or not dataset_path.is_file():
         return _TargetValueSample(values=[], scanned_rows=0, source="dataset_file")
     try:
-        with dataset_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if not reader.fieldnames or target_column not in reader.fieldnames:
-                return _TargetValueSample(
-                    values=[],
-                    scanned_rows=0,
-                    source="dataset_file",
-                    detail=f"CSV 表头中没有找到目标列 {target_column}。",
-                )
-            for index, row in enumerate(reader):
-                if index >= MAX_TARGET_PROFILE_ROWS:
-                    break
-                scanned_rows += 1
-                value = _clean_cell(row.get(target_column))
-                if value:
-                    values.append(value)
+        fieldnames, rows = read_dataset_rows(dataset_path, max_rows=MAX_TARGET_PROFILE_ROWS)
+        if not fieldnames or target_column not in fieldnames:
+            return _TargetValueSample(
+                values=[],
+                scanned_rows=0,
+                source="dataset_file",
+                detail=f"CSV 表头中没有找到目标列 {target_column}。",
+            )
+        for row in rows:
+            scanned_rows += 1
+            value = _clean_cell(row.get(target_column))
+            if value:
+                values.append(value)
     except (OSError, csv.Error, UnicodeError) as exc:
         return _TargetValueSample(
             values=[],
@@ -151,13 +150,7 @@ def _clean_cell(value: Any) -> str:
 
 
 def _to_float(value: str) -> float | None:
-    if value == "":
-        return None
-    try:
-        numeric = float(value)
-    except ValueError:
-        return None
-    return numeric if math.isfinite(numeric) else None
+    return parse_tabular_float(value)
 
 
 def _sample_std(values: list[float]) -> float:

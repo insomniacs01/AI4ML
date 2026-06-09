@@ -4,6 +4,8 @@ import math
 from collections import Counter
 from typing import Any
 
+from backend.app.services.tabular_numeric import parse_tabular_float
+
 
 MAX_PREVIEW_DISTINCT_VALUES = 200
 
@@ -11,11 +13,8 @@ MAX_PREVIEW_DISTINCT_VALUES = 200
 def finite_numeric_values(raw_values: list[str]) -> list[float]:
     numeric_values: list[float] = []
     for value in raw_values:
-        try:
-            numeric = float(value)
-        except ValueError:
-            continue
-        if math.isfinite(numeric):
+        numeric = parse_tabular_float(value)
+        if numeric is not None:
             numeric_values.append(numeric)
     return numeric_values
 

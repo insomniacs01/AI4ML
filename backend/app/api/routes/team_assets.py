@@ -10,7 +10,10 @@ from backend.app.models.governance import (
     PlatformAssetForkRequest,
     PlatformAssetMutationResponse,
     PlatformAssetPublishRequest,
+    PlatformAssetResponse,
     PlatformAssetReviewRequest,
+    PlatformAssetRecord,
+    PlatformAssetSummaryRecord,
     PlatformAssetsResponse,
 )
 from backend.app.services.governance_asset_payloads import SUPPORTED_PLATFORM_ASSET_TYPES
@@ -24,8 +27,28 @@ def asset_type_allows_results(asset_type: str | None) -> bool:
     return asset_type is None or asset_type in SUPPORTED_PLATFORM_ASSET_TYPES
 
 
+def asset_summary_from_record(asset: PlatformAssetRecord) -> PlatformAssetSummaryRecord:
+    return PlatformAssetSummaryRecord(
+        id=asset.id,
+        team_id=asset.team_id,
+        created_by=asset.created_by,
+        asset_type=asset.asset_type,
+        title=asset.title,
+        description=asset.description,
+        category=asset.category,
+        tags=list(asset.tags),
+        visibility=asset.visibility,
+        version=asset.version,
+        source_task_id=asset.source_task_id,
+        source_asset_id=asset.source_asset_id,
+        review_status=asset.review_status,
+        published_at=asset.published_at,
+        created_at=asset.created_at,
+        updated_at=asset.updated_at,
+    )
 
-@router.get("/assets", response_model=PlatformAssetsResponse)
+
+@router.get("/assets", response_model=PlatformAssetsResponse, response_model_exclude_none=True)
 def list_team_assets(
     asset_type: str | None = Query(default=None),
     review_status: str | None = Query(default=None),
@@ -46,7 +69,28 @@ def list_team_assets(
         )
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         raise_store_http_error(exc)
-    return PlatformAssetsResponse(team_id=team_access.team_id, items=items)
+    return PlatformAssetsResponse(
+        team_id=team_access.team_id,
+        items=[asset_summary_from_record(item) for item in items],
+    )
+
+
+@router.get("/assets/{asset_id}", response_model=PlatformAssetResponse)
+def get_team_asset(
+    asset_id: str,
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> PlatformAssetResponse:
+    try:
+        asset = get_governance_store().get_asset(
+            team_access.team_id,
+            asset_id,
+            access_token=team_access.access_token,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        raise_store_http_error(exc)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
+    return PlatformAssetResponse(team_id=team_access.team_id, asset=asset)
 
 
 @router.post("/assets", response_model=PlatformAssetMutationResponse, status_code=status.HTTP_201_CREATED)

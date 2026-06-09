@@ -18,6 +18,7 @@ class TaskStoreCacheMixin:
         lightweight: bool,
         limit: int | None,
         offset: int,
+        statuses: tuple[str, ...] | None = None,
     ) -> None:
         _CACHE_REFRESH_EXECUTOR.submit(
             self._refresh_task_list_cache,
@@ -26,6 +27,7 @@ class TaskStoreCacheMixin:
             lightweight,
             limit,
             offset,
+            statuses,
         )
 
     def _refresh_task_list_cache(
@@ -35,6 +37,7 @@ class TaskStoreCacheMixin:
         lightweight: bool,
         limit: int | None,
         offset: int,
+        statuses: tuple[str, ...] | None,
     ) -> None:
         try:
             self.__class__(self.settings).list_tasks(
@@ -43,6 +46,7 @@ class TaskStoreCacheMixin:
                 lightweight=lightweight,
                 limit=limit,
                 offset=offset,
+                statuses=statuses,
                 prefer_cache=False,
                 allow_stale_cache=False,
             )

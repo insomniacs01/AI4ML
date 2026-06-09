@@ -3,10 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.app.api.errors import raise_store_http_error
-from backend.app.core.supabase_auth import TeamAccessContext, require_team_admin_access
+from backend.app.core.supabase_auth import TeamAccessContext, require_team_access, require_team_admin_access
 from backend.app.models.governance import (
     TeamQuotaAdjustRequest,
     TeamQuotaAdjustResponse,
+    TeamQuotaResponse,
     TeamQuotaScopeAdjustRequest,
     TeamQuotasResponse,
     TokenLedgerRecord,
@@ -36,6 +37,20 @@ def list_team_quotas(team_access: TeamAccessContext = Depends(require_team_admin
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         raise_store_http_error(exc)
     return TeamQuotasResponse(team_id=team_access.team_id, items=items)
+
+
+@router.get("/quotas/me", response_model=TeamQuotaResponse)
+def get_my_quota(team_access: TeamAccessContext = Depends(require_team_access)) -> TeamQuotaResponse:
+    try:
+        quota = get_governance_store().get_member_quota(
+            team_access.team_id,
+            team_access.user.id,
+            access_token=team_access.access_token,
+            use_cache=True,
+        )
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        raise_store_http_error(exc)
+    return TeamQuotaResponse(team_id=team_access.team_id, quota=quota)
 
 
 @router.post("/quotas/adjust", response_model=TeamQuotaAdjustResponse)

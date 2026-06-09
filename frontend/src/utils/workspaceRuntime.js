@@ -47,6 +47,7 @@ export function workspaceRealtimeUpdate({
   if (RUNNING_EVENT_TYPES.has(payload.type)) {
     return {
       taskPatch: { status: 'running', codex_status: 'running' },
+      taskRun: runningTaskRun(taskRun),
       persist: true,
     }
   }
@@ -65,10 +66,42 @@ function completedTaskRun(taskRun) {
   return {
     ...(taskRun || {}),
     progress_percent: 100,
+    progress_source: 'realtime',
+    progress_unavailable_reason: null,
     progress_status: 'completed',
+    current_stage: 'report_generation',
+    current_activity: '',
+    steps: completeSteps(taskRun?.steps),
     codex: {
       ...(taskRun?.codex || {}),
       status: 'completed',
+      progress: {
+        ...(taskRun?.codex?.progress || {}),
+        status: 'completed',
+        current_step: 'completed',
+      },
+      steps: completeSteps(taskRun?.codex?.steps),
+    },
+  }
+}
+
+function runningTaskRun(taskRun) {
+  return {
+    ...(taskRun || {}),
+    progress_status: 'running',
+    progress_unavailable_reason: null,
+    open_request_count: 0,
+    my_open_request_count: 0,
+    steps: clearWaitingSteps(taskRun?.steps),
+    codex: {
+      ...(taskRun?.codex || {}),
+      status: 'running',
+      progress: {
+        ...(taskRun?.codex?.progress || {}),
+        status: 'running',
+        current_step: 'running',
+      },
+      steps: clearWaitingSteps(taskRun?.codex?.steps),
     },
   }
 }
@@ -107,4 +140,16 @@ function activityTaskRun(taskRun, payload) {
     current_activity: payload.message || taskRun?.current_activity || '',
     progress_status: payload.status || taskRun?.progress_status || '',
   }
+}
+
+function completeSteps(steps) {
+  if (!Array.isArray(steps)) return steps
+  return steps.map((step) => ({ ...step, status: 'completed' }))
+}
+
+function clearWaitingSteps(steps) {
+  if (!Array.isArray(steps)) return steps
+  return steps.map((step) => (
+    step?.status === 'waiting_human' ? { ...step, status: 'running' } : step
+  ))
 }

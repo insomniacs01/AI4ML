@@ -12,9 +12,14 @@ from backend.app.models.task import (
     TaskRecord,
 )
 from backend.app.services.codex_backend import build_codex_overview_from_workspace, resolve_codex_workspace
+from backend.app.services.codex_workspace_resolution import resolve_known_codex_workspace_path
 from backend.app.services.dataset_profile import build_dataset_profile, dataset_profile_from_plain
 from backend.app.services.task_agent_loop import refresh_agent_loop_after_analysis, refresh_agent_loop_after_run
-from backend.app.services.task_report_features import collect_feature_importance, codex_feature_importance
+from backend.app.services.task_report_features import (
+    collect_feature_importance,
+    codex_feature_importance,
+    parse_feature_importance_file,
+)
 from backend.app.services.task_report_codex_summary import codex_result_summary
 from backend.app.services.task_report_notes import (
     build_data_quality_notes,
@@ -27,8 +32,13 @@ from backend.app.services.task_report_sections import (
 )
 
 
-def _build_codex_model_report(task: TaskRecord) -> TaskModelReportResponse | None:
-    workspace = _codex_workspace_path(task)
+def build_codex_task_model_report(
+    task: TaskRecord,
+    *,
+    resolve_dataset_from_file: bool = True,
+    resolve_workspace_by_scan: bool = True,
+) -> TaskModelReportResponse | None:
+    workspace = _codex_workspace_path(task, resolve_by_scan=resolve_workspace_by_scan)
     if workspace is None:
         return None
     report_path = workspace / "output" / "report.md"
@@ -37,8 +47,10 @@ def _build_codex_model_report(task: TaskRecord) -> TaskModelReportResponse | Non
         return None
     markdown = report_path.read_text(encoding="utf-8", errors="replace")
     metrics = _read_json_file(metrics_path)
-    dataset_profile = _resolve_dataset_profile(task)
+    dataset_profile = _resolve_dataset_profile(task, resolve_from_file=resolve_dataset_from_file)
     feature_importance = codex_feature_importance(metrics, source=str(metrics_path))
+    if not feature_importance:
+        feature_importance = parse_feature_importance_file(workspace / "output" / "feature_importance.json")
     overview = build_codex_overview_from_workspace(workspace)
     generated_at = datetime.now(timezone.utc)
     result_summary = codex_result_summary(task, metrics)
@@ -63,7 +75,7 @@ def _build_codex_model_report(task: TaskRecord) -> TaskModelReportResponse | Non
 
 
 def build_task_model_report(task: TaskRecord) -> TaskModelReportResponse:
-    codex_report = _build_codex_model_report(task)
+    codex_report = build_codex_task_model_report(task)
     if codex_report is not None:
         return codex_report
     dataset_profile = _resolve_dataset_profile(task)
@@ -115,8 +127,11 @@ def build_task_model_report(task: TaskRecord) -> TaskModelReportResponse:
     )
 
 
-def _codex_workspace_path(task: TaskRecord) -> Path | None:
-    return resolve_codex_workspace(task, get_settings())
+def _codex_workspace_path(task: TaskRecord, *, resolve_by_scan: bool = True) -> Path | None:
+    settings = get_settings()
+    if resolve_by_scan:
+        return resolve_codex_workspace(task, settings)
+    return resolve_known_codex_workspace_path(task, settings)
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -127,14 +142,14 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _resolve_dataset_profile(task: TaskRecord) -> DatasetProfile | None:
+def _resolve_dataset_profile(task: TaskRecord, *, resolve_from_file: bool = True) -> DatasetProfile | None:
     if task.dataset_profile is not None:
         return task.dataset_profile
     structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
     cached = dataset_profile_from_plain(structured.get("dataset_profile"))
     if cached is not None:
         return cached
-    if not task.dataset_path:
+    if not resolve_from_file or not task.dataset_path:
         return None
     dataset_path = Path(task.dataset_path)
     if not dataset_path.exists() or not dataset_path.is_file() or dataset_path.suffix.lower() != ".csv":

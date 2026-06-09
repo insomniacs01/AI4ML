@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import PageHeader from '@/components/PageHeader.vue'
 import DemoInputForm from '@/components/DemoInputForm.vue'
-import { getPublicDemo, predictPublicDemo } from '@/api/client'
+import { getPublicDemo, predictPublicDemo } from '@/api/taskPredictionDemo'
 
 const props = defineProps({ deploymentId: { type: String, required: true } })
 const delivery = ref(null)

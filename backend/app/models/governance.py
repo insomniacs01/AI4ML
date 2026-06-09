@@ -125,6 +125,11 @@ class TeamQuotasResponse(BaseModel):
     items: list[TeamQuotaRecord]
 
 
+class TeamQuotaResponse(BaseModel):
+    team_id: str
+    quota: TeamQuotaRecord
+
+
 class TeamQuotaAdjustRequest(BaseModel):
     token_quota: int | None = Field(default=None, ge=0)
     status: QuotaStatus | None = None
@@ -243,9 +248,33 @@ class PlatformAssetRecord(BaseModel):
     updated_at: datetime
 
 
+class PlatformAssetSummaryRecord(BaseModel):
+    id: str
+    team_id: str
+    created_by: str | None = None
+    asset_type: AssetType | str
+    title: str
+    description: str | None = None
+    category: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    visibility: str = "private"
+    version: str | None = None
+    source_task_id: str | None = None
+    source_asset_id: str | None = None
+    review_status: str
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PlatformAssetsResponse(BaseModel):
     team_id: str
-    items: list[PlatformAssetRecord]
+    items: list[PlatformAssetSummaryRecord]
+
+
+class PlatformAssetResponse(BaseModel):
+    team_id: str
+    asset: PlatformAssetRecord
 
 
 class PlatformAssetCreateRequest(BaseModel):

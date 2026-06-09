@@ -30,4 +30,36 @@ describe('codex realtime replay state', () => {
 
     expect(state.status).toBe('running')
   })
+
+  it('keeps only the latest realtime events and cached item state', () => {
+    const state = createCodexRealtimeState()
+
+    for (let index = 0; index < 300; index += 1) {
+      applyCodexRealtimeEvent(state, {
+        type: 'tool_start',
+        toolUseId: `tool-${index}`,
+        command: `python train_${index}.py`,
+        timestamp: index,
+      })
+    }
+
+    expect(state.events).toHaveLength(240)
+    expect(state.events[0].id).toContain('tool-60')
+    expect(state.toolItems.size).toBeLessThanOrEqual(120)
+  })
+
+  it('truncates large tool output before storing it in realtime state', () => {
+    const state = createCodexRealtimeState()
+    const output = 'x'.repeat(12000)
+
+    applyCodexRealtimeEvent(state, {
+      type: 'tool_result',
+      toolUseId: 'tool-large-output',
+      stdout: output,
+      timestamp: 1,
+    })
+
+    expect(state.events[0].stdout).toHaveLength(4000)
+    expect(state.toolItems.get('tool-large-output').stdout).toHaveLength(4000)
+  })
 })

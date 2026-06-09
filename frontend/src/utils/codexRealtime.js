@@ -1,8 +1,10 @@
 import { getModelDisplayName } from '@/utils/modelProfile'
 
 const DEFAULT_CODEX_WS_ROOT = '/terminal'
-const MAX_EVENTS = 1200
-const MAX_TEXT_LENGTH = 24000
+const MAX_EVENTS = 240
+const MAX_TEXT_LENGTH = 8000
+const MAX_TOOL_TEXT_LENGTH = 4000
+const MAX_ITEM_CACHE = 120
 
 export function codexWebSocketUrl(sessionId, options = {}) {
   const root = (import.meta.env.VITE_CODEX_WS_ROOT || DEFAULT_CODEX_WS_ROOT).trim()
@@ -97,6 +99,7 @@ export function applyCodexRealtimeEvent(state, payload) {
   if (!item) return
   const next = mergeEvent(state.events, item)
   state.events = next.slice(-MAX_EVENTS)
+  pruneRealtimeState(state)
 }
 
 function normalizeCodexEvent(state, payload) {
@@ -276,8 +279,8 @@ function normalizeCodexEvent(state, payload) {
     const tool = {
       command: payload.command || '',
       cwd: payload.cwd || '',
-      stdout: payload.stdout || '',
-      stderr: payload.stderr || '',
+      stdout: truncate(payload.stdout || '', MAX_TOOL_TEXT_LENGTH),
+      stderr: truncate(payload.stderr || '', MAX_TOOL_TEXT_LENGTH),
       status: payload.status,
       exitCode: payload.exitCode,
       durationMs: payload.durationMs,
@@ -288,8 +291,8 @@ function normalizeCodexEvent(state, payload) {
   if (type === 'tool_output') {
     const id = payload.toolUseId || 'tool'
     const tool = state.toolItems.get(id) || { command: '', cwd: '', stdout: '', stderr: '' }
-    if (payload.stream === 'stderr') tool.stderr = truncate(`${tool.stderr}${payload.data || ''}`)
-    else tool.stdout = truncate(`${tool.stdout}${payload.data || ''}`)
+    if (payload.stream === 'stderr') tool.stderr = truncate(`${tool.stderr}${payload.data || ''}`, MAX_TOOL_TEXT_LENGTH)
+    else tool.stdout = truncate(`${tool.stdout}${payload.data || ''}`, MAX_TOOL_TEXT_LENGTH)
     state.toolItems.set(id, tool)
     return toolEvent(id, '命令输出', tool, payload)
   }
@@ -300,8 +303,8 @@ function normalizeCodexEvent(state, payload) {
       ...tool,
       command: payload.command || tool.command || '',
       cwd: payload.cwd || tool.cwd || '',
-      stdout: payload.stdout || tool.stdout || payload.output || '',
-      stderr: payload.stderr || tool.stderr || '',
+      stdout: truncate(payload.stdout || tool.stdout || payload.output || '', MAX_TOOL_TEXT_LENGTH),
+      stderr: truncate(payload.stderr || tool.stderr || '', MAX_TOOL_TEXT_LENGTH),
       exitCode: payload.exitCode,
       status: payload.status,
       durationMs: payload.durationMs,
@@ -334,8 +337,8 @@ function toolEvent(id, title, tool, raw, done = false) {
     title,
     command: tool.command || '',
     cwd: tool.cwd || '',
-    stdout: truncate(tool.stdout || ''),
-    stderr: truncate(tool.stderr || ''),
+    stdout: truncate(tool.stdout || '', MAX_TOOL_TEXT_LENGTH),
+    stderr: truncate(tool.stderr || '', MAX_TOOL_TEXT_LENGTH),
     status: tool.status || '',
     exitCode: tool.exitCode,
     durationMs: tool.durationMs,
@@ -355,16 +358,29 @@ function mergeEvent(events, item) {
   ]
 }
 
+function pruneRealtimeState(state) {
+  pruneMap(state.assistantItems)
+  pruneMap(state.workingItems)
+  pruneMap(state.toolItems)
+}
+
+function pruneMap(map) {
+  while (map.size > MAX_ITEM_CACHE) {
+    const firstKey = map.keys().next().value
+    map.delete(firstKey)
+  }
+}
+
 function eventTime(payload) {
   const value = payload.completedAt || payload.startedAt || payload.timestamp
   if (typeof value === 'number') return value
   return Date.now()
 }
 
-function truncate(value) {
+function truncate(value, maxLength = MAX_TEXT_LENGTH) {
   const text = String(value || '')
-  if (text.length <= MAX_TEXT_LENGTH) return text
-  return text.slice(text.length - MAX_TEXT_LENGTH)
+  if (text.length <= maxLength) return text
+  return text.slice(text.length - maxLength)
 }
 
 function formatNumber(value) {

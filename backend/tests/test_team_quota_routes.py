@@ -48,6 +48,7 @@ def test_team_quota_routes_remain_registered_under_team_prefix() -> None:
     route_paths = {route.path for route in app.routes}
 
     assert "/api/teams/{team_id}/quotas" in route_paths
+    assert "/api/teams/{team_id}/quotas/me" in route_paths
     assert "/api/teams/{team_id}/quotas/adjust" in route_paths
     assert "/api/teams/{team_id}/quotas/{member_id}/adjust" in route_paths
     assert "/api/teams/{team_id}/token-ledgers" in route_paths

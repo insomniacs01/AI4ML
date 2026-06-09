@@ -29,10 +29,16 @@ describe('taskHumanState', () => {
       null,
       [{ status: 'completed' }, waiting],
     )).toBe(true)
+    expect(hasPendingHumanConfirmation(
+      { status: 'paused_for_review', open_request_count: 0 },
+      null,
+      [{ status: 'completed' }, waiting],
+    )).toBe(false)
   })
 
   it('detects open request counts without treating interrupted pauses as human approvals', () => {
     expect(hasPendingHumanConfirmation({ status: 'paused_for_review', open_request_count: 1 })).toBe(true)
+    expect(hasPendingHumanConfirmation({ status: 'running' }, { open_request_count: 0 }, [{ status: 'waiting_human' }])).toBe(false)
     expect(hasPendingHumanConfirmation(
       { status: 'paused_for_review', codex_status: 'interrupted' },
       { codex: { status: 'interrupted' } },

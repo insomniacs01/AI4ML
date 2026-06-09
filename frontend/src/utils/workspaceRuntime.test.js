@@ -6,7 +6,11 @@ describe('workspace runtime realtime updates', () => {
     const update = workspaceRealtimeUpdate({
       payload: { type: 'task_completed' },
       activeTask: { task_id: 'task-1', status: 'running' },
-      taskRun: { progress_status: 'running', codex: { status: 'running' } },
+      taskRun: {
+        progress_status: 'running',
+        steps: [{ id: 'plan', status: 'waiting_human' }],
+        codex: { status: 'running', steps: [{ id: 'plan', status: 'waiting_human' }] },
+      },
       realtimeStatus: 'running',
     })
 
@@ -14,8 +18,17 @@ describe('workspace runtime realtime updates', () => {
       taskPatch: { status: 'completed', codex_status: 'completed' },
       taskRun: {
         progress_percent: 100,
+        progress_source: 'realtime',
+        progress_unavailable_reason: null,
         progress_status: 'completed',
-        codex: { status: 'completed' },
+        current_stage: 'report_generation',
+        current_activity: '',
+        steps: [{ id: 'plan', status: 'completed' }],
+        codex: {
+          status: 'completed',
+          progress: { status: 'completed', current_step: 'completed' },
+          steps: [{ id: 'plan', status: 'completed' }],
+        },
       },
       persist: true,
       refreshSnapshot: true,
@@ -74,11 +87,27 @@ describe('workspace runtime realtime updates', () => {
     const update = workspaceRealtimeUpdate({
       payload: { type: 'turn_started' },
       activeTask: { task_id: 'task-1', status: 'paused_for_review' },
+      taskRun: {
+        steps: [{ id: 'plan', status: 'waiting_human' }],
+        codex: { steps: [{ id: 'plan', status: 'waiting_human' }] },
+      },
       realtimeStatus: 'running',
     })
 
     expect(update).toEqual({
       taskPatch: { status: 'running', codex_status: 'running' },
+      taskRun: {
+        progress_status: 'running',
+        progress_unavailable_reason: null,
+        open_request_count: 0,
+        my_open_request_count: 0,
+        steps: [{ id: 'plan', status: 'running' }],
+        codex: {
+          status: 'running',
+          progress: { status: 'running', current_step: 'running' },
+          steps: [{ id: 'plan', status: 'running' }],
+        },
+      },
       persist: true,
     })
   })

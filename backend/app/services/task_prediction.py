@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from backend.app.core.config import Settings
 from backend.app.core.config import get_settings
 from backend.app.models.task import TaskPredictionDemoRequest, TaskPredictionDemoResponse, TaskRecord
-from backend.app.services.codex_backend import resolve_codex_workspace
+from backend.app.services.codex_workspace_resolution import resolve_known_codex_workspace_path
 from backend.app.services.task_artifacts import build_run_artifact_index
 from backend.app.services.task_prediction_codex import build_codex_prediction_response
 from backend.app.services.task_prediction_generated_code import (
@@ -19,11 +20,12 @@ from backend.app.services.task_prediction_inputs import clean_prediction_feature
 
 
 def build_prediction_demo_response(task: TaskRecord, payload: TaskPredictionDemoRequest) -> TaskPredictionDemoResponse:
-    codex_response = _build_codex_prediction_response(task, payload)
+    settings = get_settings()
+    codex_response = _build_codex_prediction_response(task, payload, settings)
     if codex_response is not None:
         return codex_response
 
-    artifact_index = build_run_artifact_index(task, prefer_success=True)
+    artifact_index = build_run_artifact_index(task, settings=settings, prefer_success=True)
     output_dir = artifact_index.output_dir
     if output_dir is None:
         return TaskPredictionDemoResponse(
@@ -58,8 +60,9 @@ def build_prediction_demo_response(task: TaskRecord, payload: TaskPredictionDemo
 def _build_codex_prediction_response(
     task: TaskRecord,
     payload: TaskPredictionDemoRequest,
+    settings: Settings,
 ) -> TaskPredictionDemoResponse | None:
-    workspace = resolve_codex_workspace(task, get_settings())
+    workspace = resolve_known_codex_workspace_path(task, settings)
     return build_codex_prediction_response(task, payload, workspace)
 
 

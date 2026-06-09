@@ -26,7 +26,7 @@ from backend.app.models.task import (
     WorkflowStageStatus,
 )
 from backend.app.services.task_human_policy import apply_interaction_policies
-from backend.app.api.routes.task_human import decide_task_human_request
+from backend.app.api.routes.task_human import decide_task_human_request, get_task_human_collaboration
 from backend.app.services.task_human_access import (
     assert_actor_can_decide_human_request,
     can_actor_view_human_request,
@@ -106,7 +106,14 @@ class FakeTaskStore:
             return None
         return self.task.model_copy(deep=True)
 
-    def list_stage_records(self, team_id: str, task_id: str, *, access_token: str) -> list[WorkflowStageRecord]:
+    def list_stage_records(
+        self,
+        team_id: str,
+        task_id: str,
+        *,
+        access_token: str,
+        allow_stale_cache: bool = False,
+    ) -> list[WorkflowStageRecord]:
         return [
             record.model_copy(deep=True)
             for key, record in self.stage_records.items()
@@ -721,6 +728,39 @@ class TaskHumanCollaborationServiceTests(TestCase):
         self.assertEqual(snapshot.my_open_request_count, 1)
         self.assertEqual(len(snapshot.my_requests), 1)
         self.assertEqual(snapshot.my_requests[0].assigned_to, "reviewer-1")
+
+    def test_human_collaboration_get_default_uses_fast_read_only_snapshot_for_codex_task(self) -> None:
+        task = _build_task(status=TaskStatus.paused_for_review)
+        task.executor_type = "codex"
+        task.codex_workspace_path = "D:/workspaces/ai4ml-task-1"
+        self.store.task = task.model_copy(deep=True)
+        team_access = TeamAccessContext(
+            team_id=task.team_id,
+            role="admin",
+            user=SupabaseUser(id="user-1", email=None, raw={}),
+            access_token=self.access_token,
+        )
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("default human snapshot GET must not run heavy sync")
+
+        with patch("backend.app.api.routes.task_human.get_task_store", return_value=self.store), patch(
+            "backend.app.api.routes.task_human.get_task_human_collaboration_service",
+            return_value=self.service,
+        ), patch(
+            "backend.app.api.routes.task_human.sync_codex_task_state",
+            side_effect=fail_if_called,
+        ), patch(
+            "backend.app.api.routes.task_human._build_runtime_context",
+            side_effect=fail_if_called,
+        ), patch(
+            "backend.app.api.routes.task_human._sync_task_human_collaboration",
+            side_effect=fail_if_called,
+        ):
+            snapshot = get_task_human_collaboration(task.id, team_access=team_access)
+
+        self.assertEqual(snapshot.task.id, task.id)
+        self.assertEqual(snapshot.open_request_count, 0)
 
     def test_decision_history_is_exposed_and_resume_restores_previous_status(self) -> None:
         task = _build_task()

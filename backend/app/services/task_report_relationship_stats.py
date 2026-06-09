@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+from backend.app.services.tabular_numeric import parse_tabular_float
+
 
 MAX_CATEGORICAL_VALUES = 80
 MIN_RELATIONSHIP_PAIRS = 3
@@ -39,13 +41,7 @@ def relationship_strength(score: float) -> str:
 
 
 def to_float(value: str) -> float | None:
-    if value == "":
-        return None
-    try:
-        numeric = float(value)
-    except ValueError:
-        return None
-    return numeric if math.isfinite(numeric) else None
+    return parse_tabular_float(value)
 
 
 def usable_numeric_count(values: list[float | None]) -> int:

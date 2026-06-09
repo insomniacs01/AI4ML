@@ -26,3 +26,20 @@ def test_derive_key_factors_falls_back_to_error_analysis() -> None:
     assert [item["name"] for item in factors] == ["B", "A"]
     assert factors[0]["source"] == "error_analysis"
     assert "signed_log_mae = 2.5" in factors[0]["evidence"]
+
+
+def test_derive_key_factors_accepts_final_model_and_top_level_feature_list() -> None:
+    metrics = {
+        "final_model": {"name": "LogisticRegression"},
+        "candidate_models": {"LogisticRegression": {"validation_accuracy": 0.93}},
+        "feature_importance": [
+            {"feature": "income", "importance": -0.7},
+            {"feature_name": "age", "score": 0.4},
+        ],
+    }
+
+    factors = derive_key_factors(metrics)
+
+    assert [item["name"] for item in factors] == ["income", "age"]
+    assert factors[0]["direction"] == "negative"
+    assert factors[0]["is_model_feature_importance"] is True

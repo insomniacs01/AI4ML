@@ -60,6 +60,95 @@ def test_list_members_fetches_profiles_and_projects_member_records() -> None:
     assert request.calls[1]["path"] == 'profiles?select=user_id,email,display_name&user_id=in.("user-1")'
 
 
+def test_list_members_uses_cache_until_member_update() -> None:
+    repository, request = _repository(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "role": "member",
+                    "member_status": "active",
+                }
+            ],
+            [{"user_id": "user-1", "email": "user-1@example.test", "display_name": "Alice"}],
+            {
+                "team_id": "team-1",
+                "user_id": "user-1",
+                "role": "admin",
+                "member_status": "active",
+            },
+            [{"user_id": "user-1", "email": "user-1@example.test", "display_name": "Alice"}],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "role": "admin",
+                    "member_status": "active",
+                }
+            ],
+            [{"user_id": "user-1", "email": "user-1@example.test", "display_name": "Alice"}],
+        ]
+    )
+
+    first = repository.list_members("team-1", access_token="token")
+    second = repository.list_members("team-1", access_token="token")
+
+    assert first[0].role == "member"
+    assert second[0].role == "member"
+    assert len(request.calls) == 2
+
+    repository.update_member_role("team-1", "user-1", "admin", access_token="token")
+    refreshed = repository.list_members("team-1", access_token="token")
+
+    assert refreshed[0].role == "admin"
+    assert [call["path"].split("?")[0] for call in request.calls] == [
+        "team_members",
+        "profiles",
+        "team_members",
+        "profiles",
+        "team_members",
+        "profiles",
+    ]
+
+
+def test_get_team_settings_uses_cache_and_returns_copies() -> None:
+    repository, request = _repository(
+        [
+            [
+                {
+                    "id": "team-1",
+                    "name": "Team One",
+                    "invite_code": "INVITE",
+                    "created_by": "owner-1",
+                    "description": "Original",
+                    "status": "active",
+                    "created_at": NOW,
+                    "updated_at": NOW,
+                }
+            ],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "owner-1",
+                    "role": "team_owner",
+                    "member_status": "active",
+                }
+            ],
+            [{"user_id": "owner-1", "email": "owner-1@example.test", "display_name": "Owner One"}],
+        ]
+    )
+
+    first = repository.get_team_settings("team-1", access_token="token")
+    assert first is not None
+    first.name = "Mutated"
+    second = repository.get_team_settings("team-1", access_token="token")
+
+    assert second is not None
+    assert second.name == "Team One"
+    assert len(request.calls) == 3
+
+
 def test_update_team_settings_sends_trimmed_patch_and_returns_owner_enriched_record() -> None:
     repository, request = _repository(
         [

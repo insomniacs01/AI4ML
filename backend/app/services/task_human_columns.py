@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import TaskRecord
+from backend.app.services.dataset_profile import read_dataset_header
 from backend.app.services.task_human_parameter_values import string_list
 from backend.app.services.task_uploads import is_csv_upload_filename
 
@@ -68,9 +68,4 @@ def _dataset_header_column_names(task: TaskRecord) -> list[str]:
         or not is_csv_upload_filename(dataset_path.name)
     ):
         return []
-    with dataset_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
-        reader = csv.reader(handle)
-        try:
-            return [str(item) for item in next(reader)]
-        except StopIteration:
-            return []
+    return read_dataset_header(dataset_path)

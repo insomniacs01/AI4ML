@@ -34,11 +34,13 @@ class GovernanceStore:
         self._asset_repository = PlatformAssetRepository(
             request_json=self._request_json,
             list_profiles=self._team_repository.list_profiles,
+            cache_dir=settings.repo_root / "storage" / "governance_cache" / "asset_lists",
         )
         self._usage_repository = GovernanceUsageRepository(
             request_json=self._request_json,
             list_members=self._team_repository.list_members,
             list_profiles=self._team_repository.list_profiles,
+            member_quota_cache_dir=settings.repo_root / "storage" / "governance_cache" / "member_quotas",
         )
 
     def list_members(self, team_id: str, *, access_token: str) -> list[TeamMemberRecord]:
@@ -150,8 +152,20 @@ class GovernanceStore:
             access_token=access_token,
         )
 
-    def get_member_quota(self, team_id: str, user_id: str, *, access_token: str) -> TeamQuotaRecord | None:
-        return self._usage_repository.get_member_quota(team_id, user_id, access_token=access_token)
+    def get_member_quota(
+        self,
+        team_id: str,
+        user_id: str,
+        *,
+        access_token: str,
+        use_cache: bool = False,
+    ) -> TeamQuotaRecord:
+        return self._usage_repository.get_member_quota(
+            team_id,
+            user_id,
+            access_token=access_token,
+            use_cache=use_cache,
+        )
 
     def list_assets(
         self,

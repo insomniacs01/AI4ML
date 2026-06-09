@@ -53,6 +53,29 @@ def test_regression_baseline_resolves_r2_metric(tmp_path) -> None:
     assert baseline["direction"] == "higher"
 
 
+def test_regression_baseline_reads_semicolon_csv(tmp_path) -> None:
+    dataset = tmp_path / "train.csv"
+    dataset.write_text(
+        "feature;target\n"
+        "a;1,0\n"
+        "b;2,0\n"
+        "c;3,0\n"
+        "d;4,0\n"
+        "e;5,0\n"
+        "f;6,0\n"
+        "g;7,0\n"
+        "h;8,0\n"
+        "i;9,0\n"
+        "j;10,0\n",
+        encoding="utf-8",
+    )
+
+    baseline = compute_baseline(_task(dataset, problem_type="regression", metric_name="r2"))
+
+    assert baseline["status"] == "completed"
+    assert baseline["sample_count"] == 10
+
+
 def test_classification_baseline_resolves_binary_f1_metric(tmp_path) -> None:
     dataset = _write_binary_classification_dataset(tmp_path)
 

@@ -3,37 +3,63 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.services.codex_common import coerce_float, format_metric
+from backend.app.services.codex_metrics import selected_model_metrics
 
 
 def derive_key_factors(metrics: dict[str, Any]) -> list[dict[str, Any]]:
-    selected = metrics.get("selected_model") if isinstance(metrics.get("selected_model"), dict) else {}
-    factors = feature_importance_factors(selected.get("feature_importance"))
-    if factors:
-        return factors
+    selected = selected_model_metrics(metrics)
+    for raw_importance, source_label in (
+        (selected.get("feature_importance"), "selected_model.feature_importance"),
+        (metrics.get("feature_importance"), "feature_importance"),
+        (metrics.get("features"), "features"),
+    ):
+        factors = feature_importance_factors(raw_importance, source_label=source_label)
+        if factors:
+            return factors
     return error_analysis_factors(metrics)
 
 
-def feature_importance_factors(raw_importance: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_importance, dict):
-        return []
+def feature_importance_factors(raw_importance: Any, *, source_label: str = "selected_model.feature_importance") -> list[dict[str, Any]]:
     factors: list[dict[str, Any]] = []
-    items = sorted(raw_importance.items(), key=lambda item: abs(coerce_float(item[1]) or 0), reverse=True)
+    items = sorted(_feature_importance_items(raw_importance), key=lambda item: abs(item[1]), reverse=True)
     for name, value in items[:8]:
-        numeric = coerce_float(value)
-        if not isinstance(name, str) or numeric is None:
+        if not isinstance(name, str):
             continue
         factors.append(
             {
                 "name": name,
-                "importance": numeric,
+                "importance": value,
                 "display": name,
                 "source": "model_feature_importance",
                 "is_model_feature_importance": True,
-                "direction": factor_direction(numeric),
-                "evidence": "来自 metrics.json selected_model.feature_importance。",
+                "direction": factor_direction(value),
+                "evidence": f"来自 metrics.json {source_label}。",
             }
         )
     return factors
+
+
+def _feature_importance_items(raw_importance: Any) -> list[tuple[str, float]]:
+    if isinstance(raw_importance, dict):
+        if isinstance(raw_importance.get("feature_importance"), (dict, list)):
+            return _feature_importance_items(raw_importance["feature_importance"])
+        if isinstance(raw_importance.get("features"), (dict, list)):
+            return _feature_importance_items(raw_importance["features"])
+        rows = [{"feature": key, "importance": value} for key, value in raw_importance.items()]
+    elif isinstance(raw_importance, list):
+        rows = raw_importance
+    else:
+        return []
+
+    items: list[tuple[str, float]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("feature") or row.get("feature_name") or row.get("name") or row.get("column")
+        value = coerce_float(row.get("importance") or row.get("score") or row.get("value"))
+        if isinstance(name, str) and name.strip() and value is not None:
+            items.append((name.strip(), value))
+    return items
 
 
 def factor_direction(value: float) -> str:

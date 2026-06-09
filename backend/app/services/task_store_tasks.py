@@ -21,6 +21,7 @@ class TaskStoreTaskMixin:
         lightweight: bool = True,
         limit: int | None = 100,
         offset: int = 0,
+        statuses: tuple[str, ...] | None = None,
         prefer_cache: bool = True,
         allow_stale_cache: bool = False,
     ) -> list[TaskRecord]:
@@ -30,6 +31,7 @@ class TaskStoreTaskMixin:
             lightweight=lightweight,
             limit=limit,
             offset=offset,
+            statuses=statuses,
             prefer_cache=prefer_cache,
             allow_stale_cache=allow_stale_cache,
         )
@@ -41,6 +43,7 @@ class TaskStoreTaskMixin:
                     lightweight=lightweight,
                     limit=limit,
                     offset=offset,
+                    statuses=statuses,
                 )
         return tasks
 

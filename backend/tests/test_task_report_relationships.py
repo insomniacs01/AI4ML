@@ -48,6 +48,30 @@ def test_collect_feature_relationships_scores_numeric_target_features(tmp_path) 
     assert notes[0].startswith("按与目标列 target 的关系强度排序")
 
 
+def test_collect_feature_relationships_reads_semicolon_csv(tmp_path) -> None:
+    dataset = tmp_path / "train.csv"
+    dataset.write_text(
+        "\n".join(
+            [
+                "feature;target;;",
+                "1,0;2,0;;",
+                "2,0;4,0;;",
+                "3,0;6,0;;",
+                "4,0;8,0;;",
+                "5,0;10,0;;",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    entries, notes = collect_feature_relationships(_task(str(dataset)), None)
+
+    assert [entry.feature for entry in entries[:1]] == ["feature"]
+    assert entries[0].source == "dataset_correlation"
+    assert entries[0].importance == 1.0
+    assert notes[0].startswith("按与目标列 target 的关系强度排序")
+
+
 def test_collect_feature_relationships_reports_missing_target_column(tmp_path) -> None:
     dataset = tmp_path / "train.csv"
     dataset.write_text("feature,target\n1,2\n", encoding="utf-8")

@@ -34,6 +34,7 @@ def test_team_asset_routes_remain_registered_under_team_prefix() -> None:
     route_paths = {route.path for route in app.routes}
 
     assert "/api/teams/{team_id}/assets" in route_paths
+    assert "/api/teams/{team_id}/assets/{asset_id}" in route_paths
     assert "/api/teams/{team_id}/assets/{asset_id}/review" in route_paths
     assert "/api/teams/{team_id}/assets/{asset_id}/publish" in route_paths
     assert "/api/teams/{team_id}/assets/{asset_id}/fork" in route_paths

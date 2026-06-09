@@ -8,15 +8,23 @@ import {
   metricsFromTask,
 } from '@/api/mappers'
 import { optionalRequest, request } from '@/api/request'
-import { getCachedUser, requireSession } from '@/api/session'
+import { getActiveTeamHint, getCachedUser, requireSession } from '@/api/session'
 import { getModelDisplayName } from '@/utils/modelProfile'
 import { pickActiveTask, pickBlockingRuntimeTask, taskIdOf } from '@/utils/taskRecords'
-export { getOperationCode, updateOperationCode, validateOperationCode } from '@/api/taskCodeArtifacts'
-export { getDelivery, getPublicDemo, predict, predictPublicDemo } from '@/api/taskPredictionDemo'
-export { getHitl, submitHitl } from '@/api/taskHuman'
+import { clearTaskListCache, isTaskListCacheFresh, readTaskListCache, writeTaskListCache } from '@/utils/taskListCache'
 
 let pendingDatasetFile = null
 let pendingDatasetMeta = null
+
+function taskListCacheContext() {
+  const userId = getCachedUser()?.id
+  const teamId = getActiveTeamHint()?.id
+  return userId && teamId ? { userId, teamId } : null
+}
+
+function invalidateTaskListCache() {
+  clearTaskListCache(taskListCacheContext())
+}
 
 function firstCsvFile(formData) {
   return formData?.get('dataset_file') || formData?.get('file') || null
@@ -104,20 +112,33 @@ function displayTaskName(task) {
   return task?.display_name || task?.name || task?.requirement || '未命名任务'
 }
 
-export async function getTasks() {
-  const data = await request('/tasks')
-  return { items: (data.items || []).map(mapTask) }
+export async function getTasks(options = {}) {
+  if (!options.runtimeOnly && !options.forceRefresh) {
+    const cached = readTaskListCache(taskListCacheContext())
+    if (cached && isTaskListCacheFresh(cached.cachedAt)) return { items: cached.tasks || [] }
+  }
+  const params = new URLSearchParams()
+  if (options.runtimeOnly) params.set('runtime_only', 'true')
+  if (!options.runtimeOnly && options.compact !== false) params.set('compact', 'true')
+  const query = params.toString()
+  const data = await request(`/tasks${query ? `?${query}` : ''}`)
+  const items = (data.items || []).map(mapTask)
+  if (!options.runtimeOnly) writeTaskListCache(taskListCacheContext(), items)
+  return { items }
 }
 
-export async function getMyTasks() {
-  const data = await getTasks()
-  const cachedUser = getCachedUser()
-  const userId = cachedUser?.id || (await requireSession()).user?.id
+export async function getMyTasks(options = {}) {
+  const userId = (getCachedUser() || (await requireSession()).user)?.id
+  const data = await getTasks(options)
   return data.items.filter((task) => !task.created_by || task.created_by === userId)
 }
 
-export async function getActiveTask() {
-  const tasks = await getMyTasks()
+export async function getWorkspaceTasks() {
+  return getMyTasks({ runtimeOnly: true })
+}
+
+export async function getActiveTask(options = {}) {
+  const tasks = await getMyTasks(options)
   return pickBlockingRuntimeTask(tasks)
 }
 
@@ -134,7 +155,7 @@ export async function uploadDataset(formData) {
 }
 
 export async function createTask(formData) {
-  const activeTask = await getActiveTask()
+  const activeTask = await getActiveTask({ forceRefresh: true })
   if (activeTask) {
     throw new Error(`已有任务正在运行：${displayTaskName(activeTask)}（${taskIdOf(activeTask)}）。请先在工作台处理、完成或取消该任务。`)
   }
@@ -152,13 +173,14 @@ export async function createTask(formData) {
     if (Number.isFinite(timeLimit) && timeLimit >= 5) query.set('time_limit', String(Math.min(300, timeLimit)))
     result = await request(`/tasks/${task.id}/dataset?${query}`, { method: 'POST', body: uploadBody })
     const runPayload = Number.isFinite(timeLimit) && timeLimit >= 5 ? { time_limit: Math.min(300, timeLimit) } : {}
-    result = await request(`/tasks/${task.id}/run`, {
+    result = await request(`/tasks/${task.id}/run?async_start=true`, {
       method: 'POST',
       body: JSON.stringify(runPayload),
     })
   }
   pendingDatasetFile = null
   pendingDatasetMeta = null
+  invalidateTaskListCache()
   return mapTask(result)
 }
 
@@ -168,44 +190,64 @@ export async function getTaskDetail(taskId) {
 }
 
 export async function getTaskRuntimeSnapshot(taskId, options = {}) {
-  const query = options.sync === false ? '?sync=false' : ''
-  const snapshot = await request(`/tasks/${taskId}/runtime-snapshot${query}`)
+  const params = new URLSearchParams()
+  if (options.sync === false) params.set('sync', 'false')
+  if (options.taskDetail === 'summary') params.set('task_detail', 'summary')
+  const query = params.toString()
+  const snapshot = await request(`/tasks/${taskId}/runtime-snapshot${query ? `?${query}` : ''}`)
   const task = mapTask(snapshot.task)
   const taskRun = snapshot.task_run || {}
   const inferredMetrics = metricsFromTask(task, taskRun).values
   const taskRunMetrics = Object.keys(taskRun.metrics || {}).length ? taskRun.metrics : inferredMetrics
   const codexSteps = buildCodexSteps(taskRun.codex)
+  const rawSteps = codexSteps.length
+    ? codexSteps
+    : Array.isArray(taskRun.steps)
+      ? taskRun.steps.map(mapStageRecord)
+      : buildSteps(task)
   return {
     task,
     task_run: {
       ...taskRun,
       metrics: taskRunMetrics,
       codex: taskRun.codex || null,
-      steps: codexSteps.length
-        ? codexSteps
-        : Array.isArray(taskRun.steps)
-          ? taskRun.steps.map(mapStageRecord)
-          : buildSteps(task),
+      steps: suppressClosedHumanSteps(taskRun, rawSteps),
     },
   }
 }
 
+function suppressClosedHumanSteps(taskRun, steps) {
+  const hasExplicitOpenCount = Object.prototype.hasOwnProperty.call(taskRun || {}, 'open_request_count')
+  if (!hasExplicitOpenCount || Number(taskRun.open_request_count || 0) > 0) return steps
+  return steps.map((step) => (
+    step?.status === 'waiting_human' ? { ...step, status: 'pending' } : step
+  ))
+}
+
+export async function getCodexPlan(taskId) {
+  return request(`/tasks/${taskId}/codex-plan`)
+}
+
 export async function deleteTask(taskId) {
-  return request(`/tasks/${taskId}`, { method: 'DELETE' })
+  const result = await request(`/tasks/${taskId}`, { method: 'DELETE' })
+  invalidateTaskListCache()
+  return result
 }
 
 export async function cancelTask(taskId) {
   const task = await request(`/tasks/${taskId}/cancel`, { method: 'POST', body: JSON.stringify({}) })
+  invalidateTaskListCache()
   return { ...mapTask(task), status: mapStatus(task.status) }
 }
 
 export async function pauseTask(taskId) {
   const task = await request(`/tasks/${taskId}/pause`, { method: 'POST', body: JSON.stringify({}) })
+  invalidateTaskListCache()
   return { ...mapTask(task), status: mapStatus(task.status) }
 }
 
 export async function getMetrics(taskId) {
-  const detail = await getTaskRuntimeSnapshot(taskId)
+  const detail = await getTaskRuntimeSnapshot(taskId, { sync: false, taskDetail: 'summary' })
   const taskRunMetrics = detail.task_run?.metrics || {}
   return Object.keys(taskRunMetrics).length
     ? { values: taskRunMetrics }
@@ -218,7 +260,7 @@ export async function getFeatureImportance(taskId) {
 }
 
 export async function getTaskOverview(taskId) {
-  const detail = await getTaskRuntimeSnapshot(taskId)
+  const detail = await getTaskRuntimeSnapshot(taskId, { sync: false, taskDetail: 'summary' })
   if (detail.task_run?.overview && Object.keys(detail.task_run.overview).length) {
     return detail.task_run.overview
   }
@@ -232,7 +274,9 @@ export async function getReport(taskId, reportType) {
 }
 
 export async function rerunTask(taskId, adjustments, options = {}) {
-  return request(`/tasks/${taskId}/run`, {
+  const shouldRunAsync = Boolean(options.resume_after_human || options.resume_interrupted || options.regenerate_plan)
+  const runPath = shouldRunAsync ? `/tasks/${taskId}/run?async_start=true` : `/tasks/${taskId}/run`
+  const result = await request(runPath, {
     method: 'POST',
     body: JSON.stringify({
       time_limit: adjustments?.time_budget_s || options.time_limit || null,
@@ -245,4 +289,6 @@ export async function rerunTask(taskId, adjustments, options = {}) {
       plan_text: options.plan_text || null,
     }),
   })
+  invalidateTaskListCache()
+  return result
 }

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import TaskRecord
+from backend.app.services.dataset_profile import read_dataset_rows
 from backend.app.services.task_agent_baseline_metrics import (
     baseline_completed,
     baseline_metric_name,
@@ -71,16 +72,13 @@ def pending_baseline(detail: str) -> dict[str, Any]:
 
 def _read_target_rows(dataset_path: Path, target_column: str) -> list[str]:
     rows: list[str] = []
-    with dataset_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if not reader.fieldnames or target_column not in reader.fieldnames:
-            return []
-        for index, row in enumerate(reader):
-            if index >= MAX_BASELINE_ROWS:
-                break
-            value = row.get(target_column)
-            if value is not None and str(value).strip() != "":
-                rows.append(str(value).strip())
+    fieldnames, dataset_rows = read_dataset_rows(dataset_path, max_rows=MAX_BASELINE_ROWS)
+    if not fieldnames or target_column not in fieldnames:
+        return []
+    for row in dataset_rows:
+        value = row.get(target_column)
+        if value is not None and str(value).strip() != "":
+            rows.append(str(value).strip())
     return rows
 
 

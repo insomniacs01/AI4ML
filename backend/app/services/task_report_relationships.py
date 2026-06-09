@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import csv
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from backend.app.models.task import DatasetProfile, FeatureImportanceEntry, TaskRecord
+from backend.app.services.dataset_profile import read_dataset_rows
 from backend.app.services.task_report_relationship_stats import (
     MIN_RELATIONSHIP_PAIRS,
     relationship_strength,
@@ -129,15 +129,9 @@ def _load_relationship_rows(dataset_path: Path, target_column: str) -> tuple[lis
 
     rows: list[dict[str, str]] = []
     try:
-        with dataset_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if not reader.fieldnames or target_column not in reader.fieldnames:
-                return [], [], f"数据集中没有找到目标列 {target_column}，无法计算特征与目标列的关系。"
-            fieldnames = list(reader.fieldnames)
-            for index, row in enumerate(reader):
-                if index >= MAX_RELATIONSHIP_ROWS:
-                    break
-                rows.append(row)
+        fieldnames, rows = read_dataset_rows(dataset_path, max_rows=MAX_RELATIONSHIP_ROWS)
+        if not fieldnames or target_column not in fieldnames:
+            return [], [], f"数据集中没有找到目标列 {target_column}，无法计算特征与目标列的关系。"
     except OSError as exc:
         return [], [], f"读取数据集失败，无法计算特征与目标列的关系：{exc}"
     return fieldnames, rows, ""

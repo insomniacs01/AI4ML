@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getMe } from './api/client'
+import { getMe } from './api/auth'
 import { requireSession } from './api/session'
 
 const AUTH_CACHE_TTL_MS = 30_000

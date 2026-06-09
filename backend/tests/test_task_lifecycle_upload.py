@@ -10,9 +10,9 @@ import pytest
 from fastapi import FastAPI, UploadFile
 
 from backend.app.api.router import register_api_routes
-from backend.app.api.routes import task_dataset
+from backend.app.api.routes import task_dataset, task_lifecycle
 from backend.app.core.config import Settings
-from backend.app.models.task import TaskRecord, TaskStatus
+from backend.app.models.task import DatasetProfile, TaskRecord, TaskStatus
 from backend.app.services.task_local_storage import TaskLocalStorage
 
 
@@ -20,8 +20,14 @@ class _FakeTaskStore:
     def __init__(self, task: TaskRecord, storage: TaskLocalStorage) -> None:
         self.task = task
         self.storage = storage
+        self.list_kwargs: dict[str, object] = {}
 
-    def get_task(self, team_id: str, task_id: str, *, access_token: str) -> TaskRecord | None:
+    def list_tasks(self, team_id: str, **kwargs: object) -> list[TaskRecord]:
+        self.list_kwargs = kwargs
+        return [self.task] if team_id == self.task.team_id else []
+
+    def get_task(self, team_id: str, task_id: str, *, access_token: str, **kwargs: object) -> TaskRecord | None:
+        _ = kwargs
         return self.task if team_id == self.task.team_id and task_id == self.task.id and access_token else None
 
     def clear_dataset_upload_dir(self, team_id: str, task_id: str) -> Path:
@@ -105,3 +111,128 @@ def test_task_dataset_route_remains_registered_under_task_prefix() -> None:
     }
 
     assert ("POST", "/api/teams/{team_id}/tasks/{task_id}/dataset") in route_methods
+
+
+def test_task_list_route_omits_none_summary_fields() -> None:
+    app = FastAPI()
+    register_api_routes(app, Settings(AI4ML_SUPABASE_URL="", AI4ML_SUPABASE_PUBLISHABLE_KEY=""))
+    route = next(
+        route
+        for route in app.routes
+        if getattr(route, "path", "") == "/api/teams/{team_id}/tasks"
+        and "GET" in getattr(route, "methods", set())
+    )
+
+    assert route.response_model_exclude_none is True
+
+
+def test_list_tasks_returns_summary_payload_without_detail_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task = _task()
+    task.dataset_profile = DatasetProfile(
+        filename="large.csv",
+        path="D:/large.csv",
+        row_count=1000,
+        column_count=40,
+        columns=[],
+        preview_rows=[{"large": "payload"}],
+        generated_at=task.updated_at,
+    )
+    task.name = "任务" * 100
+    task.description = "需求" * 300
+    task.notes = "运行备注" * 200
+    task.structured_requirements = {"large": {"payload": True}}
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+
+    response = task_lifecycle.list_tasks(
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+    payload = response.model_dump(mode="json")["items"][0]
+
+    assert payload["id"] == task.id
+    assert len(payload["name"]) == 120
+    assert payload["dataset_filename"] == task.dataset_filename
+    assert "description" not in payload
+    assert "notes" not in payload
+    assert "dataset_profile" not in payload
+    assert "structured_requirements" not in payload
+    assert "stage_routing" not in payload
+    assert "interaction_policies" not in payload
+    assert "codex_workspace_path" not in payload
+    assert "codex_session_id" not in payload
+    assert store.list_kwargs["allow_stale_cache"] is True
+
+
+def test_list_tasks_can_return_compact_payload_for_task_list(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task = _task()
+    task.dataset_filename = "compact.csv"
+    task.dataset_path = "D:/large/compact.csv"
+    task.codex_status = "running"
+    task.name = "任务" * 100
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+
+    response = task_lifecycle.list_tasks(
+        compact=True,
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+    payload = response.model_dump(mode="json")["items"][0]
+
+    assert payload["id"] == task.id
+    assert payload["created_by"] == task.created_by
+    assert payload["name"] == "任务" * 60
+    assert payload["status"] == task.status.value
+    assert payload["dataset_filename"] == "compact.csv"
+    assert "created_at" in payload
+    assert "updated_at" in payload
+    assert "team_id" not in payload
+    assert "creator_user_id" not in payload
+    assert "dataset_path" not in payload
+    assert "codex_status" not in payload
+    assert "description" not in payload
+    assert store.list_kwargs["allow_stale_cache"] is True
+
+
+def test_runtime_task_list_uses_status_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task = _task()
+    task.status = TaskStatus.running
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+
+    response = task_lifecycle.list_tasks(
+        runtime_only=True,
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+
+    assert response.items[0].id == task.id
+    assert store.list_kwargs["limit"] == 20
+    assert store.list_kwargs["statuses"] == task_lifecycle.RUNTIME_TASK_STATUSES
+
+
+def test_get_task_can_skip_codex_sync(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    task = _task()
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+
+    def fail_if_synced(*args: object, **kwargs: object) -> None:
+        raise AssertionError("sync=false task detail route must not sync Codex state")
+
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+    monkeypatch.setattr(task_lifecycle, "sync_codex_task_state", fail_if_synced)
+
+    result = task_lifecycle.get_task(
+        task.id,
+        sync=False,
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+
+    assert result is task
+    assert result.executor_type == "codex"

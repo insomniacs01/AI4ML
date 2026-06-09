@@ -2,24 +2,24 @@ import { computed, onMounted, ref } from 'vue'
 import {
   deleteCommunityPlan,
   deleteCommunityPrompt,
+  getCommunityAssets,
+  reviewPlan,
+  reviewPrompt,
+} from '@/api/community'
+import { getMe } from '@/api/auth'
+import { getModelConfig, updateModelConfig } from '@/api/modelConfig'
+import {
   createTeamInvite,
-  getMe,
-  getModelConfig,
   getPlatformLimits,
-  getPlansForReview,
-  getPrompts,
   getTeamMembers,
   getTeamSettings,
   getUsers,
-  reviewPlan,
-  reviewPrompt,
   resetUserPassword,
   updateTeamMemberRole,
   updateTeamMemberStatus,
   updatePlatformLimits,
   updateUser,
-  updateModelConfig,
-} from '@/api/client'
+} from '@/api/teamAdmin'
 import { assetIdForItem, assetTypeForItem } from '@/utils/communityAssets'
 import { setModelDisplayName } from '@/utils/modelProfile'
 
@@ -60,8 +60,13 @@ export function useAdminManagement() {
   const error = ref('')
   const message = ref('')
   const loading = ref(false)
+  const sectionLoading = ref(false)
+  const quotaLoading = ref(false)
+  const platformLimitsLoading = ref(false)
   const activeSection = ref('community')
+  const loadedSections = ref({ community: false, team: false, model: false, users: false })
   const reviewTypeFilter = ref('all')
+  let usersLoadGeneration = 0
   const teamRoleOptions = [
     { value: 'admin', label: '管理员' },
     { value: 'member', label: '成员' },
@@ -169,33 +174,119 @@ export function useAdminManagement() {
     }
   }
 
+  function resetReviewDrafts() {
+    drafts.value = {}
+    prompts.value.forEach(draftFor)
+    plans.value.forEach(draftFor)
+  }
+
+  async function loadCommunitySection({ force = false } = {}) {
+    if (loadedSections.value.community && !force) return
+    const assetData = await getCommunityAssets(true)
+    prompts.value = assetData.prompts || []
+    plans.value = assetData.plans || []
+    resetReviewDrafts()
+    loadedSections.value.community = true
+  }
+
+  async function loadTeamSection({ force = false } = {}) {
+    if (loadedSections.value.team && !force) return
+    const [teamData, memberData] = await Promise.all([getTeamSettings(), getTeamMembers()])
+    teamSettings.value = teamData
+    teamMembers.value = memberData?.items || []
+    loadedSections.value.team = true
+  }
+
+  async function loadModelSection({ force = false } = {}) {
+    if (loadedSections.value.model && !force) return
+    applyModelConfig(await getModelConfig())
+    loadedSections.value.model = true
+  }
+
+  async function loadUsersSection({ force = false } = {}) {
+    if (loadedSections.value.users && !force) return
+    const memberPromise = !force && loadedSections.value.team
+      ? Promise.resolve({ items: teamMembers.value })
+      : getTeamMembers()
+    const generation = ++usersLoadGeneration
+    const memberData = await memberPromise
+    teamMembers.value = memberData?.items || []
+    users.value = (await getUsers({ memberData, includeQuotas: false })).items || []
+    loadedSections.value.team = true
+    loadedSections.value.users = true
+    void refreshUserQuotas(memberData, generation)
+    void refreshPlatformLimits(generation)
+  }
+
+  async function refreshUserQuotas(memberData, generation) {
+    quotaLoading.value = true
+    try {
+      const userData = await getUsers({ memberData })
+      if (generation === usersLoadGeneration) users.value = userData?.items || []
+    } catch (err) {
+      if (generation === usersLoadGeneration) error.value = err.message
+    } finally {
+      if (generation === usersLoadGeneration) quotaLoading.value = false
+    }
+  }
+
+  async function refreshPlatformLimits(generation) {
+    platformLimitsLoading.value = true
+    try {
+      const limitData = await getPlatformLimits()
+      if (generation === usersLoadGeneration) platformLimits.value = limitData || { ...DEFAULT_PLATFORM_LIMITS }
+    } catch (err) {
+      if (generation === usersLoadGeneration) error.value = err.message
+    } finally {
+      if (generation === usersLoadGeneration) platformLimitsLoading.value = false
+    }
+  }
+
+  function canAccessSection(section) {
+    return !['model', 'users'].includes(section) || isSystemAdmin.value
+  }
+
+  async function loadSection(section = activeSection.value, options = {}) {
+    const target = canAccessSection(section) ? section : 'community'
+    if (activeSection.value !== target) activeSection.value = target
+    if (target === 'team') await loadTeamSection(options)
+    else if (target === 'model') await loadModelSection(options)
+    else if (target === 'users') await loadUsersSection(options)
+    else await loadCommunitySection(options)
+  }
+
+  async function setActiveSection(section) {
+    activeSection.value = canAccessSection(section) ? section : 'community'
+    sectionLoading.value = true
+    error.value = ''
+    try {
+      await loadSection(activeSection.value)
+    } catch (err) {
+      error.value = err.message
+    } finally {
+      sectionLoading.value = false
+    }
+  }
+
   async function load() {
     loading.value = true
     error.value = ''
     try {
       const me = await getMe()
       currentUser.value = me.user
-      const requests = [getPrompts(true), getPlansForReview(true), getTeamSettings(), getTeamMembers()]
-      if (me.user?.role === 'admin') {
-        requests.push(getUsers())
-        requests.push(getPlatformLimits())
-        requests.push(getModelConfig())
-      }
-      const [promptData, planData, teamData, memberData, userData, limitData, modelData] = await Promise.all(requests)
-      prompts.value = promptData.items || []
-      plans.value = planData.items || []
-      teamSettings.value = teamData
-      teamMembers.value = memberData?.items || []
-      users.value = userData?.items || []
-      if (limitData) platformLimits.value = limitData
-      if (modelData) applyModelConfig(modelData)
-      drafts.value = {}
-      prompts.value.forEach(draftFor)
-      plans.value.forEach(draftFor)
     } catch (err) {
       error.value = err.message
     } finally {
       loading.value = false
+    }
+    if (error.value) return
+    sectionLoading.value = true
+    try {
+      await loadSection(activeSection.value, { force: true })
+    } catch (err) {
+      error.value = err.message
+    } finally {
+      sectionLoading.value = false
     }
   }
 
@@ -203,9 +294,7 @@ export function useAdminManagement() {
     teamLoading.value = true
     error.value = ''
     try {
-      const [teamData, memberData] = await Promise.all([getTeamSettings(), getTeamMembers()])
-      teamSettings.value = teamData
-      teamMembers.value = memberData?.items || []
+      await loadTeamSection({ force: true })
       if (!options.silent) message.value = '团队信息已刷新'
     } catch (err) {
       error.value = err.message
@@ -228,6 +317,7 @@ export function useAdminManagement() {
     await runSavingAction(savingMemberAction, memberActionKey(member, 'role'), async () => {
       await updateTeamMemberRole(member.user_id, member.role)
       await refreshTeam({ silent: true })
+      loadedSections.value.users = false
     }, '成员角色已更新')
   }
 
@@ -235,6 +325,7 @@ export function useAdminManagement() {
     await runSavingAction(savingMemberAction, memberActionKey(member, 'status'), async () => {
       await updateTeamMemberStatus(member.user_id, member.member_status)
       await refreshTeam({ silent: true })
+      loadedSections.value.users = false
     }, '成员状态已更新')
   }
 
@@ -255,7 +346,9 @@ export function useAdminManagement() {
         original_warning_threshold: Number(user.original_warning_threshold || 0),
       })
       message.value = '用户权限与额度已更新'
-      await load()
+      loadedSections.value.team = false
+      loadedSections.value.users = false
+      await loadUsersSection({ force: true })
     })
   }
 
@@ -278,6 +371,7 @@ export function useAdminManagement() {
         max_queued_tasks_per_user: Number(platformLimits.value.max_queued_tasks_per_user),
         max_task_time_budget_s: Number(platformLimits.value.max_task_time_budget_s),
       })
+      loadedSections.value.users = true
     }, '平台任务限制已更新')
   }
 
@@ -304,7 +398,7 @@ export function useAdminManagement() {
       if (type === 'plan') await reviewPlan(item.plan_id, payload)
       else await reviewPrompt(item.prompt_id, payload)
       message.value = '审核状态已更新'
-      await load()
+      await loadCommunitySection({ force: true })
     })
   }
 
@@ -315,7 +409,7 @@ export function useAdminManagement() {
       if (type === 'plan') await deleteCommunityPlan(item.plan_id)
       else await deleteCommunityPrompt(item.prompt_id)
       message.value = '社区条目已删除'
-      await load()
+      await loadCommunitySection({ force: true })
     })
   }
 
@@ -345,6 +439,8 @@ export function useAdminManagement() {
     pendingPlanCount,
     pendingPromptCount,
     platformLimits,
+    platformLimitsLoading,
+    quotaLoading,
     refreshTeam,
     removeAsset,
     resetPassword,
@@ -358,6 +454,8 @@ export function useAdminManagement() {
     saveTeamMemberStatus,
     saveUser,
     savingModelConfig,
+    sectionLoading,
+    setActiveSection,
     teamLoading,
     teamMemberName,
     teamMembers,

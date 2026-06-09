@@ -9,15 +9,15 @@ from backend.app.services.codex_common import as_utc, latest_workspace_update, r
 
 
 def resolve_codex_workspace_path(task: TaskRecord, settings: Settings) -> Path | None:
-    candidate = existing_candidate_workspace(task)
-    if candidate is not None:
-        return candidate
-
-    deterministic_workspace = matching_deterministic_workspace(task, settings)
-    if deterministic_workspace is not None:
-        return deterministic_workspace
+    known_workspace = resolve_known_codex_workspace_path(task, settings)
+    if known_workspace is not None:
+        return known_workspace
 
     return latest_started_workspace(task, settings)
+
+
+def resolve_known_codex_workspace_path(task: TaskRecord, settings: Settings) -> Path | None:
+    return existing_candidate_workspace(task) or matching_deterministic_workspace(task, settings)
 
 
 def workspace_candidates(task: TaskRecord) -> list[str]:

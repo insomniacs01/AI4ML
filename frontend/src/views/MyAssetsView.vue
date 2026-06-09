@@ -5,7 +5,7 @@ import { ClipboardList, FileText } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import MetricCard from '@/components/MetricCard.vue'
-import { getMyAssets } from '@/api/client'
+import { getMyAssets } from '@/api/community'
 import { modelDisplayName } from '@/utils/modelProfile'
 
 const assets = ref({ prompts: [], plans: [] })

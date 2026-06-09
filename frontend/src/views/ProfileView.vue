@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { UserRound } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import MetricCard from '@/components/MetricCard.vue'
-import { changePassword, getProfile, updateProfile } from '@/api/client'
+import { changePassword, getProfile, getProfileBase, updateProfile } from '@/api/auth'
 
 const profile = ref(null)
 const displayName = ref('')
@@ -12,10 +12,16 @@ const error = ref('')
 const message = ref('')
 const savingProfile = ref(false)
 const changingPassword = ref(false)
+const quotaLoading = ref(false)
 
 const tokenQuota = computed(() => Number(profile.value?.token_quota || 0))
 const tokenUsed = computed(() => Number(profile.value?.token_used || 0))
 const quotaRemaining = computed(() => Math.max(0, tokenQuota.value - tokenUsed.value))
+const quotaLoaded = computed(() => profile.value?.quota_loaded === true)
+const quotaStatusText = computed(() => (quotaLoading.value ? '同步中' : '未同步'))
+const tokenQuotaDisplay = computed(() => (quotaLoaded.value ? tokenQuota.value : quotaStatusText.value))
+const tokenUsedDisplay = computed(() => (quotaLoaded.value ? tokenUsed.value : quotaStatusText.value))
+const quotaRemainingDisplay = computed(() => (quotaLoaded.value ? quotaRemaining.value : quotaStatusText.value))
 
 function roleLabel(role) {
   const map = { admin: '管理员', community_admin: '社区管理员', developer: '开发者', business: '业务用户' }
@@ -23,13 +29,30 @@ function roleLabel(role) {
 }
 
 async function load() {
+  error.value = ''
   try {
-    const profileData = await getProfile()
-    profile.value = profileData
-    displayName.value = profileData.display_name || ''
+    applyProfile(await getProfileBase())
   } catch (err) {
     error.value = err.message
+    return
   }
+  loadQuota()
+}
+
+async function loadQuota() {
+  quotaLoading.value = true
+  try {
+    applyProfile(await getProfile())
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    quotaLoading.value = false
+  }
+}
+
+function applyProfile(profileData) {
+  profile.value = { ...(profile.value || {}), ...profileData }
+  displayName.value = profileData.display_name || ''
 }
 
 async function saveProfile() {
@@ -37,7 +60,7 @@ async function saveProfile() {
   message.value = ''
   savingProfile.value = true
   try {
-    profile.value = await updateProfile({ display_name: displayName.value })
+    applyProfile(await updateProfile({ display_name: displayName.value }))
     message.value = '个人信息已更新'
   } catch (err) {
     error.value = err.message
@@ -75,9 +98,9 @@ onMounted(load)
 
   <section class="metric-grid">
     <MetricCard label="角色" :value="roleLabel(profile?.role)" />
-    <MetricCard label="总额度" :value="tokenQuota" />
-    <MetricCard label="已用额度" :value="tokenUsed" />
-    <MetricCard label="剩余额度" :value="quotaRemaining" />
+    <MetricCard label="总额度" :value="tokenQuotaDisplay" />
+    <MetricCard label="已用额度" :value="tokenUsedDisplay" />
+    <MetricCard label="剩余额度" :value="quotaRemainingDisplay" />
   </section>
 
   <section class="panel quota-panel">
@@ -85,15 +108,15 @@ onMounted(load)
     <div class="quota-overview">
       <div>
         <span>总额度</span>
-        <strong>{{ tokenQuota }}</strong>
+        <strong>{{ tokenQuotaDisplay }}</strong>
       </div>
       <div>
         <span>已用额度</span>
-        <strong>{{ tokenUsed }}</strong>
+        <strong>{{ tokenUsedDisplay }}</strong>
       </div>
       <div>
         <span>剩余额度</span>
-        <strong>{{ quotaRemaining }}</strong>
+        <strong>{{ quotaRemainingDisplay }}</strong>
       </div>
     </div>
   </section>

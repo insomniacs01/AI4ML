@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.models.task import TaskRecord
+from backend.app.services.codex_metrics import leaderboard_from_metrics, primary_metric, selected_model_metrics
 
 
 def build_task_run_payload(
@@ -35,8 +36,8 @@ def build_task_run_payload(
     )
     return {
         "steps": [step.model_dump(mode="json") for step in steps],
-        "leaderboard": _leaderboard_payload(task, progress_response),
-        "metrics": _metrics_payload(task),
+        "leaderboard": _leaderboard_payload(task, progress_response, codex_artifacts),
+        "metrics": _metrics_payload(task, codex_artifacts),
         "artifacts": artifacts,
         "overview": codex_overview,
         "progress_percent": progress_percent,
@@ -53,18 +54,35 @@ def build_task_run_payload(
     }
 
 
-def _leaderboard_payload(task: TaskRecord, progress_response: Any | None) -> list[Any]:
+def _leaderboard_payload(
+    task: TaskRecord,
+    progress_response: Any | None,
+    codex_artifacts: dict[str, Any] | None,
+) -> list[Any]:
     if progress_response:
         return progress_response.leaderboard
     if task.last_run:
         return task.last_run.leaderboard
+    metrics = _codex_metrics(codex_artifacts)
+    if metrics:
+        return [row.model_dump(mode="json") for row in leaderboard_from_metrics(metrics)]
     return []
 
 
-def _metrics_payload(task: TaskRecord) -> dict[str, float]:
-    if not task.last_run:
-        return {}
-    return {task.last_run.metric_name: task.last_run.metric_value}
+def _metrics_payload(task: TaskRecord, codex_artifacts: dict[str, Any] | None) -> dict[str, float]:
+    if task.last_run:
+        return {task.last_run.metric_name: task.last_run.metric_value}
+    metrics = _codex_metrics(codex_artifacts)
+    if metrics:
+        metric_name, metric_value = primary_metric(selected_model_metrics(metrics), metrics)
+        if metric_value is not None:
+            return {metric_name: metric_value}
+    return {}
+
+
+def _codex_metrics(codex_artifacts: dict[str, Any] | None) -> dict[str, Any]:
+    metrics = codex_artifacts.get("metrics") if isinstance(codex_artifacts, dict) else None
+    return metrics if isinstance(metrics, dict) else {}
 
 
 def _current_stage_payload(progress_response: Any | None, progress: dict[str, Any]) -> str | None:

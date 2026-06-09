@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { ArrowLeft } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import DemoInputForm from '@/components/DemoInputForm.vue'
-import { getDelivery, predict } from '@/api/client'
+import { getDelivery, predict } from '@/api/taskPredictionDemo'
 
 const props = defineProps({ taskId: { type: String, required: true } })
 const router = useRouter()

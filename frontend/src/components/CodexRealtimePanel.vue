@@ -28,9 +28,14 @@ const props = defineProps({
   },
 })
 
+const MAX_VISIBLE_EVENTS = 240
+const MAX_VISIBLE_ASSISTANT_MESSAGES = 24
+const MAX_VISIBLE_TOOL_EVENTS = 48
+const MAX_VISIBLE_MILESTONE_EVENTS = 32
 const frameRef = ref(null)
+const openToolIds = ref(new Set())
 
-const visibleEvents = computed(() => props.events)
+const visibleEvents = computed(() => props.events.slice(-MAX_VISIBLE_EVENTS))
 const isBusy = computed(() => props.status === 'running' || (props.status !== 'snapshot' && props.activity?.status === 'busy'))
 const isHistoryView = computed(() => props.status === 'snapshot')
 const statusText = computed(() => {
@@ -64,7 +69,7 @@ const promptEvent = computed(() =>
 )
 const promptText = computed(() => formatPrompt(promptEvent.value))
 const assistantMessages = computed(() =>
-  visibleEvents.value.filter((event) => event.kind === 'assistant' && event.text),
+  visibleEvents.value.filter((event) => event.kind === 'assistant' && event.text).slice(-MAX_VISIBLE_ASSISTANT_MESSAGES),
 )
 const usageEvent = computed(() => [...visibleEvents.value].reverse().find((event) => event.kind === 'usage') || null)
 const workingMessages = computed(() =>
@@ -72,10 +77,12 @@ const workingMessages = computed(() =>
 )
 const latestWorking = computed(() => workingMessages.value.at(-1) || null)
 const toolEvents = computed(() =>
-  visibleEvents.value.filter((event) => event.kind === 'tool' || event.kind === 'error'),
+  visibleEvents.value.filter((event) => event.kind === 'tool' || event.kind === 'error').slice(-MAX_VISIBLE_TOOL_EVENTS),
 )
 const milestoneEvents = computed(() =>
-  visibleEvents.value.filter((event) => ['session', 'workspace', 'requirements', 'plan', 'approval', 'modeling', 'report'].includes(event.kind)),
+  visibleEvents.value
+    .filter((event) => ['session', 'workspace', 'requirements', 'plan', 'approval', 'modeling', 'report'].includes(event.kind))
+    .slice(-MAX_VISIBLE_MILESTONE_EVENTS),
 )
 const latestTurn = computed(() => [...visibleEvents.value].reverse().find((event) => event.kind === 'turn') || null)
 const turnCompleted = computed(() =>
@@ -109,6 +116,15 @@ watch(
   async () => {
     await nextTick()
     if (frameRef.value && isBusy.value) frameRef.value.scrollTop = frameRef.value.scrollHeight
+  },
+)
+
+watch(
+  () => toolEvents.value.map((event) => event.id),
+  (ids) => {
+    const visibleIds = new Set(ids)
+    const next = new Set([...openToolIds.value].filter((id) => visibleIds.has(id)))
+    if (next.size !== openToolIds.value.size) openToolIds.value = next
   },
 )
 
@@ -161,6 +177,17 @@ function toolMeta(event) {
   if (event.durationMs) parts.push(formatDuration(event.durationMs))
   return parts.join(' · ')
 }
+
+function toggleToolDetail(event, domEvent) {
+  const next = new Set(openToolIds.value)
+  if (domEvent.target?.open) next.add(event.id)
+  else next.delete(event.id)
+  openToolIds.value = next
+}
+
+function isToolDetailOpen(event) {
+  return openToolIds.value.has(event.id)
+}
 </script>
 
 <template>
@@ -204,13 +231,13 @@ function toolMeta(event) {
           <p v-if="latestWorking?.text" class="codex-working-text">{{ latestWorking.text }}</p>
 
           <div v-if="toolEvents.length" class="codex-tool-list">
-            <details v-for="event in toolEvents" :key="event.id" class="codex-tool-row" :class="{ error: event.kind === 'error' }">
+            <details v-for="event in toolEvents" :key="event.id" class="codex-tool-row" :class="{ error: event.kind === 'error' }" @toggle="toggleToolDetail(event, $event)">
               <summary>
                 <component :is="toolIcon(event)" :size="16" />
                 <strong>{{ toolTitle(event) }}</strong>
                 <span>{{ toolMeta(event) || eventTime(event) }}</span>
               </summary>
-              <div class="codex-tool-detail">
+              <div v-if="isToolDetailOpen(event)" class="codex-tool-detail">
                 <p v-if="event.cwd" class="codex-tool-path">{{ event.cwd }}</p>
                 <pre v-if="event.command" class="codex-command">{{ event.command }}</pre>
                 <pre v-if="event.stdout" class="codex-output">{{ event.stdout }}</pre>

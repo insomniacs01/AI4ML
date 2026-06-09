@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { login, register } from '@/api/client'
+import { login, register } from '@/api/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,16 +43,18 @@ async function submitRegister() {
   loading.value = true
   error.value = ''
   try {
-    await register({
+    const result = await register({
       email: registerForm.value.email,
       user_id: registerForm.value.email,
       display_name: registerForm.value.display_name,
       password: registerForm.value.password,
     })
-    await login({
-      email: registerForm.value.email,
-      password: registerForm.value.password,
-    })
+    if (!result?.session) {
+      await login({
+        email: registerForm.value.email,
+        password: registerForm.value.password,
+      })
+    }
     router.push(route.query.next || '/workspace')
   } catch (err) {
     error.value = err.message

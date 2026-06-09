@@ -3,6 +3,7 @@ import { supabase, supabaseReady } from '@/lib/supabase'
 import { localizeError } from '@/api/errors'
 
 export const ACTIVE_TEAM_KEY = 'ai4ml-active-team-id'
+export const MEMBERSHIP_CACHE_KEY = 'ai4ml-membership-cache-v1'
 export const DEFAULT_TEAM_NAME = '我的团队'
 
 let cachedSession = null
@@ -10,9 +11,12 @@ let cachedUser = null
 let cachedMemberships = null
 let cachedActiveTeam = null
 let cachedMembershipsAt = 0
+let pendingSession = null
+let pendingMemberships = null
 
 const SESSION_REFRESH_SKEW_SECONDS = 90
-const MEMBERSHIP_CACHE_TTL_MS = 2 * 60 * 1000
+const MEMBERSHIP_CACHE_TTL_MS = 10 * 60 * 1000
+const MEMBERSHIP_STALE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 export function normalizeRole(role) {
   if (['team_owner', 'admin'].includes(role)) return 'admin'
@@ -49,10 +53,18 @@ export function setCachedAuth(session, user = session?.user || null) {
 
 export async function getSession() {
   const client = requireSupabase()
-  const { data, error } = await client.auth.getSession()
-  if (error) throw error
-  setCachedAuth(data.session || null)
-  return cachedSession
+  if (!pendingSession) {
+    pendingSession = client.auth.getSession()
+      .then(({ data, error }) => {
+        if (error) throw error
+        setCachedAuth(data.session || null)
+        return cachedSession
+      })
+      .finally(() => {
+        pendingSession = null
+      })
+  }
+  return pendingSession
 }
 
 function sessionIsFresh(session) {
@@ -69,19 +81,52 @@ export async function requireSession(options = {}) {
   return session
 }
 
-export async function resetAuthCaches() {
+export async function resetAuthCaches(options = {}) {
   cachedSession = null
   cachedUser = null
   cachedMemberships = null
   cachedActiveTeam = null
   cachedMembershipsAt = 0
+  pendingSession = null
+  pendingMemberships = null
+  if (options.clearStoredMemberships !== false) clearStoredMemberships()
 }
 
 export async function ensureMemberships(force = false) {
+  if (cachedMemberships && !force && Date.now() - cachedMembershipsAt < MEMBERSHIP_CACHE_TTL_MS) return cachedMemberships
+  if (!force && !cachedUser?.id) {
+    await requireSession()
+  }
+  if (!force) {
+    const stored = readStoredMemberships(cachedUser?.id)
+    if (stored) return stored
+    const staleStored = readStoredMemberships(cachedUser?.id, { allowStale: true })
+    if (staleStored) {
+      refreshMembershipsInBackground()
+      return staleStored
+    }
+  }
+  if (!force && pendingMemberships) return pendingMemberships
+
+  pendingMemberships = loadMemberships()
+    .finally(() => {
+      pendingMemberships = null
+    })
+  return pendingMemberships
+}
+
+function refreshMembershipsInBackground() {
+  if (pendingMemberships) return
+  pendingMemberships = loadMemberships()
+    .catch(() => cachedMemberships || [])
+    .finally(() => {
+      pendingMemberships = null
+    })
+}
+
+async function loadMemberships() {
   const client = requireSupabase()
   const session = await requireSession()
-  if (cachedMemberships && !force && Date.now() - cachedMembershipsAt < MEMBERSHIP_CACHE_TTL_MS) return cachedMemberships
-
   const { data: membershipRows, error: membershipError } = await client
     .from('team_members')
     .select('team_id, role, member_status, joined_at')
@@ -94,6 +139,7 @@ export async function ensureMemberships(force = false) {
     cachedMemberships = []
     cachedActiveTeam = null
     cachedMembershipsAt = Date.now()
+    writeStoredMemberships(session.user.id, cachedMemberships)
     return cachedMemberships
   }
 
@@ -116,6 +162,7 @@ export async function ensureMemberships(force = false) {
     name: teamMap.get(row.team_id)?.name || row.team_id,
   }))
   cachedMembershipsAt = Date.now()
+  writeStoredMemberships(session.user.id, cachedMemberships)
   return cachedMemberships
 }
 
@@ -145,4 +192,38 @@ export async function ensureDefaultTeam() {
   const memberships = await ensureMemberships(true)
   if (!memberships.length) return createTeam(DEFAULT_TEAM_NAME)
   return null
+}
+
+function readStoredMemberships(userId, options = {}) {
+  if (typeof localStorage === 'undefined' || !userId) return null
+  try {
+    const payload = JSON.parse(localStorage.getItem(MEMBERSHIP_CACHE_KEY) || 'null')
+    if (!payload || payload.user_id !== userId) return null
+    if (!Array.isArray(payload.memberships)) return null
+    const age = Date.now() - Number(payload.cached_at || 0)
+    if (age >= MEMBERSHIP_STALE_CACHE_TTL_MS) return null
+    if (age >= MEMBERSHIP_CACHE_TTL_MS && options.allowStale !== true) return null
+    if (age >= MEMBERSHIP_CACHE_TTL_MS && !payload.memberships.length) return null
+    cachedMemberships = payload.memberships
+    cachedMembershipsAt = Number(payload.cached_at || Date.now())
+    const saved = localStorage.getItem(ACTIVE_TEAM_KEY)
+    cachedActiveTeam = cachedMemberships.find((item) => item.id === saved || item.team_id === saved) || null
+    return cachedMemberships
+  } catch {
+    return null
+  }
+}
+
+function writeStoredMemberships(userId, memberships) {
+  if (typeof localStorage === 'undefined' || !userId) return
+  localStorage.setItem(MEMBERSHIP_CACHE_KEY, JSON.stringify({
+    user_id: userId,
+    cached_at: Date.now(),
+    memberships,
+  }))
+}
+
+function clearStoredMemberships() {
+  if (typeof localStorage === 'undefined') return
+  localStorage.removeItem(MEMBERSHIP_CACHE_KEY)
 }

@@ -677,6 +677,21 @@ before update on public.platform_assets
 for each row
 execute function public.set_updated_at();
 
+create index if not exists idx_platform_assets_team_updated
+on public.platform_assets(team_id, updated_at desc);
+
+create index if not exists idx_platform_assets_team_visibility_updated
+on public.platform_assets(team_id, visibility, updated_at desc);
+
+create index if not exists idx_platform_assets_team_review_updated
+on public.platform_assets(team_id, review_status, updated_at desc);
+
+create index if not exists idx_platform_assets_team_type_updated
+on public.platform_assets(team_id, asset_type, updated_at desc);
+
+create index if not exists idx_platform_assets_team_category_updated
+on public.platform_assets(team_id, category, updated_at desc);
+
 create table if not exists public.audit_logs (
   id uuid primary key default gen_random_uuid(),
   team_id uuid references public.teams(id) on delete cascade,

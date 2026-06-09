@@ -12,19 +12,11 @@ import {
   Shield,
   Workflow,
 } from 'lucide-vue-next'
-import {
-  getCurrentUser,
-  getModelProfile,
-  getNotifications,
-  getUnreadNotificationCount,
-  logout,
-  markAllNotificationsRead,
-  markNotificationRead,
-} from './api/client'
+import { getCurrentUser, logout } from './api/auth'
+import { warmupAuthenticatedExperienceSoon } from './api/startupWarmup'
 import { clearAuthCache } from './router'
 import { getCachedUser, requireSession } from './api/session'
-import { warmupWorkspaceCacheSoon } from './api/workspaceWarmup'
-import { setModelDisplayName } from '@/utils/modelProfile'
+import { modelDisplayName } from '@/utils/modelProfile'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,14 +29,8 @@ const notificationError = ref('')
 const notificationStream = ref(null)
 const notificationLoading = ref(false)
 const sidebarCollapsed = ref(false)
-const modelDisplayName = ref('Codex')
 const TOPBAR_REFRESH_MS = 60_000
-const TOPBAR_BACKGROUND_DELAY_MS = 1200
 let lastUserRefreshAt = 0
-let lastNotificationCountAt = 0
-let lastModelProfileAt = 0
-let modelProfileTimer = null
-let unreadCountTimer = null
 
 const isPublic = computed(() => route.meta.public)
 const canAccessAdminConsole = computed(() => user.value?.role === 'admin')
@@ -103,9 +89,7 @@ async function refreshUser() {
     const data = await getCurrentUser()
     user.value = data.user
     lastUserRefreshAt = Date.now()
-    scheduleModelProfileRefresh(TOPBAR_BACKGROUND_DELAY_MS)
-    scheduleUnreadCountRefresh(TOPBAR_BACKGROUND_DELAY_MS)
-    if (route.path !== '/workspace') warmupWorkspaceCacheSoon(TOPBAR_BACKGROUND_DELAY_MS)
+    warmupAuthenticatedExperienceSoon({ isAdmin: data.user?.role === 'admin' })
     connectNotificationStream()
   } catch {
     if (!user.value) {
@@ -116,45 +100,6 @@ async function refreshUser() {
     }
   } finally {
     loadingUser.value = false
-  }
-}
-
-function scheduleModelProfileRefresh(delayMs = 0) {
-  if (modelProfileTimer) return
-  modelProfileTimer = window.setTimeout(() => {
-    modelProfileTimer = null
-    refreshModelProfile()
-  }, delayMs)
-}
-
-async function refreshModelProfile() {
-  if (Date.now() - lastModelProfileAt < TOPBAR_REFRESH_MS) return
-  lastModelProfileAt = Date.now()
-  try {
-    const modelProfile = await getModelProfile()
-    modelDisplayName.value = modelProfile?.display_name || 'Codex'
-    setModelDisplayName(modelDisplayName.value)
-  } catch {
-    // Keep the previous label when the lightweight profile call fails.
-  }
-}
-
-function scheduleUnreadCountRefresh(delayMs = 0) {
-  if (unreadCountTimer) return
-  unreadCountTimer = window.setTimeout(() => {
-    unreadCountTimer = null
-    refreshUnreadCount()
-  }, delayMs)
-}
-
-async function refreshUnreadCount() {
-  if (!user.value || Date.now() - lastNotificationCountAt < TOPBAR_REFRESH_MS) return
-  lastNotificationCountAt = Date.now()
-  try {
-    const unread = await getUnreadNotificationCount()
-    unreadCount.value = Number(unread.count || 0)
-  } catch {
-    // The notification menu will surface detailed errors when opened.
   }
 }
 
@@ -201,9 +146,9 @@ async function loadNotifications() {
   notificationLoading.value = true
   notificationError.value = ''
   try {
+    const { getNotifications } = await import('./api/notifications')
     const items = await getNotifications({ limit: 30 })
     applyNotificationPayload({ items: items.items || [] })
-    lastNotificationCountAt = Date.now()
   } catch (err) {
     notificationError.value = err.message
   } finally {
@@ -223,6 +168,7 @@ async function toggleNotifications() {
 async function markNotification(item) {
   if (!item || item.is_read) return
   try {
+    const { markNotificationRead } = await import('./api/notifications')
     await markNotificationRead(item.notification_id)
     item.is_read = true
     unreadCount.value = Math.max(0, unreadCount.value - 1)
@@ -245,6 +191,7 @@ async function markAllNotifications() {
   unreadCount.value = 0
   notificationError.value = ''
   try {
+    const { markAllNotificationsRead } = await import('./api/notifications')
     await markAllNotificationsRead(unreadIds)
   } catch (err) {
     notifications.value = previousNotifications
@@ -278,8 +225,6 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   closeNotificationStream()
-  if (modelProfileTimer) window.clearTimeout(modelProfileTimer)
-  if (unreadCountTimer) window.clearTimeout(unreadCountTimer)
 })
 watch(() => route.fullPath, () => {
   notificationOpen.value = false
@@ -388,7 +333,9 @@ router.afterEach(refreshUser)
       </aside>
 
       <main class="page-frame">
-        <RouterView class="page-pop-surface" />
+        <div class="page-pop-surface">
+          <RouterView />
+        </div>
       </main>
     </div>
   </div>

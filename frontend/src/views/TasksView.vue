@@ -5,13 +5,16 @@ import { PlusCircle, RefreshCw, Search, Trash2, XCircle } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import LoadingBlock from '@/components/LoadingBlock.vue'
-import { deleteTask, getTasks, pauseTask } from '@/api/client'
+import { deleteTask, getTasks, pauseTask } from '@/api/tasks'
+import { getActiveTeamHint, getCachedUser } from '@/api/session'
 import { formatDateTime } from '@/utils/formatters'
 import { displayTaskTitle, taskTypeLabel } from '@/utils/labels'
 import { taskProgressPercent } from '@/utils/progress'
+import { isTaskListCacheFresh, readTaskListCache, writeTaskListCache } from '@/utils/taskListCache'
 
 const tasks = ref([])
 const loading = ref(false)
+const refreshing = ref(false)
 const error = ref('')
 const busyTaskIds = ref(new Set())
 const activeFilter = ref('all')
@@ -63,16 +66,33 @@ function setTaskBusy(taskId, busy) {
   busyTaskIds.value = next
 }
 
-async function load() {
-  loading.value = true
+function taskListCacheContext() {
+  const userId = getCachedUser()?.id
+  const teamId = getActiveTeamHint()?.id
+  return userId && teamId ? { userId, teamId } : null
+}
+
+function hydrateTasksFromCache() {
+  const cached = readTaskListCache(taskListCacheContext())
+  if (!cached) return false
+  tasks.value = cached.tasks || []
+  return isTaskListCacheFresh(cached.cachedAt)
+}
+
+async function load(options = {}) {
+  const background = options.background === true || tasks.value.length > 0
+  if (background) refreshing.value = true
+  else loading.value = true
   error.value = ''
   try {
-    const data = await getTasks()
+    const data = await getTasks({ forceRefresh: options.forceRefresh === true })
     tasks.value = data.items || []
+    writeTaskListCache(taskListCacheContext(), tasks.value)
   } catch (err) {
     error.value = err.message
   } finally {
-    loading.value = false
+    if (background) refreshing.value = false
+    else loading.value = false
   }
 }
 
@@ -88,10 +108,10 @@ async function pauseItem(task) {
     tasks.value = tasks.value.map((item) => (
       item.task_id === taskId ? { ...item, ...data, status: data.status || 'paused_for_review' } : item
     ))
-    await load()
+    await load({ background: true, forceRefresh: true })
   } catch (err) {
     error.value = err.message
-    await load()
+    await load({ background: true, forceRefresh: true })
   } finally {
     setTaskBusy(taskId, false)
   }
@@ -104,7 +124,8 @@ async function deleteItem(task) {
   try {
     await deleteTask(taskId)
     tasks.value = tasks.value.filter((item) => item.task_id !== taskId)
-    await load()
+    writeTaskListCache(taskListCacheContext(), tasks.value)
+    await load({ background: true, forceRefresh: true })
   } catch (err) {
     error.value = err.message
   } finally {
@@ -151,21 +172,29 @@ function ringStyle(task) {
   return { background: `conic-gradient(var(--accent) ${degrees}deg, var(--surface-soft) 0deg)` }
 }
 
-onMounted(load)
+onMounted(() => {
+  const cacheIsFresh = hydrateTasksFromCache()
+  if (!cacheIsFresh) load({ background: tasks.value.length > 0 })
+})
 </script>
 
 <template>
   <PageHeader title="我的任务" description="按状态查看每个建模任务，先看结论，再进入细节。">
     <template #actions>
-      <button class="secondary-action refresh-action" type="button" :disabled="loading" @click="load">
-        <RefreshCw :class="{ spinning: loading }" :size="18" />刷新
+      <button
+        class="secondary-action refresh-action"
+        type="button"
+        :disabled="loading || refreshing"
+        @click="load({ background: tasks.length > 0, forceRefresh: true })"
+      >
+        <RefreshCw :class="{ spinning: loading || refreshing }" :size="18" />刷新
       </button>
       <button class="primary-action" type="button" @click="goCreate"><PlusCircle :size="18" />开始任务</button>
     </template>
   </PageHeader>
 
   <p v-if="error" class="form-error">{{ error }}</p>
-  <LoadingBlock v-if="loading" />
+  <LoadingBlock v-if="loading && tasks.length === 0" />
   <EmptyState v-else-if="tasks.length === 0" title="暂无任务" description="开始任务后会在这里显示运行记录。" />
   <section v-else class="tasks-board">
     <div class="task-filter-bar">

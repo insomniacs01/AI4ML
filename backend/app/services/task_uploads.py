@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 MAX_DATASET_UPLOAD_BYTES = 200 * 1024 * 1024
 MAX_CSV_UPLOAD_BYTES = MAX_DATASET_UPLOAD_BYTES
 CSV_UPLOAD_CHUNK_BYTES = 1024 * 1024
+DELIMITED_TEXT_UPLOAD_SUFFIXES = {".csv", ".data"}
 
 
 def validate_upload_filename(filename: str) -> str:
@@ -39,4 +40,4 @@ def validate_csv_sample(sample: bytes) -> None:
 
 
 def is_csv_upload_filename(filename: str) -> bool:
-    return Path(filename).suffix.lower() == ".csv"
+    return Path(filename).suffix.lower() in DELIMITED_TEXT_UPLOAD_SUFFIXES

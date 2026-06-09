@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from backend.app.api.errors import raise_store_http_error
 from backend.app.core.config import Settings, get_settings
@@ -59,10 +59,28 @@ def _assert_codex_task_can_control_current_activity(
 
 
 @router.post("/{task_id}/run", response_model=TaskRecord)
+def run_task_endpoint(
+    task_id: str,
+    payload: TaskRunRequest,
+    background_tasks: BackgroundTasks,
+    async_start: bool = Query(default=False),
+    team_access: TeamAccessContext = Depends(require_team_access),
+) -> TaskRecord:
+    return run_task(
+        task_id,
+        payload,
+        team_access,
+        background_tasks=background_tasks,
+        async_start=async_start,
+    )
+
+
 def run_task(
     task_id: str,
     payload: TaskRunRequest,
-    team_access: TeamAccessContext = Depends(require_team_access),
+    team_access: TeamAccessContext,
+    background_tasks: BackgroundTasks | None = None,
+    async_start: bool = False,
 ) -> TaskRecord:
     task_store = get_task_store()
     task = task_store.get_task(team_access.team_id, task_id, access_token=team_access.access_token)
@@ -78,13 +96,22 @@ def run_task(
         raise_store_http_error(exc)
 
     task.executor_type = "codex"
-    return _run_codex_task(task, payload, team_access)
+    return _run_codex_task(
+        task,
+        payload,
+        team_access,
+        background_tasks=background_tasks,
+        async_start=async_start,
+    )
 
 
 def _run_codex_task(
     task: TaskRecord,
     payload: TaskRunRequest,
     team_access: TeamAccessContext,
+    *,
+    background_tasks: BackgroundTasks | None = None,
+    async_start: bool = False,
 ) -> TaskRecord:
     task_store = get_task_store()
     human_service = get_task_human_collaboration_service()
@@ -93,31 +120,67 @@ def _run_codex_task(
 
     if payload.regenerate_plan:
         quota = _assert_quota_allows_action(team_access, action_name="Codex 重新生成方案")
+        token_budget = quota_token_budget(quota)
+        if async_start and background_tasks is not None:
+            return _queue_codex_continue_and_save(
+                task,
+                payload,
+                team_access,
+                settings,
+                background_tasks,
+                action="regenerate_plan",
+                token_budget=token_budget,
+                note="Codex 正在后台根据人工反馈重新生成建模计划。",
+            )
         return _regenerate_codex_plan_and_save(
             task,
             team_access,
             settings,
-            token_budget=quota_token_budget(quota),
+            token_budget=token_budget,
         )
 
     if payload.resume_interrupted:
         quota = _assert_quota_allows_action(team_access, action_name="Codex 继续运行")
+        token_budget = quota_token_budget(quota)
+        if async_start and background_tasks is not None:
+            return _queue_codex_continue_and_save(
+                task,
+                payload,
+                team_access,
+                settings,
+                background_tasks,
+                action="resume_interrupted",
+                token_budget=token_budget,
+                note="Codex 正在后台恢复任务执行。",
+            )
         return _resume_interrupted_codex_task(
             task,
             payload,
             team_access,
             settings,
-            token_budget=quota_token_budget(quota),
+            token_budget=token_budget,
         )
 
     if payload.resume_after_human:
         quota = _assert_quota_allows_action(team_access, action_name="Codex 继续运行")
+        token_budget = quota_token_budget(quota)
+        if async_start and background_tasks is not None:
+            return _queue_codex_continue_and_save(
+                task,
+                payload,
+                team_access,
+                settings,
+                background_tasks,
+                action="resume_after_human",
+                token_budget=token_budget,
+                note="Codex 正在后台接收人工确认并继续执行。",
+            )
         return _approve_codex_plan_and_save(
             task,
             payload,
             team_access,
             settings,
-            token_budget=quota_token_budget(quota),
+            token_budget=token_budget,
         )
 
     try:
@@ -138,12 +201,16 @@ def _run_codex_task(
         if task.status in {TaskStatus.paused_for_review, TaskStatus.completed, TaskStatus.failed}:
             return _save_codex_sync_result(task, artifacts, team_access)
 
-    return _start_codex_task_and_save(
-        task,
-        team_access,
-        settings,
-        token_budget=quota_token_budget(quota),
-    )
+    token_budget = quota_token_budget(quota)
+    if async_start and background_tasks is not None:
+        return _queue_codex_start_and_save(
+            task,
+            team_access,
+            settings,
+            background_tasks,
+            token_budget=token_budget,
+        )
+    return _start_codex_task_and_save(task, team_access, settings, token_budget=token_budget)
 
 
 def _regenerate_codex_plan_and_save(
@@ -195,6 +262,114 @@ def _start_codex_task_and_save(
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     record_codex_running_stages(saved_task, team_access)
     return saved_task
+
+
+def _queue_codex_start_and_save(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    settings: Settings,
+    background_tasks: BackgroundTasks,
+    *,
+    token_budget: int | None,
+) -> TaskRecord:
+    task_store = get_task_store()
+    task.executor_type = "codex"
+    task.status = TaskStatus.running
+    task.codex_status = "starting"
+    task.notes = "Codex 正在后台创建任务工作区并生成建模计划。"
+    task = update_codex_structured_metadata(task)
+    saved_task = task_store.save_task(task, access_token=team_access.access_token)
+    record_codex_running_stages(saved_task, team_access)
+    background_tasks.add_task(
+        _start_codex_task_background,
+        saved_task,
+        team_access,
+        settings,
+        token_budget,
+    )
+    return saved_task
+
+
+def _start_codex_task_background(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    settings: Settings,
+    token_budget: int | None,
+) -> None:
+    try:
+        _start_codex_task_and_save(task, team_access, settings, token_budget=token_budget)
+    except Exception as exc:  # Background tasks cannot surface HTTP errors to the original response.
+        _save_codex_background_failure(task, team_access, f"Codex 后台启动失败：{exc}")
+
+
+def _queue_codex_continue_and_save(
+    task: TaskRecord,
+    payload: TaskRunRequest,
+    team_access: TeamAccessContext,
+    settings: Settings,
+    background_tasks: BackgroundTasks,
+    *,
+    action: str,
+    token_budget: int | None,
+    note: str,
+) -> TaskRecord:
+    task_store = get_task_store()
+    task_for_background = task.model_copy(deep=True)
+    payload_for_background = payload.model_copy(deep=True)
+    task.executor_type = "codex"
+    task.status = TaskStatus.running
+    task.codex_status = "starting"
+    task.notes = note
+    task = update_codex_structured_metadata(task)
+    saved_task = task_store.save_task(task, access_token=team_access.access_token)
+    record_codex_running_stages(saved_task, team_access)
+    background_tasks.add_task(
+        _continue_codex_task_background,
+        action,
+        task_for_background,
+        payload_for_background,
+        team_access,
+        settings,
+        token_budget,
+        saved_task,
+    )
+    return saved_task
+
+
+def _continue_codex_task_background(
+    action: str,
+    task: TaskRecord,
+    payload: TaskRunRequest,
+    team_access: TeamAccessContext,
+    settings: Settings,
+    token_budget: int | None,
+    queued_task: TaskRecord,
+) -> None:
+    try:
+        if action == "regenerate_plan":
+            _regenerate_codex_plan_and_save(task, team_access, settings, token_budget=token_budget)
+            return
+        if action == "resume_interrupted":
+            _resume_interrupted_codex_task(task, payload, team_access, settings, token_budget=token_budget)
+            return
+        if action == "resume_after_human":
+            _approve_codex_plan_and_save(task, payload, team_access, settings, token_budget=token_budget)
+            return
+        raise RuntimeError(f"unsupported Codex background action: {action}")
+    except Exception as exc:  # Background tasks cannot surface HTTP errors to the original response.
+        _save_codex_background_failure(queued_task, team_access, f"Codex 后台继续执行失败：{exc}")
+
+
+def _save_codex_background_failure(
+    task: TaskRecord,
+    team_access: TeamAccessContext,
+    note: str,
+) -> None:
+    task.status = TaskStatus.failed
+    task.codex_status = "failed"
+    task.notes = note
+    task = update_codex_structured_metadata(task)
+    get_task_store().save_task(task, access_token=team_access.access_token)
 
 
 def _resume_interrupted_codex_task(

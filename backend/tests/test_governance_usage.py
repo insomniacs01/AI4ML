@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from backend.app.models.governance import TeamMemberRecord, TeamProfileRecord
@@ -130,6 +131,84 @@ def test_list_quotas_enriches_members_connectors_team_and_unhandled_scopes() -> 
     assert request.calls[1]["path"] == "ai_connectors?select=id,display_name&team_id=eq.team-1"
 
 
+def test_list_quotas_uses_cache_until_quota_adjustment() -> None:
+    repository, request, member_lookup, _ = _repository(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                }
+            ],
+            [],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                    "status": "active",
+                    "warning_threshold": 0,
+                }
+            ],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 120,
+                    "token_used": 40,
+                    "status": "active",
+                    "warning_threshold": 0,
+                }
+            ],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 120,
+                    "token_used": 40,
+                }
+            ],
+            [],
+        ],
+        members=[_member("user-1", "Alice")],
+    )
+
+    first = repository.list_quotas("team-1", access_token="token")
+    second = repository.list_quotas("team-1", access_token="token")
+
+    assert first[0].token_quota == 100
+    assert second[0].token_quota == 100
+    assert [call["path"].split("?")[0] for call in request.calls] == [
+        "quota_accounts",
+        "ai_connectors",
+    ]
+    assert member_lookup.calls == [("team-1", "token")]
+
+    repository.adjust_quota("team-1", "user-1", 120, access_token="token")
+    refreshed = repository.list_quotas("team-1", access_token="token")
+
+    assert refreshed[0].token_quota == 120
+    assert [call["path"].split("?")[0] for call in request.calls] == [
+        "quota_accounts",
+        "ai_connectors",
+        "quota_accounts",
+        "quota_accounts",
+        "quota_accounts",
+        "ai_connectors",
+    ]
+
+
 def test_quota_record_projection_preserves_payload_identity_and_status_defaults() -> None:
     quota = quota_record_from_payload(
         "team-1",
@@ -246,6 +325,228 @@ def test_adjust_quota_reactivates_exhausted_quota_when_limit_increases() -> None
     assert quota.status == "active"
     assert quota.token_remaining == 100
     assert request.calls[1]["body"]["status"] == "active"
+
+
+def test_get_member_quota_reads_only_the_member_quota_row() -> None:
+    repository, request, member_lookup, _ = _repository(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                    "status": "active",
+                    "warning_threshold": 10,
+                    "updated_at": NOW,
+                }
+            ],
+        ],
+        members=[_member("user-1", "Alice")],
+    )
+
+    quota = repository.get_member_quota("team-1", "user-1", access_token="token")
+
+    assert quota.user_id == "user-1"
+    assert quota.token_remaining == 60
+    assert request.calls == [
+        {
+            "path": "quota_accounts?select=team_id,user_id,connector_id,scope_type,scope_key,token_quota,token_used,status,warning_threshold,updated_at&team_id=eq.team-1&user_id=eq.user-1&limit=1",
+            "access_token": "token",
+        }
+    ]
+    assert member_lookup.calls == []
+
+
+def test_get_member_quota_bypasses_cache_by_default() -> None:
+    repository, request, _, _ = _repository(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                }
+            ],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 120,
+                    "token_used": 40,
+                }
+            ],
+        ]
+    )
+
+    first = repository.get_member_quota("team-1", "user-1", access_token="token")
+    second = repository.get_member_quota("team-1", "user-1", access_token="token")
+
+    assert first.token_quota == 100
+    assert second.token_quota == 120
+    assert len(request.calls) == 2
+
+
+def test_get_member_quota_uses_cache_when_enabled() -> None:
+    repository, request, _, _ = _repository(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                }
+            ],
+        ]
+    )
+
+    first = repository.get_member_quota("team-1", "user-1", access_token="token", use_cache=True)
+    second = repository.get_member_quota("team-1", "user-1", access_token="token", use_cache=True)
+
+    assert first.token_remaining == 60
+    assert second.token_remaining == 60
+    assert len(request.calls) == 1
+
+
+def test_get_member_quota_reads_persisted_cache_across_repository_instances(tmp_path: Path) -> None:
+    request = RequestRecorder(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                }
+            ],
+        ]
+    )
+    first_repository = GovernanceUsageRepository(
+        request_json=request,
+        list_members=MemberLookup([]),
+        list_profiles=ProfileLookup([]),
+        member_quota_cache_dir=tmp_path,
+    )
+    first_repository.get_member_quota("team-1", "user-1", access_token="token-a", use_cache=True)
+
+    def fail_if_remote_requested(**kwargs: Any) -> Any:
+        raise AssertionError(f"persisted member quota cache should avoid remote request: {kwargs['path']}")
+
+    second_repository = GovernanceUsageRepository(
+        request_json=fail_if_remote_requested,
+        list_members=MemberLookup([]),
+        list_profiles=ProfileLookup([]),
+        member_quota_cache_dir=tmp_path,
+    )
+
+    quota = second_repository.get_member_quota("team-1", "user-1", access_token="token-b", use_cache=True)
+
+    assert quota.token_remaining == 60
+    assert len(request.calls) == 1
+
+
+def test_adjust_quota_deletes_persisted_member_quota_cache(tmp_path: Path) -> None:
+    request = RequestRecorder(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                }
+            ],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                }
+            ],
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 200,
+                    "token_used": 40,
+                    "status": "active",
+                }
+            ],
+        ]
+    )
+    repository = GovernanceUsageRepository(
+        request_json=request,
+        list_members=MemberLookup([_member("user-1", "Alice")]),
+        list_profiles=ProfileLookup([]),
+        member_quota_cache_dir=tmp_path,
+    )
+    repository.get_member_quota("team-1", "user-1", access_token="token", use_cache=True)
+    assert list(tmp_path.glob("*.json"))
+
+    repository.adjust_quota("team-1", "user-1", 200, access_token="token")
+
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_get_member_quota_reuses_quota_list_cache_when_enabled() -> None:
+    repository, request, member_lookup, _ = _repository(
+        [
+            [
+                {
+                    "team_id": "team-1",
+                    "user_id": "user-1",
+                    "scope_type": "member",
+                    "scope_key": "user-1",
+                    "token_quota": 100,
+                    "token_used": 40,
+                }
+            ],
+            [],
+        ],
+        members=[_member("user-1", "Alice")],
+    )
+
+    listed = repository.list_quotas("team-1", access_token="token")
+    quota = repository.get_member_quota("team-1", "user-1", access_token="token", use_cache=True)
+
+    assert listed[0].display_name == "Alice"
+    assert quota.display_name == "Alice"
+    assert quota.token_remaining == 60
+    assert [call["path"].split("?")[0] for call in request.calls] == ["quota_accounts", "ai_connectors"]
+    assert member_lookup.calls == [("team-1", "token")]
+
+
+def test_get_member_quota_returns_default_when_member_has_no_quota_row() -> None:
+    repository, _, member_lookup, _ = _repository([[]])
+
+    quota = repository.get_member_quota("team-1", "user-missing", access_token="token")
+
+    assert quota.user_id == "user-missing"
+    assert quota.scope_type == "member"
+    assert quota.scope_key == "user-missing"
+    assert quota.token_quota == 0
+    assert quota.token_used == 0
+    assert quota.status == "active"
+    assert member_lookup.calls == []
 
 
 def test_adjust_quota_scope_sets_connector_identity_on_insert() -> None:

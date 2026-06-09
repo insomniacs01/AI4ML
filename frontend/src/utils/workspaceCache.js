@@ -2,8 +2,18 @@ const CACHE_PREFIX = 'ai4ml-workspace-cache'
 const CACHE_VERSION = 1
 const MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000
 const RUNTIME_CACHE_FRESH_MS = 30 * 1000
+const TASK_DETAIL_ONLY_KEYS = [
+  'dataset_profile',
+  'analysis_token_usage',
+  'last_run',
+  'last_run_attempt',
+  'structured_requirements',
+  'stage_routing',
+  'interaction_policies',
+]
 
-export function workspaceCacheKey({ userId, teamId } = {}) {
+export function workspaceCacheKey(context = {}) {
+  const { userId, teamId } = context || {}
   if (!userId || !teamId) return ''
   return `${CACHE_PREFIX}:${userId}:${teamId}`
 }
@@ -15,7 +25,7 @@ export function readWorkspaceCache(context, now = Date.now()) {
     const parsed = JSON.parse(localStorage.getItem(key) || 'null')
     if (!parsed || parsed.version !== CACHE_VERSION) return null
     if (!Number.isFinite(parsed.cachedAt) || now - parsed.cachedAt > MAX_CACHE_AGE_MS) return null
-    return parsed
+    return compactWorkspaceSnapshot(parsed)
   } catch {
     return null
   }
@@ -29,10 +39,10 @@ export function writeWorkspaceCache(context, snapshot, now = Date.now()) {
     userId: context.userId,
     teamId: context.teamId,
     cachedAt: now,
-    tasks: Array.isArray(snapshot?.tasks) ? snapshot.tasks : [],
+    tasks: Array.isArray(snapshot?.tasks) ? snapshot.tasks.map(compactTaskRecord) : [],
     activeTaskId: snapshot?.activeTaskId || '',
-    task: snapshot?.task || null,
-    taskRun: snapshot?.taskRun || null,
+    task: compactTaskRecord(snapshot?.task),
+    taskRun: compactTaskRun(snapshot?.taskRun),
     steps: Array.isArray(snapshot?.steps) ? snapshot.steps : [],
   }
   try {
@@ -55,4 +65,33 @@ export function workspaceCacheAgeText(cachedAt, now = Date.now()) {
 
 export function isWorkspaceRuntimeCacheFresh(cachedAt, now = Date.now()) {
   return Number.isFinite(cachedAt) && now - cachedAt <= RUNTIME_CACHE_FRESH_MS
+}
+
+function compactWorkspaceSnapshot(snapshot) {
+  return {
+    ...snapshot,
+    tasks: Array.isArray(snapshot.tasks) ? snapshot.tasks.map(compactTaskRecord) : [],
+    task: compactTaskRecord(snapshot.task),
+    taskRun: compactTaskRun(snapshot.taskRun),
+    steps: Array.isArray(snapshot.steps) ? snapshot.steps : [],
+  }
+}
+
+function compactTaskRecord(task) {
+  if (!task || typeof task !== 'object') return null
+  const compact = { ...task }
+  TASK_DETAIL_ONLY_KEYS.forEach((key) => {
+    delete compact[key]
+  })
+  return compact
+}
+
+function compactTaskRun(taskRun) {
+  if (!taskRun || typeof taskRun !== 'object') return null
+  const compact = { ...taskRun }
+  if (compact.codex && typeof compact.codex === 'object') {
+    compact.codex = { ...compact.codex }
+    delete compact.codex.token_usage
+  }
+  return compact
 }
