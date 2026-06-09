@@ -386,6 +386,49 @@ describe('api client compatibility helpers', () => {
     )
   })
 
+  it('deduplicates concurrent runtime-only task list reads', async () => {
+    localStorage.setItem('ai4ml-active-team-id', 'team-1')
+    const taskResponse = deferred()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const text = String(url)
+      if (text.endsWith('/api/teams/team-1/tasks?runtime_only=true')) return taskResponse.promise
+      throw new Error(`unexpected fetch: ${text}`)
+    })
+
+    const first = getWorkspaceTasks()
+    const second = getWorkspaceTasks()
+    await nextTick()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    taskResponse.resolve(response({
+      items: [baseTask({ id: 'task-running', created_by: 'user-1', status: 'running' })],
+    }))
+
+    await expect(first).resolves.toHaveLength(1)
+    await expect(second).resolves.toHaveLength(1)
+  })
+
+  it('reuses the short runtime-only task list cache', async () => {
+    localStorage.setItem('ai4ml-active-team-id', 'team-1')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const text = String(url)
+      if (text.endsWith('/api/teams/team-1/tasks?runtime_only=true')) {
+        return jsonResponse({
+          items: [baseTask({ id: 'task-running', created_by: 'user-1', status: 'running' })],
+        })
+      }
+      throw new Error(`unexpected fetch: ${text}`)
+    })
+
+    const first = await getWorkspaceTasks()
+    const second = await getWorkspaceTasks()
+
+    expect(first.map((item) => item.task_id)).toEqual(['task-running'])
+    expect(second.map((item) => item.task_id)).toEqual(['task-running'])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('reuses a fresh task list cache across callers', async () => {
     localStorage.setItem('ai4ml-active-team-id', 'team-1')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {

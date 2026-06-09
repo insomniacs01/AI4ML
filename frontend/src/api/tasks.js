@@ -15,6 +15,9 @@ import { clearTaskListCache, isTaskListCacheFresh, readTaskListCache, writeTaskL
 
 let pendingDatasetFile = null
 let pendingDatasetMeta = null
+const RUNTIME_TASK_CACHE_PREFIX = 'ai4ml-runtime-task-list-cache-v1'
+const RUNTIME_TASK_CACHE_TTL_MS = 3000
+const pendingTaskListRequests = new Map()
 
 function taskListCacheContext() {
   const userId = getCachedUser()?.id
@@ -24,6 +27,47 @@ function taskListCacheContext() {
 
 function invalidateTaskListCache() {
   clearTaskListCache(taskListCacheContext())
+  clearRuntimeTaskListCache(taskListCacheContext())
+}
+
+function taskListContextKey(context = taskListCacheContext()) {
+  return context ? `${context.userId}:${context.teamId}` : ''
+}
+
+function runtimeTaskCacheKey(context = taskListCacheContext()) {
+  const key = taskListContextKey(context)
+  return key ? `${RUNTIME_TASK_CACHE_PREFIX}:${key}` : ''
+}
+
+function readRuntimeTaskListCache(context = taskListCacheContext()) {
+  const key = runtimeTaskCacheKey(context)
+  if (!key || typeof localStorage === 'undefined') return null
+  try {
+    const cached = JSON.parse(localStorage.getItem(key) || 'null')
+    if (!cached || Date.now() - Number(cached.cachedAt || 0) >= RUNTIME_TASK_CACHE_TTL_MS) return null
+    return Array.isArray(cached.tasks) ? cached.tasks : null
+  } catch {
+    return null
+  }
+}
+
+function writeRuntimeTaskListCache(context, tasks) {
+  const key = runtimeTaskCacheKey(context)
+  if (!key || typeof localStorage === 'undefined') return
+  localStorage.setItem(key, JSON.stringify({
+    cachedAt: Date.now(),
+    tasks: Array.isArray(tasks) ? tasks : [],
+  }))
+}
+
+function clearRuntimeTaskListCache(context = taskListCacheContext()) {
+  const key = runtimeTaskCacheKey(context)
+  if (!key || typeof localStorage === 'undefined') return
+  localStorage.removeItem(key)
+}
+
+function pendingTaskListKey(context, query) {
+  return `${taskListContextKey(context) || 'anonymous'}:${query || 'all'}`
 }
 
 function firstCsvFile(formData) {
@@ -113,18 +157,33 @@ function displayTaskName(task) {
 }
 
 export async function getTasks(options = {}) {
+  const context = taskListCacheContext()
+  if (options.runtimeOnly && !options.forceRefresh) {
+    const cached = readRuntimeTaskListCache(context)
+    if (cached) return { items: cached }
+  }
   if (!options.runtimeOnly && !options.forceRefresh) {
-    const cached = readTaskListCache(taskListCacheContext())
+    const cached = readTaskListCache(context)
     if (cached && isTaskListCacheFresh(cached.cachedAt)) return { items: cached.tasks || [] }
   }
   const params = new URLSearchParams()
   if (options.runtimeOnly) params.set('runtime_only', 'true')
   if (!options.runtimeOnly && options.compact !== false) params.set('compact', 'true')
   const query = params.toString()
-  const data = await request(`/tasks${query ? `?${query}` : ''}`)
-  const items = (data.items || []).map(mapTask)
-  if (!options.runtimeOnly) writeTaskListCache(taskListCacheContext(), items)
-  return { items }
+  const requestKey = pendingTaskListKey(context, query)
+  if (pendingTaskListRequests.has(requestKey)) return pendingTaskListRequests.get(requestKey)
+  const taskListRequest = request(`/tasks${query ? `?${query}` : ''}`)
+    .then((data) => {
+      const items = (data.items || []).map(mapTask)
+      if (options.runtimeOnly) writeRuntimeTaskListCache(context, items)
+      else writeTaskListCache(context, items)
+      return { items }
+    })
+    .finally(() => {
+      pendingTaskListRequests.delete(requestKey)
+    })
+  pendingTaskListRequests.set(requestKey, taskListRequest)
+  return taskListRequest
 }
 
 export async function getMyTasks(options = {}) {

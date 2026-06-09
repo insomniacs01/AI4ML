@@ -95,6 +95,7 @@ const loadedSections = ref({ overview: false, report: false, demo: false, code: 
 const activeTaskId = ref('')
 let snapshotRefreshTimer = null
 let peerTaskLoadVersion = 0
+let runtimeTaskLoadVersion = 0
 const runtimeActiveStatuses = new Set(['running'])
 const startableStatuses = new Set(['uploaded', 'planning'])
 const reportFetchStatuses = new Set(['completed', 'failed', 'published'])
@@ -250,13 +251,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [runtimeTasks, detail] = await Promise.all([
-      optionalLoad(() => getWorkspaceTasks(), []),
-      getTaskRuntimeSnapshot(props.taskId, { sync: false, taskDetail: 'summary' }),
-    ])
-    const currentActiveTask = pickBlockingRuntimeTask(runtimeTasks)
-    activeTaskId.value = taskIdOf(currentActiveTask)
-    if (!peerTasks.value.length && Array.isArray(runtimeTasks)) peerTasks.value = runtimeTasks
+    const detail = await getTaskRuntimeSnapshot(props.taskId, { sync: false, taskDetail: 'summary' })
     task.value = detail.task || detail
     taskRun.value = detail.task_run || null
     reconcileActiveTaskAfterSnapshot()
@@ -274,6 +269,7 @@ async function load() {
     if (shouldConnectRealtime.value) connectStream()
     else closeStream()
     scheduleSnapshotRefresh()
+    loadRuntimeTasksInBackground()
     loadPeerTasksInBackground()
   } catch (err) {
     error.value = err.message
@@ -294,6 +290,20 @@ async function refreshRuntimeSnapshot(options = {}) {
   if (detail.task_run?.metrics) metrics.value = { values: detail.task_run.metrics }
   if (shouldConnectRealtime.value) connectStream()
   else closeStream()
+}
+
+async function loadRuntimeTasksInBackground() {
+  const version = ++runtimeTaskLoadVersion
+  try {
+    const runtimeTasks = await optionalLoad(() => getWorkspaceTasks(), [])
+    if (version !== runtimeTaskLoadVersion) return
+    const currentActiveTask = pickBlockingRuntimeTask(runtimeTasks)
+    activeTaskId.value = taskIdOf(currentActiveTask)
+    if (!peerTasks.value.length && Array.isArray(runtimeTasks)) peerTasks.value = runtimeTasks
+    reconcileActiveTaskAfterSnapshot()
+  } catch {
+    // Runtime task context only controls read-only hints; the detail payload is already available.
+  }
 }
 
 async function loadPeerTasksInBackground() {
