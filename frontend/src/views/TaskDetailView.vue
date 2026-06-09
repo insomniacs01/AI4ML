@@ -247,11 +247,14 @@ async function refreshPlanText({ overwrite = false, sync = false } = {}) {
   return planText.value
 }
 
-async function load() {
+async function load(options = {}) {
   loading.value = true
   error.value = ''
   try {
-    const detail = await getTaskRuntimeSnapshot(props.taskId, { sync: false, taskDetail: 'summary' })
+    const detail = await getTaskRuntimeSnapshot(props.taskId, {
+      sync: options.sync === true,
+      taskDetail: 'summary',
+    })
     task.value = detail.task || detail
     taskRun.value = detail.task_run || null
     reconcileActiveTaskAfterSnapshot()
@@ -276,6 +279,10 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function refreshTaskDetail() {
+  load({ sync: !isFinished.value })
 }
 
 async function refreshRuntimeSnapshot(options = {}) {
@@ -620,7 +627,7 @@ onUnmounted(() => {
 <template>
   <PageHeader :title="displayTaskTitle(task, '任务详情')" :description="taskId">
     <template #actions>
-      <button class="secondary-action refresh-action" type="button" :disabled="loading" @click="load">
+      <button class="secondary-action refresh-action" type="button" :disabled="loading" @click="refreshTaskDetail">
         <RefreshCw :class="{ spinning: loading }" :size="18" />刷新
       </button>
       <button class="primary-action" type="button" @click="router.push('/tasks')">返回</button>
