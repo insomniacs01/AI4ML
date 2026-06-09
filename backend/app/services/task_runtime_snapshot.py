@@ -58,7 +58,11 @@ def build_task_runtime_snapshot_response(
         progress_response = None
         codex_overview = {}
         codex_artifacts = {}
-        if sync_runtime:
+        if task.status == TaskStatus.completed:
+            codex_artifacts = _safe_read_known_codex_summary_artifacts(task, settings)
+            if codex_artifacts:
+                codex_overview = build_codex_overview_from_artifacts(codex_artifacts)
+        elif sync_runtime:
             try:
                 task, progress_response, codex_overview, codex_artifacts = sync_codex_runtime_snapshot(
                     task_store,
@@ -76,10 +80,6 @@ def build_task_runtime_snapshot_response(
             progress_response = _safe_build_codex_run_progress(task, settings) or progress_response
             if not codex_artifacts:
                 codex_artifacts = _safe_read_codex_artifacts(task, settings)
-        elif task.status == TaskStatus.completed:
-            codex_artifacts = _safe_read_known_codex_summary_artifacts(task, settings)
-            if codex_artifacts:
-                codex_overview = build_codex_overview_from_artifacts(codex_artifacts)
     else:
         progress_response = None
         codex_overview = {}
@@ -91,7 +91,11 @@ def build_task_runtime_snapshot_response(
     progress = progress_from_steps(task, steps)
     if should_sync_codex and task.status == TaskStatus.completed and not codex_overview:
         codex_overview = _completed_task_fallback_overview(task)
-    plan_text = _safe_codex_plan_text(task, settings) if should_sync_codex and sync_runtime else ""
+    plan_text = (
+        _safe_codex_plan_text(task, settings)
+        if should_sync_codex and sync_runtime and task.status != TaskStatus.completed
+        else ""
+    )
     task_run = build_task_run_payload(
         task,
         steps,

@@ -266,3 +266,29 @@ def test_get_task_sync_reads_authoritative_task_before_codex_sync(
     assert result is task
     assert store.get_kwargs["prefer_cache"] is False
     assert store.get_kwargs["allow_stale_cache"] is False
+
+
+def test_get_completed_task_sync_skips_codex_artifact_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task = _task()
+    task.status = TaskStatus.completed
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+
+    def fail_if_synced(*args: object, **kwargs: object) -> None:
+        raise AssertionError("completed task detail route must not repeat Codex artifact sync")
+
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+    monkeypatch.setattr(task_lifecycle, "sync_codex_task_state", fail_if_synced)
+
+    result = task_lifecycle.get_task(
+        task.id,
+        sync=True,
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+
+    assert result is task
+    assert result.status == TaskStatus.completed
+    assert store.get_kwargs["prefer_cache"] is False
+    assert store.get_kwargs["allow_stale_cache"] is False

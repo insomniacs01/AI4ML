@@ -433,6 +433,68 @@ def test_completed_runtime_snapshot_sync_false_reads_known_codex_summary_artifac
     assert response.task_run["codex"]["token_usage"] == {"total": {"total_tokens": 123}}
 
 
+def test_completed_runtime_snapshot_sync_true_uses_lightweight_summary_artifacts(tmp_path, monkeypatch) -> None:
+    task = _task()
+    task.status = TaskStatus.completed
+    task.executor_type = "codex"
+    workspace = tmp_path / "ai4ml-task-runtime-snapshot"
+    output_dir = workspace / "output"
+    output_dir.mkdir(parents=True)
+    (workspace / "input").mkdir()
+    (workspace / "input" / "task_request.json").write_text(
+        json.dumps({"authoritative_inputs": {"task_id": task.id}}),
+        encoding="utf-8",
+    )
+    (output_dir / "metrics.json").write_text(
+        json.dumps({"selected_model": {"name": "RandomForest", "validation_rmse": 0.3679}}),
+        encoding="utf-8",
+    )
+    (output_dir / "overview.json").write_text(
+        json.dumps({"task_summary": {"conclusion": "完成态轻量读取。"}}),
+        encoding="utf-8",
+    )
+    (output_dir / "token_usage.json").write_text(
+        json.dumps({"total": {"total_tokens": 638727}}),
+        encoding="utf-8",
+    )
+    task.codex_workspace_path = str(workspace)
+
+    class Store:
+        def get_task(self, team_id, task_id, **kwargs):
+            assert kwargs["prefer_cache"] is False
+            assert kwargs["allow_stale_cache"] is False
+            assert team_id == "team-1"
+            assert task_id == task.id
+            return task
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("completed sync=true snapshot must not call full live Codex sync")
+
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.get_task_store", lambda: Store())
+    monkeypatch.setattr(
+        "backend.app.services.task_runtime_snapshot.get_settings",
+        lambda: SimpleNamespace(codex_workspace_root=tmp_path),
+    )
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.is_codex_task", lambda task_arg, settings: True)
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.sync_codex_runtime_snapshot", fail_if_called)
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.safe_reconcile_codex_runtime_activity", fail_if_called)
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.build_codex_run_progress", fail_if_called)
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.read_codex_artifacts", fail_if_called)
+    monkeypatch.setattr("backend.app.services.task_runtime_snapshot.codex_plan_text", fail_if_called)
+    team_access = SimpleNamespace(
+        team_id="team-1",
+        access_token="token",
+        user=SimpleNamespace(id="user-1"),
+    )
+
+    response = build_task_runtime_snapshot_response(task.id, team_access, sync_runtime=True)
+
+    assert response.task.status == TaskStatus.completed
+    assert response.task_run["progress_percent"] == 100
+    assert response.task_run["overview"]["task_summary"]["conclusion"] == "完成态轻量读取。"
+    assert response.task_run["codex"]["token_usage"] == {"total": {"total_tokens": 638727}}
+
+
 def test_completed_runtime_snapshot_sync_false_derives_overview_from_last_run_when_workspace_missing(
     monkeypatch,
 ) -> None:

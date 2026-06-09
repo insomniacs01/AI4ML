@@ -160,7 +160,7 @@ def get_task(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     task.executor_type = "codex"
-    if not sync:
+    if not sync or task.status == TaskStatus.completed:
         return task
     task, _artifacts = sync_codex_task_state(
         task,
