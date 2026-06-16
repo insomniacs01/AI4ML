@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.app.models.task import RunAttempt, TaskRecord, TaskStatus, TokenUsageReport
-from backend.app.services.codex_artifact_state import has_completed_codex_artifacts
+from backend.app.services.codex_artifact_state import (
+    has_completed_codex_artifacts,
+    has_failed_codex_acceptance,
+    has_stop_and_report_codex_artifacts,
+)
 from backend.app.services.codex_common import (
     CODEX_ACTIVE_STATUSES,
     CODEX_FAILED_STATUSES,
@@ -78,23 +82,38 @@ def _apply_codex_sync_status(
 ) -> None:
     if context.status in CODEX_WAITING_STATUSES:
         _apply_waiting_codex_status(task, context.status)
-    elif context.status in CODEX_ACTIVE_STATUSES:
-        _apply_active_codex_status(task, artifacts, context, now)
-    elif context.status == "completed":
-        _complete_codex_task(task, artifacts, context, now, activity_status=context.status)
     elif context.status == "interrupted":
         _apply_interrupted_codex_status(task, artifacts, context)
     elif context.status in CODEX_FAILED_STATUSES:
         _apply_failed_codex_status(task, artifacts, context, now)
+    elif has_stop_and_report_codex_artifacts(artifacts):
+        _complete_codex_task(task, artifacts, context, now, activity_status=context.status)
+    elif context.status in CODEX_ACTIVE_STATUSES:
+        _apply_active_codex_status(task, artifacts, context, now)
+    elif has_failed_codex_acceptance(artifacts):
+        _apply_unmet_acceptance_status(task, context)
+    elif context.status == "completed":
+        _complete_codex_task(task, artifacts, context, now, activity_status=context.status)
 
 
 def _apply_waiting_codex_status(task: TaskRecord, status_value: str) -> None:
     _set_human_loop_previous_status(task, previous_status=TaskStatus.running)
     task.status = TaskStatus.paused_for_review
     if status_value == "waiting_improvement_review":
-        task.notes = "Codex 已生成改进决策方案，等待用户选择继续改进或停止并生成报告。"
+        task.notes = "Codex 已生成改进决策方案，等待用户选择继续改进或按当前结果生成报告。"
     else:
         task.notes = "Codex 已生成建模计划，等待人工确认后继续执行。"
+
+
+def _apply_unmet_acceptance_status(task: TaskRecord, context: _CodexSyncContext) -> None:
+    _set_human_loop_previous_status(task, previous_status=TaskStatus.running)
+    task.status = TaskStatus.paused_for_review
+    task.codex_status = "waiting_improvement_review"
+    task.codex_finished_at = None
+    task.last_run = None
+    if context.workspace_path:
+        task.last_run_attempt = RunAttempt(output_dir=context.workspace_path, token_usage=context.token_usage)
+    task.notes = "当前结果未达到成功标准，等待用户确认继续改进或按当前结果生成报告。"
 
 
 def _apply_active_codex_status(
@@ -149,6 +168,7 @@ def _apply_failed_codex_status(
 ) -> None:
     activity = codex_activity_text(task, context.progress, context.status, artifacts)
     task.status = TaskStatus.failed
+    task.codex_status = "failed"
     task.codex_finished_at = task.codex_finished_at or now
     if context.workspace_path:
         task.last_run_attempt = RunAttempt(

@@ -38,6 +38,40 @@ def test_completed_status_or_artifacts_returns_completed_percent() -> None:
     )
 
 
+def test_failed_acceptance_never_returns_completed_percent() -> None:
+    artifacts = {
+        "report": {"exists": True},
+        "predict": {"exists": True},
+        "metrics": {"acceptance": {"passed": False}},
+    }
+
+    assert codex_progress_percent(_task(), {"percent": 100}, "completed", artifacts) == ProgressPercentResult(
+        99,
+        "progress_json_percent",
+        None,
+    )
+    assert codex_progress_percent(_task(), {}, "completed", artifacts) == ProgressPercentResult(
+        None,
+        None,
+        "workspace_not_ready",
+    )
+
+
+def test_stop_and_report_partial_result_returns_completed_percent() -> None:
+    artifacts = {
+        "progress": {"status": "partial", "current_step": "stop_and_report_completed"},
+        "report": {"exists": True},
+        "predict": {"exists": True},
+        "metrics": {"acceptance": {"passed": False}},
+    }
+
+    assert codex_progress_percent(_task(), {}, "partial", artifacts) == ProgressPercentResult(
+        100,
+        "completed",
+        None,
+    )
+
+
 def test_not_started_task_statuses_return_zero_without_reading_progress() -> None:
     for status in (TaskStatus.draft, TaskStatus.uploaded, TaskStatus.planning):
         assert codex_progress_percent(_task(status), {"percent": 80}, "running", {}) == ProgressPercentResult(

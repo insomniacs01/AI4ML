@@ -62,7 +62,8 @@ The initial `project_rules.md` must define these rules:
 - The selected data path may be any file or directory. Do not assume CSV. For a directory, inventory the contained files, identify likely datasets, metadata, documentation, and existing outputs. For a file, choose the reader based on extension, file signature, content sampling, and available libraries.
 - The task target may be a single column, multiple columns, multiple indicators, derived targets, non-column objectives, ranking targets, clustering groups, missing-value completion, forecasting ranges, report-only analysis goals, or a mixed workflow. Do not assume there is exactly one `target column`.
 - The plan must be a concise user-confirmation contract, not a long technical report, tutorial, broad methodology document, or list of questions. It should let the user quickly decide whether the proposed execution boundary is correct.
-- If the user did not fully specify target definition, task type, metric, prediction range, or business objective, Codex must infer reasonable defaults from the data and task description, clearly label them as "默认假设", and build the plan around those defaults.
+- If the user did not fully specify target definition, task type, primary metric, success threshold, maximum improvement rounds, first-round candidate models, prediction range, or business objective, Codex must infer reasonable defaults from the data and task description, clearly label them as "默认假设", and build the plan around those defaults.
+- A modeling task must have a confirmed success criterion before training starts. If the user did not provide a success threshold, Codex must recommend one in `output/plan.md` and `output/run_strategy.json.acceptance` for human confirmation. Do not use baseline comparison as the success criterion.
 - For ambiguous multi-indicator or multi-file tasks, Codex must select a defensible default modeling target, analysis target, or target set from the data, explain why it was chosen in one short bullet, and include at most three concise alternatives in "需要确认或可调整". Do not stop only because multiple choices exist.
 - `output/plan.md` must use exactly these top-level sections, in this order:
   1. `# 执行计划`
@@ -86,7 +87,8 @@ The initial `project_rules.md` must define these rules:
   - any necessary default assumptions.
 - The `执行策略` section must state:
   - the execution strategy selected for this task;
-  - planned candidate model or method count;
+  - the first-round candidate model or method count;
+  - the first-round candidate models or methods that will run after approval;
   - whether subagents are needed;
   - whether hyperparameter search is needed;
   - expected report depth.
@@ -124,7 +126,9 @@ The initial `project_rules.md` must define these rules:
     "primary_metric": "metric or success criterion",
     "threshold": 0.0,
     "higher_is_better": true,
-    "fallback_rule": "concise Chinese rule when no numeric threshold is appropriate"
+    "threshold_source": "user_input | ai_recommended | not_applicable",
+    "success_rule": "concise Chinese rule for deciding whether the confirmed expectation is reached",
+    "baseline_role": "diagnostic_only"
   },
   "stop_rules": [
     "concise Chinese stop rule"
@@ -138,8 +142,9 @@ The initial `project_rules.md` must define these rules:
 ```
 
 - For fields that are not applicable, keep the JSON key and use `null`, `[]`, or a concise explanatory string. Do not add extra top-level keys unless the task truly requires them.
-- For `light_tabular`, the default `execution_limits` should normally be: `candidate_model_count <= 2`, `allow_subagents: false`, `hyperparameter_search: "none"` or `"small"`, `report_depth: "brief"`, and `max_auto_improvement_rounds <= 1`.
-- For `standard_tabular`, the default `execution_limits` should normally be: `candidate_model_count <= 5`, subagents only if justified, `hyperparameter_search: "small"` or `"bounded"`, `report_depth: "standard"`, and `max_auto_improvement_rounds <= 2`.
+- `planned_models_or_methods` is the confirmed first-round model or method set. Do not run additional unconfirmed models in the first round. If no user-selected models were supplied, recommend a defensible first-round set from the data and task type, put it in the plan, and wait for approval.
+- For `light_tabular`, the default `execution_limits` should normally be: `candidate_model_count <= 2`, `allow_subagents: false`, `hyperparameter_search: "none"` or `"small"`, `report_depth: "brief"`, and `max_auto_improvement_rounds <= 5` only when a success threshold exists and bounded improvements are useful.
+- For `standard_tabular`, the default `execution_limits` should normally be: `candidate_model_count <= 5`, subagents only if justified, `hyperparameter_search: "small"` or `"bounded"`, `report_depth: "standard"`, and `max_auto_improvement_rounds <= 5`.
 - For `deep_tabular`, the plan must briefly justify why a deeper strategy is needed; do not choose it just because it might improve results.
 - `advisor_after_failed_rounds` controls when Codex may request an independent read-only advisor after repeated ineffective improvements. For `light_tabular`, use `2` or `null` and do not request an advisor unless the task has already failed to improve within the one allowed automatic round and the user confirms further work.
 - The `执行步骤` section must contain 5 numbered steps for simple and standard tasks:
@@ -154,11 +159,13 @@ The initial `project_rules.md` must define these rules:
   - `特征工程或任务专用处理`
 - The `验收与改进规则` section must define:
   - primary metric or success criterion;
-  - acceptance threshold or a clear rule for deciding whether the result is usable;
+  - acceptance threshold or a clear rule for deciding whether the confirmed expectation is reached;
   - the maximum number of automatic improvement rounds;
   - the minimum meaningful metric improvement when applicable;
   - the stop rule when the result remains unsatisfactory.
+- The acceptance threshold must come from explicit user input or an AI recommendation that is visible in the plan and confirmed by the user. Baseline comparison may be reported as a diagnostic check, but it must not decide success or completion.
 - The stop rule must say that when the automatic improvement limit is reached, Codex writes `output/improvement_plan.md`, sets `output/progress.json` to `waiting_improvement_review`, and waits for the user to choose `继续改进` or `停止并生成报告`.
+- If five confirmed improvement rounds or the configured `max_auto_improvement_rounds` are exhausted without reaching the success threshold, Codex must request a new plan decision. The improvement plan may recommend lowering the success threshold, adding untried models, changing features, or stopping, but Codex must not lower the threshold or expand the model set without human confirmation.
 - The `预期产物` section must list only the concrete files expected for this task, usually `output/run_strategy.json`, `output/metrics.json`, `output/overview.json`, `output/report.md`, `output/predict.py` when a real prediction entrypoint is appropriate, and `output/code/final_modeling.py` or an equivalent core script.
 - The `需要用户确认` section must explicitly say that Codex will wait for approval before training, model comparison, final report generation, prediction entrypoint creation, or other execution work.
 - After generating the complete default plan and `output/run_strategy.json`, Codex must set `output/progress.json` to `waiting_plan_approval` and stop.
@@ -169,6 +176,7 @@ The initial `project_rules.md` must define these rules:
 - The parent Codex must record which subagents were used, what each tried, and which result was selected in `output/report.md` or `output/logs/subagents/summary.md`.
 - After the user approves execution, Codex must include a result-quality feedback loop: establish a baseline, evaluate the first modeling result on an appropriate validation split, diagnose weak performance or suspicious results, then make bounded fixes or optimization attempts before finalizing.
 - If performance is not satisfactory, Codex must inspect likely causes such as data leakage, target definition, missing values, feature quality, class imbalance, time split mistakes, insufficient samples, inappropriate metric choice, or model underfitting/overfitting. Codex must then revise features, validation, preprocessing, model choice, or task framing when justified.
+- In the first execution round, run only the confirmed `planned_models_or_methods`. If none of the first-round models reaches the confirmed success threshold, diagnose the failure before improving. Running additional models that were not in the confirmed first-round set requires `output/improvement_plan.md` and human confirmation unless those models were explicitly included in the confirmed improvement plan.
 - Codex must not endlessly optimize. It must stop after `max_auto_improvement_rounds` or after repeated changes fail to reach `min_meaningful_metric_improvement`.
 - When stopping because further improvement needs human confirmation, Codex must write `output/improvement_plan.md`, set `output/progress.json` to `waiting_improvement_review`, and wait. Do not keep training while waiting.
 - If repeated changes fail and `advisor_after_failed_rounds` is reached, Codex may request one independent read-only advisor diagnosis before writing the improvement decision plan. The advisor input must be `output/advisor_request.json`, and the advisor output must be `output/advisor_diagnosis.json`. The advisor cannot directly modify final artifacts or expand the confirmed strategy.
@@ -265,6 +273,7 @@ The initial `project_rules.md` must define these rules:
 - `confidence.score` must be a calibrated 0-1 assessment derived from real evidence, not a transformed metric by itself. Consider validation/test performance, improvement over baseline, stability across splits or groups, data quality, sample size, leakage risk, target ambiguity, and artifact validation. If the evidence is insufficient, use `level: "unknown"` and `score: null`.
 - `key_factors` must contain true model-derived feature importance whenever the final model supports it. If model-derived feature importance is unavailable, use diagnostic/error-analysis factors only if they are clearly labeled with `is_model_feature_importance: false` and `source: "error_analysis"` or `source: "diagnostics"`.
 - `result_checks` must include checks for baseline comparison, validation/test split, leakage risk where relevant, artifact consistency, and prediction entrypoint availability when a prediction entrypoint is expected.
+- `result_checks` must include a `success_threshold` or equivalent acceptance check. `metrics.acceptance.passed` must reflect the confirmed success threshold or success rule, not baseline comparison.
 - `optimization_records` must summarize real bounded optimization attempts and metric changes. If no optimization was needed or attempted, return an empty array and explain that in a `result_checks` item.
 - The `state/artifact_index.json` file must include `output/overview.json` as a core artifact when it exists.
 - Final `output/report.md` must match `output/run_strategy.json.execution_limits.report_depth`.
@@ -273,6 +282,7 @@ The initial `project_rules.md` must define these rules:
 - For `report_depth: "detailed"`, write a deeper report that adds richer diagnostics, error analysis, optimization records, stability or leakage checks where relevant, and more detailed artifact usage boundaries.
 - The report's artifact guide must explain only the real artifacts generated in this run. Do not list nonexistent prediction CSVs, model files, subagent logs, or feature-importance files.
 - Before finalizing, Codex must review `output/report.md` against the confirmed `report_depth`, real artifacts, real metrics, and truthfulness requirements. If it is too shallow or unnecessarily long for the selected strategy, revise it before marking the task completed.
+- Codex may mark the task completed only when `metrics.acceptance.passed` is true, or when the task is explicitly analysis-only with no success threshold and the confirmed plan says a descriptive report is the final deliverable. For modeling tasks that do not reach the confirmed success threshold, Codex must either continue within the confirmed improvement budget or write `output/improvement_plan.md` and set `output/progress.json` to `waiting_improvement_review`.
 - `output/predict.py` may exist only when a real reusable prediction entrypoint is available.
 - Only write a blocker and wait for user input when the selected path cannot be read, contains no usable files or usable structured/unstructured content, contains no usable modeling or analysis target after inspection, or the user's explicit instruction conflicts with the data. Missing single target column, metric, or business objective alone is not a blocker; infer defaults and produce a complete plan for review.
 

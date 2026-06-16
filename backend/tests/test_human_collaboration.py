@@ -770,6 +770,55 @@ class TaskHumanCollaborationServiceTests(TestCase):
         self.assertEqual(snapshot.task.id, task.id)
         self.assertEqual(snapshot.open_request_count, 0)
 
+    def test_human_collaboration_sync_creates_codex_plan_request_from_waiting_progress(self) -> None:
+        task = _build_task(status=TaskStatus.running)
+        task.executor_type = "codex"
+        task.codex_workspace_path = "D:/workspaces/ai4ml-task-1"
+        self.store.task = task.model_copy(deep=True)
+        team_access = TeamAccessContext(
+            team_id=task.team_id,
+            role="admin",
+            user=SupabaseUser(id="user-1", email=None, raw={}),
+            access_token=self.access_token,
+        )
+
+        def sync_waiting_plan(task_arg, settings, **kwargs):
+            synced = task_arg.model_copy(deep=True)
+            synced.status = TaskStatus.paused_for_review
+            synced.codex_status = "waiting_plan_approval"
+            self.store.save_task(synced, access_token=self.access_token)
+            return synced, {"progress": {"status": "waiting_plan_approval"}}
+
+        with patch("backend.app.api.routes.task_human.get_task_store", return_value=self.store), patch(
+            "backend.app.api.routes.task_human.get_task_human_collaboration_service",
+            return_value=self.service,
+        ), patch(
+            "backend.app.api.routes.task_human.sync_codex_task_state",
+            side_effect=sync_waiting_plan,
+        ), patch(
+            "backend.app.services.task_codex_human_requests.get_task_store",
+            return_value=self.store,
+        ), patch(
+            "backend.app.services.task_codex_human_requests.codex_plan_text",
+            return_value="Generated plan.",
+        ), patch(
+            "backend.app.services.task_workflow_tracking.get_task_human_collaboration_service",
+            return_value=self.service,
+        ), patch(
+            "backend.app.api.routes.task_human._build_runtime_context",
+            return_value=object(),
+        ), patch(
+            "backend.app.api.routes.task_human._build_stage_selection_map",
+            return_value={},
+        ):
+            snapshot = get_task_human_collaboration(task.id, sync=True, team_access=team_access)
+
+        self.assertEqual(snapshot.open_request_count, 1)
+        self.assertEqual(snapshot.my_open_request_count, 1)
+        self.assertEqual(snapshot.requests[0].status, HumanInteractionRequestStatus.open)
+        self.assertEqual(snapshot.requests[0].payload["request_type"], "codex_plan_approval")
+        self.assertEqual(snapshot.requests[0].payload["plan_text"], "Generated plan.")
+
     def test_decision_history_is_exposed_and_resume_restores_previous_status(self) -> None:
         task = _build_task()
         created = self.service.create_request(
@@ -1279,3 +1328,61 @@ class TaskHumanCollaborationServiceTests(TestCase):
         self.assertEqual(snapshot.task.status, TaskStatus.paused_for_review)
         self.assertEqual(len(requests), 2)
         self.assertEqual(requests[0].stage, WorkflowStage.data_analysis)
+
+    def test_decision_endpoint_does_not_advance_checkpoint_after_codex_improvement_review(self) -> None:
+        task = _build_task(status=TaskStatus.paused_for_review)
+        task.executor_type = "codex"
+        task.codex_status = "waiting_improvement_review"
+        task.codex_workspace_path = "D:/workspaces/ai4ml-task-1"
+        self.store.task = task.model_copy(deep=True)
+        team_access = TeamAccessContext(
+            team_id=task.team_id,
+            role="admin",
+            user=SupabaseUser(id="user-1", email=None, raw={}),
+            access_token=self.access_token,
+        )
+        request = self.store.create_human_request(
+            team_id=task.team_id,
+            task_id=task.id,
+            stage=WorkflowStage.training_validation,
+            requested_by="user-1",
+            assigned_to="user-1",
+            access_token=self.access_token,
+            payload={
+                "request_type": "codex_improvement_review",
+                "title": "确认是否继续改进",
+            },
+        )
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("Codex improvement decisions must not create generic checkpoints.")
+
+        with patch("backend.app.api.routes.task_human.get_task_store", return_value=self.store), patch(
+            "backend.app.api.routes.task_human.get_task_human_collaboration_service",
+            return_value=self.service,
+        ), patch(
+            "backend.app.api.routes.task_human.load_team_members_for_human",
+            return_value=[],
+        ), patch(
+            "backend.app.api.routes.task_human.apply_interaction_policies",
+            side_effect=fail_if_called,
+        ), patch(
+            "backend.app.api.routes.task_human._sync_task_human_collaboration",
+            side_effect=fail_if_called,
+        ):
+            snapshot = decide_task_human_request(
+                task.id,
+                request.id,
+                TaskHumanRequestDecisionRequest(
+                    action=HumanInteractionDecisionAction.skip,
+                    decision_summary="Use current results.",
+                    resume_task=True,
+                    details={"improvement_decision": "stop_and_report"},
+                ),
+                team_access=team_access,
+            )
+
+        requests = self.store.list_human_requests(task.team_id, task.id, access_token=self.access_token)
+        self.assertEqual(snapshot.open_request_count, 0)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].status, HumanInteractionRequestStatus.skipped)

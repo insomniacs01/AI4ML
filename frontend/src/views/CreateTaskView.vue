@@ -27,6 +27,10 @@ const form = ref({
   target_column: '',
   task_type: '',
   metric: '',
+  success_threshold: '',
+  success_direction: '',
+  max_improvement_rounds: '',
+  first_round_models: '',
   time_budget_s: 20,
   time_column: '',
   forecast_horizon: 3,
@@ -317,6 +321,34 @@ onMounted(loadRouteInputs)
               <span>优化指标</span>
               <input v-model="form.metric" placeholder="自动选择" />
             </label>
+            <label class="field">
+              <span>成功阈值</span>
+              <input v-model="form.success_threshold" placeholder="留空由 AI 推荐；例如 6.0" />
+            </label>
+          </div>
+          <div class="inline-fields">
+            <label class="field">
+              <span>指标方向</span>
+              <select v-model="form.success_direction">
+                <option value="">自动判断</option>
+                <option value="lower">越低越好</option>
+                <option value="higher">越高越好</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>最大改进轮数</span>
+              <input v-model.number="form.max_improvement_rounds" type="number" min="0" max="20" placeholder="留空由 AI 推荐；建议 5" />
+            </label>
+          </div>
+          <label class="field">
+            <span>第一轮候选模型</span>
+            <textarea
+              v-model="form.first_round_models"
+              rows="3"
+              placeholder="留空由 AI 推荐；多个模型用逗号或换行分隔，例如 Ridge, RandomForestRegressor, HistGradientBoostingRegressor"
+            />
+          </label>
+          <div class="inline-fields">
             <label class="field">
               <span>时间预算（秒）</span>
               <input v-model.number="form.time_budget_s" type="number" min="5" />

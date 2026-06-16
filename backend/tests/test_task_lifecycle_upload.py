@@ -149,6 +149,7 @@ def test_list_tasks_returns_summary_payload_without_detail_fields(
     monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
 
     response = task_lifecycle.list_tasks(
+        compact=False,
         team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
     )
     payload = response.model_dump(mode="json")["items"][0]
@@ -217,6 +218,58 @@ def test_runtime_task_list_uses_status_filter(
     assert response.items[0].id == task.id
     assert store.list_kwargs["limit"] == 20
     assert store.list_kwargs["statuses"] == task_lifecycle.RUNTIME_TASK_STATUSES
+
+
+def test_list_tasks_repairs_failed_codex_items_before_summarizing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task = _task()
+    task.status = TaskStatus.failed
+    task.codex_status = "waiting_improvement_review"
+    task.codex_workspace_path = str(tmp_path / "workspace")
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+
+    def sync_task(task_arg: TaskRecord, settings: object, **kwargs: object) -> tuple[TaskRecord, dict[str, object]]:
+        assert task_arg is task
+        assert kwargs["task_store"] is store
+        repaired = task.model_copy()
+        repaired.status = TaskStatus.paused_for_review
+        repaired.codex_status = "waiting_improvement_review"
+        return repaired, {}
+
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+    monkeypatch.setattr(task_lifecycle, "get_settings", lambda: object())
+    monkeypatch.setattr(task_lifecycle, "sync_codex_task_state", sync_task)
+
+    response = task_lifecycle.list_tasks(
+        compact=False,
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+
+    assert response.items[0].status == TaskStatus.paused_for_review
+    assert response.items[0].codex_status == "waiting_improvement_review"
+
+
+def test_list_tasks_does_not_repair_failed_items_without_codex_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task = _task()
+    task.status = TaskStatus.failed
+    store = _FakeTaskStore(task, TaskLocalStorage(dataset_root_dir=tmp_path / "tasks", run_output_dir=tmp_path / "runs"))
+
+    def fail_if_synced(*args: object, **kwargs: object) -> None:
+        raise AssertionError("plain failed list items must not trigger Codex artifact sync")
+
+    monkeypatch.setattr(task_lifecycle, "get_task_store", lambda: store)
+    monkeypatch.setattr(task_lifecycle, "sync_codex_task_state", fail_if_synced)
+
+    response = task_lifecycle.list_tasks(
+        team_access=SimpleNamespace(team_id=task.team_id, access_token="token"),
+    )
+
+    assert response.items[0].status == TaskStatus.failed
 
 
 def test_get_task_can_skip_codex_sync(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

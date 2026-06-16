@@ -20,8 +20,9 @@
 - 如果 `output/plan.md` 尚未被用户批准，必须回到等待计划确认，不要训练模型。
 - 如果 `output/progress.json` 是 `waiting_improvement_review`，必须先读取 `output/improvement_plan.md`、`output/run_strategy.json`、`output/advisor_request.json` 和 `output/advisor_diagnosis.json`（如果存在），再按上方用户选择处理。
 - 当用户选择为 `continue_improvement` 时，只能执行 `output/improvement_plan.md` 中已说明且被人工确认的继续改进方案；仍不得无边界增加模型、调参、subagents 或报告深度。若继续改进后仍无明显提升或需要再次超出边界，重新写入 `output/improvement_plan.md` 并设置 `waiting_improvement_review`，等待人工确认。
-- 当用户选择为 `stop_and_report` 时，不再做新的模型训练、调参或数据重加工。基于当前 workspace 中最好的真实结果、真实失败原因和已完成诊断，生成 `output/metrics.json`（如已有真实结果）、`output/overview.json`、`output/report.md`、必要的 `state/artifact_index.json`，并在报告中说明“用户选择停止继续改进”。
+- 当用户选择为 `stop_and_report` 时，不再做新的模型训练、调参或数据重加工。基于当前 workspace 中最好的真实结果、真实失败原因和已完成诊断，生成 `output/metrics.json`（如已有真实结果）、`output/overview.json`、`output/report.md`、必要的 `state/artifact_index.json`，并在报告中说明“用户选择停止继续改进”。如果当前结果未达到确认成功阈值，`metrics.acceptance.passed` 必须为 `false`，报告和 overview 必须明确写“未达标”，不得写成成功完成。
 - 如果没有改进确认选择，按普通中断恢复处理；不要把普通中断自动解释成继续改进许可。
+- 如果当前状态是 `waiting_improvement_review` 且没有改进确认选择，必须继续等待人工选择，不要自动继续改进、自动调低成功阈值或自动生成成功报告。
 - 如果计划已批准但执行未完成，请从未完成处继续，直至生成最终产物。
 
 必须检查这些路径：
@@ -53,6 +54,7 @@
 - 用户可见沟通和最终报告使用中文。
 - 需要建模或实验时只能使用 `output/run_strategy.json.execution_limits` 允许的原生 subagents；如果已有 subagent 输出，先读取再决定是否补派。
 - 如果结果较弱、缺失或可疑，只能在策略允许的自动改进轮数和用户确认的改进方案内执行诊断和有限优化。
+- 成功标准必须继续使用 `output/run_strategy.json.acceptance` 中已确认的阈值或规则。baseline 只能作为诊断项，不能替代成功标准。
 - 完成前必须做最终一致性检查，确保 `metrics.json`、`report.md`、`predict.py`、模型文件和 `artifact_index.json` 相互一致。
 - 完成前必须生成或修复 `output/overview.json`。它是前端“概览”页的结构化数据来源，不能用 `output/report.md` 代替。
 - `output/overview.json` 必须包含 `schema_version`、`generated_at`、`status`、`task_summary`、`prediction_error`、`confidence`、`key_factors`、`result_checks`、`optimization_records`、`charts`、`source_files`。
@@ -60,6 +62,7 @@
 - 如果某项无法真实计算，保留字段，标量写 `null`，数组写 `[]`，并用中文说明缺失原因。
 - `key_factors` 必须优先使用真实模型特征重要性；没有真实模型特征重要性时，只能返回明确标注来源为误差分析或诊断的因素，不能把普通占位项当成影响因素。
 - `result_checks` 必须覆盖 baseline 对照、验证/测试切分、泄漏风险或不适用说明、产物一致性、预测入口可用性或不适用说明、数据质量。
+- `result_checks` 必须覆盖成功阈值验收；`metrics.acceptance.passed` 必须反映确认成功标准是否达成。
 - `optimization_records` 必须记录真实有限优化尝试；没有尝试则返回空数组，并在 `result_checks` 中说明。
 - `state/artifact_index.json` 必须把 `output/overview.json` 记录为核心产物。
 - 最终 `output/report.md` 必须匹配 `output/run_strategy.json.execution_limits.report_depth`，不能只列产物路径。

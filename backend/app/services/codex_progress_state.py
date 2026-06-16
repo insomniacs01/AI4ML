@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.app.models.task import TaskRecord, TaskStatus, WorkflowStage
-from backend.app.services.codex_artifact_state import has_completed_codex_artifacts
+from backend.app.services.codex_artifact_state import (
+    has_completed_codex_artifacts,
+    has_failed_codex_acceptance,
+    has_stop_and_report_codex_artifacts,
+)
 from backend.app.services.codex_common import (
     CODEX_ACTIVE_STATUSES,
     CODEX_FAILED_STATUSES,
@@ -35,16 +39,20 @@ def codex_activity_text(
 ) -> str:
     summary = progress.get("summary")
     has_summary = isinstance(summary, str) and bool(summary.strip())
+    if codex_status_value == "waiting_improvement_review":
+        return summary.strip() if has_summary else "Codex 已生成改进决策方案，等待用户选择继续改进或按当前结果生成报告。"
+    if codex_status_value in CODEX_WAITING_STATUSES:
+        return summary.strip() if has_summary else "Codex 已生成计划，等待人工确认后开始训练和交付。"
+    if has_stop_and_report_codex_artifacts(artifacts):
+        return summary.strip() if has_summary else "Codex 已按用户选择停止继续改进，并生成当前结果报告。"
+    if has_failed_codex_acceptance(artifacts):
+        return "当前结果未达到已确认的成功阈值，请查看改进方案或失败诊断。"
     if codex_status_value == "completed":
         return summary.strip() if has_summary else "Codex 建模流程已完成，报告和预测入口已可查看。"
     if has_completed_codex_artifacts(artifacts):
         return "Codex 建模流程已完成，报告和预测入口已可查看。"
     if has_summary:
         return summary.strip()
-    if codex_status_value == "waiting_improvement_review":
-        return "Codex 已生成改进决策方案，等待用户选择继续改进或停止并生成报告。"
-    if codex_status_value in CODEX_WAITING_STATUSES:
-        return "Codex 已生成计划，等待人工确认后开始训练和交付。"
     if codex_status_value in CODEX_ACTIVE_STATUSES:
         return "Codex 正在执行建模、验证和产物生成。"
     if codex_status_value == "interrupted" and task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
@@ -87,15 +95,21 @@ def bootstrap_progress(workspace: Any, artifacts: dict[str, Any]) -> dict[str, A
 
 
 def codex_response_status(task: TaskRecord, codex_status_value: str, artifacts: dict[str, Any]) -> str:
+    if has_stop_and_report_codex_artifacts(artifacts):
+        return "completed"
     if codex_status_value in CODEX_WAITING_STATUSES:
+        return "blocked"
+    if codex_status_value == "interrupted" and task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
+        return "blocked"
+    if codex_status_value in CODEX_FAILED_STATUSES:
+        return "failed"
+    if has_failed_codex_acceptance(artifacts):
         return "blocked"
     if codex_status_value == "completed" or has_completed_codex_artifacts(artifacts) or task.status == TaskStatus.completed:
         return "completed"
     if codex_status_value in CODEX_ACTIVE_STATUSES:
         return "running"
-    if codex_status_value == "interrupted" and task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human}:
-        return "blocked"
-    if codex_status_value in CODEX_FAILED_STATUSES or task.status == TaskStatus.failed:
+    if task.status == TaskStatus.failed:
         return "failed"
     if task.status == TaskStatus.running:
         return "running"
@@ -103,7 +117,11 @@ def codex_response_status(task: TaskRecord, codex_status_value: str, artifacts: 
 
 
 def current_codex_stage(codex_status_value: str, progress: dict[str, Any], artifacts: dict[str, Any]) -> WorkflowStage | None:
+    if has_stop_and_report_codex_artifacts(artifacts):
+        return WorkflowStage.report_generation
     if codex_status_value == "waiting_improvement_review":
+        return WorkflowStage.training_validation
+    if has_failed_codex_acceptance(artifacts):
         return WorkflowStage.training_validation
     if codex_status_value in CODEX_WAITING_STATUSES:
         return WorkflowStage.data_analysis

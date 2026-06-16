@@ -54,6 +54,7 @@ const maxReplaySourceEvents = 20000;
 const maxReplayEvents = 900;
 const taskStatePollIntervalMs = 1500;
 const taskStatePollTimeoutMs = 20 * 60 * 1000;
+const taskStatusStartupGraceMs = 30 * 1000;
 
 export class WebSessionManager {
   constructor() {
@@ -611,12 +612,18 @@ class PersistentWebSession {
     let artifacts = workspacePath
       ? await getLatestAi4mlWorkspaceArtifacts({ workspacePath })
       : { workspace: null };
-    const running = taskIsActive && this.runner.hasActiveOrQueuedTurn();
     const progressStatus = typeof artifacts.progress?.status === 'string'
       ? artifacts.progress.status
       : '';
+    const completed = isCompletedAi4mlArtifacts(artifacts);
+    const startupGraceActive = isTaskStatusStartupGraceActive({
+      taskStartedAtMs: this.taskStartedAtMs,
+      progressStatus,
+      completed
+    });
+    const running = taskIsActive && (this.runner.hasActiveOrQueuedTurn() || startupGraceActive);
 
-    if (!running && isActiveProgressStatus(progressStatus) && !isCompletedAi4mlArtifacts(artifacts)) {
+    if (!running && !startupGraceActive && isActiveProgressStatus(progressStatus) && !completed) {
       artifacts = await markLatestAi4mlWorkspaceInterrupted({
         workspacePath: artifacts.workspace?.path || workspacePath,
         interruptedAt: new Date().toISOString(),
@@ -632,7 +639,7 @@ class PersistentWebSession {
       threadId: threadId || this.runner.threadId,
       workspacePath: artifacts.workspace?.path || workspacePath,
       running,
-      completed: this.taskCompleted || isCompletedAi4mlArtifacts(artifacts),
+      completed: this.taskCompleted || completed,
       progressStatus: latestProgressStatus,
       activity: this.lastActivity
     };
@@ -916,4 +923,16 @@ class PersistentWebSession {
 
 function isActiveProgressStatus(status) {
   return ['running', 'in_progress', 'executing'].includes(String(status || '').trim())
+}
+
+export function isTaskStatusStartupGraceActive({
+  taskStartedAtMs,
+  progressStatus,
+  completed,
+  nowMs = Date.now()
+}) {
+  if (!taskStartedAtMs || completed || !isActiveProgressStatus(progressStatus)) {
+    return false;
+  }
+  return nowMs - taskStartedAtMs < taskStatusStartupGraceMs;
 }

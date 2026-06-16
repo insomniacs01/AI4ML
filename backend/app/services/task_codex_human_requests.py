@@ -3,7 +3,7 @@ from __future__ import annotations
 from backend.app.core.config import get_settings
 from backend.app.core.supabase_auth import TeamAccessContext
 from backend.app.models.task import HumanInteractionRequestStatus, TaskRecord, WorkflowStage
-from backend.app.services.codex_backend import codex_plan_text, codex_workspace_plan_path
+from backend.app.services.codex_backend import codex_plan_text, codex_workspace_plan_path, read_codex_artifacts
 from backend.app.services.service_registry import get_task_store
 from backend.app.services.task_codex_human_gates import (
     CODEX_PLAN_APPROVAL_VERSION_ID,
@@ -40,6 +40,7 @@ def ensure_codex_plan_request(
         task,
         plan_path=plan_path,
         plan_text=codex_plan_text(task, get_settings()),
+        run_strategy=_codex_run_strategy(task),
     )
     request = task_store.create_human_request(
         team_id=task.team_id,
@@ -55,6 +56,15 @@ def ensure_codex_plan_request(
     )
     request.status = HumanInteractionRequestStatus.open
     task_store.update_human_request(request, access_token=team_access.access_token)
+
+
+def _codex_run_strategy(task: TaskRecord) -> dict | None:
+    try:
+        artifacts = read_codex_artifacts(task, get_settings())
+    except Exception:
+        return None
+    run_strategy = artifacts.get("run_strategy")
+    return run_strategy if isinstance(run_strategy, dict) else None
 
 
 def ensure_codex_improvement_request(

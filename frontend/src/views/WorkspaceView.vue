@@ -21,7 +21,6 @@ import {
   seedCodexRealtimeFromSnapshot,
 } from '@/utils/codexRealtime'
 import { modelDisplayName } from '@/utils/modelProfile'
-import { progressUnavailableText, taskProgressPercent } from '@/utils/progress'
 import { continueRunOptions } from '@/utils/taskRunControl'
 import { firstWaitingHumanStep, hasPendingHumanConfirmation, isHumanWaitingStatus } from '@/utils/taskHumanState'
 import { WORKSPACE_TASK_STATUSES, isFinishedTaskStatus, pickActiveTask, stepStatusLabel, taskIdOf } from '@/utils/taskRecords'
@@ -87,6 +86,11 @@ const canContinueRun = computed(() => (
 const canPauseRun = computed(() => activeTaskId.value && pausableStatuses.has(activeTask.value?.status))
 const runActionLabel = computed(() => (isStartableTask.value ? '启动运行' : '继续运行'))
 const codexWorkspacePath = computed(() => taskRun.value?.codex?.workspace_path || activeTask.value?.codex_workspace_path || '')
+const codexWorkspaceName = computed(() => {
+  const path = codexWorkspacePath.value
+  if (!path) return '未创建'
+  return path.split(/[\\/]/).filter(Boolean).pop() || path
+})
 const reportRoute = computed(() => {
   if (!activeTaskId.value) return null
   return activeTask.value?.status === 'completed'
@@ -95,6 +99,48 @@ const reportRoute = computed(() => {
 })
 const isBootstrapping = computed(() => activeTask.value && isRuntimeActive.value && !finished.value && steps.value.length === 0)
 const stepSummary = computed(() => steps.value.slice(0, 8))
+const activeStep = computed(() => (
+  waitingStep.value
+  || steps.value.find((step) => step?.status === 'running')
+  || steps.value.find((step) => !['completed', 'cancelled', 'failed'].includes(step?.status))
+  || steps.value[steps.value.length - 1]
+  || null
+))
+const runActivitySteps = computed(() => {
+  const source = steps.value.length ? steps.value : bootstrapActivitySteps()
+  return source.slice(0, 6).map((step, index) => ({
+    key: step.id || step.name || step.node || `activity-${index}`,
+    title: stepTitle(step),
+    status: step.status || 'pending',
+    label: stepStatusLabel(step.status),
+  }))
+})
+const currentActivityText = computed(() => (
+  taskRun.value?.current_activity
+  || codexRealtime.value.activity
+  || activeStep.value?.message
+  || activeStep.value?.summary
+  || progressHeadline.value
+))
+const runSummaryItems = computed(() => [
+  {
+    label: '当前节点',
+    value: activeStep.value ? stepTitle(activeStep.value) : progressHeadline.value,
+  },
+  {
+    label: '当前活动',
+    value: currentActivityText.value,
+  },
+  {
+    label: '工作区',
+    value: codexWorkspaceName.value,
+  },
+  {
+    label: '人工确认',
+    value: isWaitingHuman.value ? '待处理' : '无待处理',
+    tone: isWaitingHuman.value ? 'urgent' : 'ok',
+  },
+])
 const progressHeadline = computed(() => {
   if (!activeTask.value) return '还没有正在展示的实验'
   if (isRuntimeStateFromStaleCache.value) return '正在确认任务状态'
@@ -113,22 +159,6 @@ const progressDescription = computed(() => {
   if (isBootstrapping.value) return `${modelDisplayName.value} 正在初始化运行环境和任务工作区，随后会显示数据分析进度。`
   return `工作台直接展示 ${modelDisplayName.value} 后端写入的运行步骤、状态和快速目录。`
 })
-const progressPercent = computed(() => {
-  if (!activeTask.value) return 0
-  return taskProgressPercent({
-    status: activeTask.value?.status,
-    steps: steps.value,
-    isBootstrapping: isBootstrapping.value,
-    progressPercent: taskRun.value?.progress_percent,
-  })
-})
-const progressBarWidth = computed(() => progressPercent.value ?? 0)
-const progressPercentLabel = computed(() => (progressPercent.value === null ? '进度未知' : `${progressPercent.value}%`))
-const progressUnavailableReason = computed(() => (
-  progressPercent.value === null
-    ? progressUnavailableText(taskRun.value?.progress_unavailable_reason)
-    : ''
-))
 const codexStream = createCodexRealtimeStream({
   state: codexRealtime,
   getSessionId: () => taskRun.value?.codex?.session_id || activeTask.value?.codex_session_id || '',
@@ -360,6 +390,35 @@ function closeStream() {
   codexStream.close()
 }
 
+function stepTitle(step) {
+  return step?.title || step?.name || step?.node || step?.agent_role || '运行步骤'
+}
+
+function bootstrapActivitySteps() {
+  if (isRuntimeStateFromStaleCache.value) {
+    return [
+      { id: 'sync-state', title: '确认状态', status: 'running' },
+      { id: 'validate-run', title: '校验运行', status: 'pending' },
+      { id: 'sync-record', title: '同步记录', status: 'pending' },
+      { id: 'refresh-view', title: '更新展示', status: 'pending' },
+    ]
+  }
+  if (isStartableTask.value) {
+    return [
+      { id: 'data-ready', title: '数据已准备', status: 'completed' },
+      { id: 'start-run', title: '等待启动', status: 'running' },
+      { id: 'submit-codex', title: `提交给 ${modelDisplayName.value}`, status: 'pending' },
+      { id: 'plan', title: '生成计划', status: 'pending' },
+    ]
+  }
+  return [
+    { id: 'workspace', title: '创建环境', status: isBootstrapping.value ? 'running' : 'completed' },
+    { id: 'data', title: '分析数据', status: 'pending' },
+    { id: 'plan', title: '生成计划', status: 'pending' },
+    { id: 'approval', title: '人工确认', status: 'pending' },
+  ]
+}
+
 function scrollToSection(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
@@ -495,14 +554,31 @@ onUnmounted(() => {
           </div>
           <StatusBadge v-if="activeTask?.status" :status="activeTask.status" />
         </div>
-        <div class="simple-progress">
-          <span :style="{ width: `${progressBarWidth}%` }"></span>
+        <div class="workspace-run-summary">
+          <div
+            v-for="item in runSummaryItems"
+            :key="item.label"
+            class="workspace-run-summary-item"
+            :class="item.tone"
+          >
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
         </div>
-        <div class="progress-meta">
-          <strong>{{ progressPercentLabel }}</strong>
-          <span>{{ activeTask?.status || '加载中' }}</span>
+        <div class="workspace-activity-strip" aria-label="当前运行阶段">
+          <div
+            v-for="item in runActivitySteps"
+            :key="item.key"
+            class="workspace-activity-step"
+            :class="item.status"
+          >
+            <span></span>
+            <div>
+              <strong>{{ item.title }}</strong>
+              <small>{{ item.label }}</small>
+            </div>
+          </div>
         </div>
-        <p v-if="progressUnavailableReason" class="muted progress-unavailable">{{ progressUnavailableReason }}</p>
         <p v-if="codexWorkspacePath" class="muted codex-workspace-path">{{ modelDisplayName }} workspace: {{ codexWorkspacePath }}</p>
         <div v-if="finished" class="report-ready-card">
           <div>

@@ -20,7 +20,10 @@ from backend.app.services.codex_backend import (
 from backend.app.services.codex_common import read_json
 from backend.app.services.codex_metrics import build_codex_run_summary
 from backend.app.services.codex_overview import build_codex_overview_from_artifacts
-from backend.app.services.codex_workspace_artifacts import read_codex_workspace_overview_artifacts
+from backend.app.services.codex_workspace_artifacts import (
+    read_codex_workspace_artifacts,
+    read_codex_workspace_overview_artifacts,
+)
 from backend.app.services.codex_workspace_resolution import resolve_known_codex_workspace_path
 from backend.app.services.service_registry import get_task_store
 from backend.app.services.task_codex_runtime_activity import safe_reconcile_codex_runtime_activity
@@ -75,6 +78,7 @@ def build_task_runtime_snapshot_response(
                     codex_artifacts,
                 )
                 codex_overview = build_codex_overview_from_artifacts(codex_artifacts)
+                progress_response = _safe_build_codex_run_progress(task, settings)
         elif sync_runtime:
             try:
                 task, progress_response, codex_overview, codex_artifacts = sync_codex_runtime_snapshot(
@@ -89,7 +93,8 @@ def build_task_runtime_snapshot_response(
                     task.id,
                     exc,
                 )
-            task = safe_reconcile_codex_runtime_activity(task_store, task, team_access, settings)
+            if task.status == TaskStatus.running:
+                task = safe_reconcile_codex_runtime_activity(task_store, task, team_access, settings)
             progress_response = _safe_build_codex_run_progress(task, settings) or progress_response
             if not codex_artifacts:
                 codex_artifacts = _safe_read_codex_artifacts(task, settings)
@@ -160,7 +165,7 @@ def _safe_read_known_codex_summary_artifacts(task: TaskRecord, settings: Any) ->
     if workspace is None:
         return {}
     try:
-        artifacts = read_codex_workspace_overview_artifacts(workspace)
+        artifacts = read_codex_workspace_artifacts(workspace)
         token_usage = read_json(workspace / "output" / "token_usage.json")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not read Codex summary artifacts for task %s: %s", task.id, exc)

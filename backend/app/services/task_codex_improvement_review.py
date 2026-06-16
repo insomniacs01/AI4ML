@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.app.models.task import TaskRecord
+from backend.app.services.codex_artifact_state import has_stop_and_report_codex_artifacts
 from backend.app.services.task_runtime_resume import CODEX_IMPROVEMENT_REVIEW_STATUSES
 
 
@@ -35,6 +36,8 @@ def codex_improvement_plan_text(task: TaskRecord, artifacts: dict | None = None)
 
 def has_codex_improvement_review(artifacts: dict | None) -> bool:
     if not isinstance(artifacts, dict):
+        return False
+    if has_stop_and_report_codex_artifacts(artifacts):
         return False
     progress = artifacts.get("progress") if isinstance(artifacts.get("progress"), dict) else {}
     status_values = {

@@ -46,6 +46,13 @@ const reportForm = reactive({
 const codexPlanForm = reactive({
   plan_text: '',
 })
+const codexStrategyForm = reactive({
+  primary_metric: '',
+  threshold: '',
+  direction: '',
+  max_auto_improvement_rounds: '',
+  planned_models_or_methods: '',
+})
 const improvementPlanForm = reactive({
   plan_text: '',
 })
@@ -59,14 +66,14 @@ const stageMeta = computed(() => {
   if (isCodexImprovementReview.value) {
     return {
       title: '确认是否继续改进',
-      description: `${modelDisplayName.value} 已生成改进决策方案。请选择继续改进，或停止改进并直接生成当前结果报告。`,
-      defaultAction: '选择继续改进或停止并生成报告',
+      description: `${modelDisplayName.value} 已生成改进决策方案。请选择继续改进，或不继续改进并按当前结果生成报告。`,
+      defaultAction: '选择继续改进，或按当前结果生成报告',
     }
   }
   if (isCodexPlanApproval.value) {
     return {
       title: `确认 ${modelDisplayName.value} 建模计划`,
-      description: `${modelDisplayName.value} 已完成数据理解并生成计划。你可以直接确认执行，也可以编辑计划后确认，或要求 ${modelDisplayName.value} 重新生成计划。`,
+      description: `${modelDisplayName.value} 已完成数据理解并生成计划。请确认预测目标、成功阈值、最大改进轮数和第一轮候选模型；也可以编辑计划后确认，或要求 ${modelDisplayName.value} 重新生成计划。`,
       defaultAction: '确认计划并执行',
     }
   }
@@ -154,7 +161,19 @@ function resetForms() {
   const spec = props.hitl?.task_spec || requestPayload.value.task_spec || {}
   const plan = props.hitl?.train_plan || requestPayload.value.train_plan || {}
   const parameters = parameterDefaults.value
+  const runStrategy = requestPayload.value.run_strategy || requestPayload.value.details?.run_strategy || {}
+  const acceptance = runStrategy.acceptance || {}
+  const limits = runStrategy.execution_limits || {}
   codexPlanForm.plan_text = requestPayload.value.plan_text || requestPayload.value.details?.plan_text || ''
+  codexStrategyForm.primary_metric = acceptance.primary_metric || parameters.primary_metric || ''
+  codexStrategyForm.threshold = acceptance.threshold ?? parameters.success_threshold ?? ''
+  codexStrategyForm.direction = acceptance.higher_is_better === true
+    ? 'higher'
+    : acceptance.higher_is_better === false
+      ? 'lower'
+      : ''
+  codexStrategyForm.max_auto_improvement_rounds = limits.max_auto_improvement_rounds ?? parameters.max_auto_improvement_rounds ?? ''
+  codexStrategyForm.planned_models_or_methods = csvText(limits.planned_models_or_methods || parameters.planned_models_or_methods)
   improvementPlanForm.plan_text = requestPayload.value.improvement_plan_text || requestPayload.value.details?.improvement_plan_text || ''
 
   requirementForm.requirement_notes = csvText(parameters.requirement_notes || parameters.notes)
@@ -171,12 +190,34 @@ function resetForms() {
   reportForm.report_focus = csvText(parameters.report_focus)
 }
 
+function approvedCodexPlanText() {
+  const base = String(codexPlanForm.plan_text || '')
+    .replace(/\n## 人工确认参数[\s\S]*$/u, '')
+    .trimEnd()
+  const lines = []
+  if (codexStrategyForm.primary_metric) lines.push(`- 主指标：${codexStrategyForm.primary_metric}`)
+  if (codexStrategyForm.threshold !== '' && codexStrategyForm.threshold !== null) lines.push(`- 成功阈值：${codexStrategyForm.threshold}`)
+  if (codexStrategyForm.direction) lines.push(`- 指标方向：${codexStrategyForm.direction === 'higher' ? '越高越好' : '越低越好'}`)
+  if (codexStrategyForm.max_auto_improvement_rounds !== '' && codexStrategyForm.max_auto_improvement_rounds !== null) {
+    lines.push(`- 最大改进轮数：${codexStrategyForm.max_auto_improvement_rounds}`)
+  }
+  const models = csv(codexStrategyForm.planned_models_or_methods)
+  if (models.length) lines.push(`- 第一轮候选模型：${models.join(', ')}`)
+  if (!lines.length) return base
+  return `${base}\n\n## 人工确认参数\n\n${lines.join('\n')}\n`
+}
+
 function collectAdjustments() {
   const parameters = parameterDefaults.value
   const result = {}
 
   if (isCodexPlanApproval.value) {
-    setIfChanged(result, 'plan_text', codexPlanForm.plan_text, parameters)
+    setIfChanged(result, 'plan_text', approvedCodexPlanText(), parameters)
+    setIfChanged(result, 'primary_metric', codexStrategyForm.primary_metric, parameters)
+    setIfChanged(result, 'success_threshold', codexStrategyForm.threshold, parameters)
+    setIfChanged(result, 'success_direction', codexStrategyForm.direction, parameters)
+    setIfChanged(result, 'max_auto_improvement_rounds', codexStrategyForm.max_auto_improvement_rounds, parameters, 'number')
+    setIfChanged(result, 'planned_models_or_methods', codexStrategyForm.planned_models_or_methods, parameters, 'csv')
   } else if (isCodexImprovementReview.value) {
     setIfChanged(result, 'improvement_plan_text', improvementPlanForm.plan_text, parameters)
   } else if (stage.value === 'requirement_analysis') {
@@ -210,7 +251,7 @@ async function submit(action) {
     const data = await submitHitl(props.taskId, {
       action,
       adjustments: action === 'reject' ? {} : adjustments,
-      plan_text: isCodexPlanApproval.value ? codexPlanForm.plan_text : null,
+      plan_text: isCodexPlanApproval.value ? approvedCodexPlanText() : null,
     })
     emit('submitted', data)
   } catch (err) {
@@ -305,6 +346,36 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
               :placeholder="`等待 ${modelDisplayName} 写入 output/plan.md`"
             />
           </div>
+          <div class="field">
+            <span>第一轮候选模型</span>
+            <textarea
+              v-model="codexStrategyForm.planned_models_or_methods"
+              rows="3"
+              placeholder="多个模型用逗号或换行分隔；留空则按计划文本中的默认假设"
+            />
+          </div>
+          <div class="inline-fields compact-fields">
+            <label class="field">
+              <span>主指标</span>
+              <input v-model="codexStrategyForm.primary_metric" placeholder="例如 mean_rmse / accuracy" />
+            </label>
+            <label class="field">
+              <span>成功阈值</span>
+              <input v-model="codexStrategyForm.threshold" placeholder="例如 6.0 / 0.9" />
+            </label>
+            <label class="field">
+              <span>指标方向</span>
+              <select v-model="codexStrategyForm.direction">
+                <option value="">按计划判断</option>
+                <option value="lower">越低越好</option>
+                <option value="higher">越高越好</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span>最大改进轮数</span>
+            <input v-model.number="codexStrategyForm.max_auto_improvement_rounds" type="number" min="0" max="20" />
+          </label>
         </div>
 
         <div v-else-if="!loading && stage === 'requirement_analysis'" class="form-stack">
@@ -367,7 +438,7 @@ watch(() => [props.open, props.hitl], resetForms, { immediate: true })
             <CheckCircle2 :size="17" />{{ busy ? '正在提交' : '继续改进' }}
           </button>
           <button class="secondary-action" type="button" :disabled="submittingDisabled" @click="submit('stop_and_report')">
-            <FileText :size="17" />停止并生成报告
+            <FileText :size="17" />按当前结果生成报告
           </button>
           <button class="danger-action" type="button" :disabled="submittingDisabled" @click="submit('reject')">
             <X :size="17" />拒绝任务

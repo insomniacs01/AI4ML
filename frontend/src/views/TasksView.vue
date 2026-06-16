@@ -10,7 +10,12 @@ import { getActiveTeamHint, getCachedUser } from '@/api/session'
 import { formatDateTime } from '@/utils/formatters'
 import { displayTaskTitle, taskTypeLabel } from '@/utils/labels'
 import { taskProgressPercent } from '@/utils/progress'
-import { isTaskListCacheFresh, readTaskListCache, writeTaskListCache } from '@/utils/taskListCache'
+import {
+  isTaskListCacheFresh,
+  readTaskListCache,
+  taskListNeedsFailureRefresh,
+  writeTaskListCache,
+} from '@/utils/taskListCache'
 
 const tasks = ref([])
 const loading = ref(false)
@@ -76,7 +81,7 @@ function hydrateTasksFromCache() {
   const cached = readTaskListCache(taskListCacheContext())
   if (!cached) return false
   tasks.value = cached.tasks || []
-  return isTaskListCacheFresh(cached.cachedAt)
+  return isTaskListCacheFresh(cached.cachedAt) && !taskListNeedsFailureRefresh(tasks.value)
 }
 
 async function load(options = {}) {

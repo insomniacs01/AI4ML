@@ -1,41 +1,104 @@
 # AI4ML
 
-更新时间：2026-05-26
+更新时间：2026-06-14
 
-AI4ML 是一个团队协作式智能建模工作台。当前主线不是固定的 MLZero / AutoGluon 流水线，而是通过 `codex_use` 接入 Codex-native workspace：用户创建任务并提供数据与目标后，Codex 先生成可确认的执行方案，用户确认后再执行建模、生成报告、结果文件和预测入口。
+AI4ML 是一个团队协作式智能建模工作台。项目当前已经收敛到 Codex-native 主线：用户在团队空间中创建建模任务，上传或指定数据后，由 `codex_use` 调用 Codex 生成可审核的执行方案；用户确认方案后，Codex 在任务工作区内继续完成建模、实验、报告、预测入口和代码产物。
 
-当前事实以 `docs/current-memory.md` 和 `codex_use/current-memory.md` 为准。旧文档中关于 React 主入口、模型广场、数据中心、工作流广场、业务/技术双报告、MLZero 作为主执行器等说法已经过时。
+本 README 面向项目验收和后续维护。当前事实以 `docs/current-memory.md`、`codex_use/current-memory.md` 和源码实现为准。
 
-## 当前定位
+## 项目定位
 
-AI4ML 负责：
+AI4ML 解决的是“智能建模过程如何被团队协作、人工确认、状态追踪和结果复用”的问题，而不是简单包装一个模型训练脚本。
 
-- 团队、成员、角色和权限管理。
-- 任务创建、数据上传、计划确认、状态同步和结果展示。
-- Codex workspace 的创建、恢复、产物读取和结果落库。
-- 报告、源码、预测入口、运行进度和 token usage 的真实展示。
+平台职责：
+
+- 团队、成员、角色、权限和配额管理。
+- 任务创建、数据上传、运行状态同步和结果展示。
+- 人工确认、暂停、恢复、方案重生成和执行决策记录。
+- Codex workspace 的创建、归属校验、产物读取和结果落库。
+- 报告、指标、预测入口、源码和 token usage 的真实展示。
 - 提示词和执行方案的社区复用。
 
-Codex 负责：
+Codex 职责：
 
-- 理解任务目标和数据结构。
-- 生成 `output/plan.md`，等待用户确认。
-- 在用户确认后执行建模、实验、修复和报告撰写。
-- 产出 `metrics.json`、`report.md`、`predict.py`、源码、日志和模型文件。
+- 理解用户任务目标和数据结构。
+- 在计划阶段生成 `output/plan.md`，等待用户确认。
+- 在用户确认后继续同一任务线程和 workspace，执行建模、实验、修复和报告撰写。
+- 产出 `output/metrics.json`、`output/report.md`、`output/predict.py`、源码、模型、日志和 token usage。
 
-系统硬约束：
+## 验收主线
 
-- 不展示伪数据。
-- 不制造假成功。
-- 不用演示值冒充真实结果。
-- 不做静默 fallback。
-- 缺少连接器、权限、运行产物或 token usage 时必须明确失败或显示未接入。
+当前项目验收建议按以下闭环展示：
 
-## 服务入口
+```text
+创建任务
+  -> 上传或指定数据
+  -> Codex 生成执行方案 output/plan.md
+  -> 用户查看、编辑、确认或要求重生成
+  -> Codex 从同一 workspace 继续执行建模
+  -> AI4ML 同步报告、指标、预测入口、源码和 token usage
+  -> 用户发布提示词或执行方案到社区广场
+```
 
-- AI4ML 前端：`http://127.0.0.1:5173`
-- AI4ML 后端：`http://127.0.0.1:8000`
-- `codex_use` Web Console / Codex app-server 代理：`http://127.0.0.1:3000`
+这条主线对应的是当前代码中的真实实现，不再使用旧的 MLZero、AutoGluon、AIDE 或外部 AutoML agent 作为主执行链路。
+
+## 系统架构
+
+```text
+AI4ML/
+├─ frontend/        Vue 3 + Vite 前端工作台
+├─ backend/         FastAPI 业务后端
+├─ codex_use/       Codex-native 执行桥
+├─ supabase/        Supabase schema
+├─ docs/            当前记忆、需求覆盖和项目材料
+├─ scripts/         验证与辅助脚本
+├─ data/            示例数据
+├─ storage/         本地任务缓存与历史产物
+└─ external/        外部参考代码，不是当前主运行链路
+```
+
+### 前端
+
+技术栈：
+
+- Vue 3
+- Vite 5
+- Vue Router
+- `@supabase/supabase-js`
+- Vitest
+
+关键入口：
+
+- `frontend/src/App.vue`
+- `frontend/src/main.js`
+- `frontend/src/router.js`
+- `frontend/src/api/request.js`
+- `frontend/src/api/tasks.js`
+- `frontend/src/api/taskHuman.js`
+- `frontend/src/views/CreateTaskView.vue`
+- `frontend/src/views/WorkspaceView.vue`
+- `frontend/src/views/TaskDetailView.vue`
+- `frontend/src/views/CommunityView.vue`
+
+前端负责登录后的工作台体验，包括开始任务、工作台、我的任务、任务详情、人工确认、报告预测、代码产物和社区广场。
+
+### 后端
+
+技术栈：
+
+- FastAPI
+- Pydantic / pydantic-settings
+- Supabase Auth / REST API
+- 本地 SQLite cache
+
+关键入口：
+
+- `backend/app/main.py`
+- `backend/app/application.py`
+- `backend/app/api/router.py`
+- `backend/app/services/service_registry.py`
+
+后端负责团队作用域鉴权、任务状态机、数据上传、Codex 状态同步、人工确认、配额保护、社区资产和结果读取。
 
 除 `/api/health` 外，正式业务 API 统一使用团队作用域：
 
@@ -45,58 +108,20 @@ Codex 负责：
 
 不要新增非团队作用域业务接口。
 
-## 技术栈
+### codex_use
 
-### 前端
+`codex_use/` 是 AI4ML 当前唯一有效的 Codex-native 执行桥。
 
-- Vue 3
-- Vite 5
-- Vue Router
-- `@supabase/supabase-js`
+关键入口：
 
-当前入口：
+- `codex_use/server.js`
+- `codex_use/src/server/web-session-manager.js`
+- `codex_use/src/server/ai4ml-artifacts.js`
+- `codex_use/src/server/ai4ml-workspace-init.js`
+- `codex_use/src/server/runners/app-server-runner.js`
+- `codex_use/src/server/session-store.js`
 
-- `frontend/src/App.vue`
-- `frontend/src/main.js`
-- `frontend/src/router.js`
-- `frontend/src/api/client.js`
-
-旧的 `frontend/src/App.jsx`、`frontend/src/lib/api.js` 和一批 React 组件已经不是当前主入口。
-
-### 后端
-
-- FastAPI
-- Pydantic / pydantic-settings
-- Supabase Auth / REST API
-- 本地 SQLite cache
-
-当前入口：
-
-- `backend/app/main.py`
-- `backend/app/application.py`
-- `backend/app/api/router.py`
-
-### 执行桥
-
-- `codex_use/` 是 AI4ML 主项目使用的 Codex-native 执行桥。
-- `backend/app/services/codex_backend.py` 负责创建和读取 Codex workspace。
-- `codex_use` 通过 Codex app-server 维护 Web session、事件流、计划确认、恢复执行和 token usage 持久化。
-
-## 目录结构
-
-```text
-AI4ML/
-├─ backend/                    # FastAPI 后端
-├─ frontend/                   # Vue + Vite 前端
-├─ codex_use/                  # Codex-native 执行桥
-├─ supabase/                   # Supabase schema
-├─ docs/                       # 当前记忆和项目文档
-├─ scripts/                    # 验证与辅助脚本
-├─ data/                       # 示例数据
-├─ storage/                    # 本地任务与运行产物
-├─ external/                   # 上游依赖仓库与本地补丁
-└─ 周报/                       # 周报材料
-```
+它负责启动 Codex app-server、创建任务 workspace、维护任务级 `threadId`、处理计划确认、暂停、恢复、重生成、事件 replay 和 token usage 持久化。
 
 ## Codex Workspace 协议
 
@@ -106,14 +131,14 @@ AI4ML 任务 workspace 通常位于：
 codex_use/workspaces/ai4ml-{task_id}
 ```
 
-输入文件：
+核心输入：
 
 ```text
 input/task_request.json
 input/project_rules.md
 ```
 
-输出文件：
+核心输出：
 
 ```text
 output/plan.md
@@ -134,42 +159,48 @@ output/token_usage.json
 - 执行阶段由 Codex 原生能力和 subagents 完成。
 - 最终用户可见产物以 `output/` 为准。
 - token usage 只能来自真实 Codex usage 事件，不能估算。
+- 进度百分比只能来自 `output/progress.json` 中真实的 `percent` / `progress_percent` 字段。
+- 没有真实百分比时，前端应显示“进度未知”和具体原因，不能按步骤数量或任务状态推导。
 
-## 当前产品能力
+## 已实现能力
 
 ### 团队与权限
 
 - Supabase 登录和 session。
 - 团队空间、成员和角色。
-- FastAPI 按 Supabase bearer token 和 team scope 校验访问。
-- 正式业务接口统一走 `/api/teams/{team_id}/...`。
+- FastAPI 按 Supabase bearer token 与 team scope 校验访问。
+- 团队作用域 API、团队资产和团队任务隔离。
 
-### 任务
+### 任务与数据
 
-- 创建任务。
+- 创建建模任务。
 - 上传或指定数据。
-- 生成 Codex plan。
-- 用户查看、编辑和确认 plan。
-- 确认后启动或恢复 Codex 执行。
-- 读取真实进度、报告、指标、源码、预测入口和 token usage。
+- 后端校验上传文件并生成基础数据 profile。
+- 创建后异步触发 Codex 运行。
+- 任务列表、工作台和任务详情页展示任务状态。
 
-### 人工确认
+### 方案生成与人工确认
 
-- plan 确认是当前主流程的核心节点。
-- 后续人工问题、恢复执行和中断处理通过 Codex workspace 与后端状态同步。
-- 不把“缺少信息”包装成成功结果。
+- Codex 先生成 `output/plan.md`。
+- 前端支持查看、编辑、批准方案。
+- 用户可要求重生成方案。
+- 批准后从同一任务 workspace 继续执行。
+- 人工确认记录参与后续状态同步。
 
-### 报告与预测
+### 暂停、恢复与重生成
 
-- 报告页只展示最终报告，不再拆业务报告和技术报告。
+- 暂停：调用 Codex `turn/interrupt`，任务进入可恢复状态。
+- 继续：携带 `resume_interrupted=true`，恢复任务自己的 `codex_thread_id`。
+- 重生成：针对当前方案重新规划，不把旧状态静默覆盖成成功。
+- 取消：作为业务终止语义，不等同于暂停。
+
+### 报告、预测和代码产物
+
+- 报告页展示真实 `output/report.md`。
+- 指标读取真实 `output/metrics.json`。
 - 预测 Demo 优先读取真实 `output/predict.py`。
-- 缺少模型或预测合约时返回不支持，不伪造预测结果。
-
-### 源码与结果文件
-
-- 源码页优先展示真实运行产物。
-- 重点文件包括 `output/code/`、`output/predict.py` 和相关日志。
-- 空产物不能假装有源码。
+- 代码页优先展示 `output/code/`、`output/predict.py` 等真实产物。
+- 缺少预测脚本、模型、报告或源码时显示不可用，不伪造结果。
 
 ### 社区复用
 
@@ -178,39 +209,32 @@ output/token_usage.json
 - `prompt`：提示词资产，保存任务主题和描述。
 - `plan`：执行方案资产，保存已确认或编辑过的 Codex plan。
 
-模型广场、数据中心、工作流广场和报告类社区资产不再属于当前产品口径。
+已废弃的模型广场、数据中心、工作流广场和报告类社区资产不属于当前产品口径。
 
-如果发布提示词或方案时报 Supabase 约束错误，通常说明线上数据库仍保留旧 `platform_assets.asset_type` 约束，需要执行当前 `supabase/schema.sql` 或对应迁移，让资产类型收敛到 `prompt` / `plan`。
+## 质量与可靠性原则
 
-## 主要后端接口
+当前项目硬约束：
 
-健康检查：
+- 不展示伪数据。
+- 不制造假成功。
+- 不用演示值冒充真实业务结果。
+- 不做静默 fallback。
+- 缺少连接器、权限、运行产物、Supabase schema 或 Codex 产物时，必须明确失败或显示未接入。
+- 大模型用量必须来自真实 Codex usage 事件。
+- Codex 任务阶段必须来自真实 Codex progress。
+- 当前执行链路只支持 Codex-native，不重新引入 MLZero、AutoGluon、AIDE 或旧外部 AutoML agent。
+
+这些约束是验收口径的一部分。项目宁可明确显示“不可用 / 未接入 / 进度未知”，也不能把缺失能力包装成已完成能力。
+
+## 服务入口
+
+本地默认入口：
 
 ```text
-GET /api/health
+AI4ML 前端：http://127.0.0.1:5173
+AI4ML 后端：http://127.0.0.1:8000
+codex_use：http://127.0.0.1:3000
 ```
-
-团队作用域业务接口示例：
-
-```text
-GET    /api/teams/{team_id}/tasks
-POST   /api/teams/{team_id}/tasks
-GET    /api/teams/{team_id}/tasks/{task_id}
-POST   /api/teams/{team_id}/tasks/{task_id}/dataset
-POST   /api/teams/{team_id}/tasks/{task_id}/run
-POST   /api/teams/{team_id}/tasks/{task_id}/resume
-GET    /api/teams/{team_id}/tasks/{task_id}/runtime-snapshot
-GET    /api/teams/{team_id}/tasks/{task_id}/run-progress
-GET    /api/teams/{team_id}/tasks/{task_id}/report
-POST   /api/teams/{team_id}/tasks/{task_id}/prediction-demo
-GET    /api/teams/{team_id}/tasks/{task_id}/code-workspace
-GET    /api/teams/{team_id}/assets
-POST   /api/teams/{team_id}/assets
-POST   /api/teams/{team_id}/assets/{asset_id}/publish
-POST   /api/teams/{team_id}/assets/{asset_id}/fork
-```
-
-实际接口以 `backend/app/api/router.py` 和 `backend/app/api/routes/` 为准。
 
 ## 环境配置
 
@@ -228,7 +252,7 @@ VITE_API_ROOT=/api
 
 基于 `backend/.env.example` 创建 `backend/.env.local`。
 
-需要配置 Supabase、连接器密钥、Codex / OpenAI-compatible provider 和本地运行相关环境。不要把真实密钥提交到仓库。
+需要配置 Supabase、AI provider、Codex 后端地址和本地存储目录。不要把真实密钥提交到仓库。
 
 ### Supabase
 
@@ -274,7 +298,19 @@ http://127.0.0.1:5173
 
 ### codex_use
 
-`codex_use` 的具体启动方式以 `codex_use/current-memory.md` 和子项目脚本为准。它是当前 AI4ML 后端读取 Codex 产物的关键执行桥。
+```powershell
+cd D:\333\AI4ML\codex_use
+npm install
+npm start
+```
+
+访问：
+
+```text
+http://127.0.0.1:3000
+```
+
+`codex_use` 依赖本机 Codex app-server 能力和相关 AI 服务配置。实际运行前需要确认 Codex、AI provider、Supabase 和本地文件路径均可用。
 
 ## 验证方式
 
@@ -282,8 +318,8 @@ http://127.0.0.1:5173
 
 ```powershell
 cd D:\333\AI4ML
-.\.venv\Scripts\python.exe -m compileall backend\app
-.\.venv\Scripts\python.exe -m pytest backend\tests -q
+python -m compileall -q backend\app
+python -m pytest backend\tests -q
 ```
 
 前端检查：
@@ -294,22 +330,78 @@ npm test
 npm run build
 ```
 
-近期记忆中的验证状态见 `docs/current-memory.md`。如果代码或环境变化，应重新运行对应检查，不能把历史验证当作当前结果。
+`codex_use` 语法检查：
 
-## 当前限制
+```powershell
+cd D:\333\AI4ML\codex_use
+node --check server.js
+node --check src/server/web-session-manager.js
+node --check src/server/runners/app-server-runner.js
+```
 
-- 当前社区资产是提示词和执行方案复用，不是完整模型市场或数据集托管平台。
-- `codex_use` 当前需要重新设计后才能稳定支持多任务并行，不要直接把单活动任务模型硬扩成多 runner。
+近期历史验证记录见 `docs/current-memory.md`。如果代码、依赖或运行环境发生变化，应重新运行对应检查，不能把历史验证当作当前结果。
+
+## 验收汇报材料
+
+仓库根目录已生成验收 PPT：
+
+```text
+AI4ML项目验收汇报.pptx
+```
+
+PPT 建议汇报重点：
+
+- 项目背景：建模流程分散、协作成本高、结果需要可追踪。
+- 项目定位：AI4ML 负责平台闭环，Codex 负责真实建模执行。
+- 系统架构：Vue 前端、FastAPI 后端、Supabase 团队权限、`codex_use` 执行桥、Codex workspace。
+- 核心流程：创建任务、上传数据、生成方案、人工确认、执行建模、报告预测、社区复用。
+- 关键成果：任务闭环、HITL、暂停恢复、真实产物展示、社区复用。
+- 问题反思：三端状态同步复杂、人工确认边界复杂、真实进度不能靠兜底值。
+- 后续迭代：多任务并发、异常恢复、报告预测增强、社区质量评价。
+
+PPT 中的人员分工页使用了占位姓名，正式提交前请替换为真实小组成员姓名。
+
+## 人员分工建议
+
+如果需要在验收 PPT 中填写人员分工，可以按角色归纳：
+
+| 角色 | 主要工作 |
+| --- | --- |
+| 前端负责人 | 创建任务、工作台、任务详情、人工确认、社区广场、交互样式 |
+| 后端负责人 | FastAPI 路由、任务状态机、团队鉴权、数据上传、运行快照 |
+| Codex 执行桥负责人 | `codex_use`、workspace 协议、线程恢复、暂停继续、token usage |
+| 测试与文档负责人 | 联调验证、README、验收 PPT、演示流程和问题记录 |
+
+正式汇报时建议把“成员A/B/C/D”替换为真实姓名，并补充每个人实际承担的模块。
+
+## 当前限制与后续迭代
+
+当前限制：
+
+- `codex_use` 仍以单活动任务模型为主，多任务并发需要重新设计。
 - 历史任务缺少 `output/token_usage.json` 时无法恢复真实 token usage。
-- 缺少 workspace、报告、指标、源码或预测入口时，系统应明确显示不可用。
-- 华为云部署信息没有在最近记忆中重新验证，部署前必须重新检查服务器、网络、密钥和线上 schema。
+- 缺少 workspace、报告、指标、源码或预测入口时，系统只能显示不可用。
+- 实际 Supabase schema 可能没有自动跟随仓库文件，需要部署时单独迁移。
+
+后续建议：
+
+- 设计任务队列和多 runner 管理，支持稳定并发。
+- 增强失败恢复、重试策略和错误提示。
+- 增强报告质量，包括实验对比、可解释性和复现步骤。
+- 强化预测输入合约校验和模型服务化能力。
+- 给社区方案增加版本、评分、审核和复用效果统计。
+- 完善部署脚本、环境检查和端到端验收脚本。
 
 ## 关键文档
 
 - `docs/current-memory.md`
 - `codex_use/current-memory.md`
+- `docs/requirements-coverage-matrix.md`
 - `supabase/schema.sql`
 
 ## 维护原则
 
-项目文档只保留当前仍然成立的事实。与当前代码、`docs/current-memory.md` 或 `codex_use/current-memory.md` 冲突的历史口径应直接更新或删除，不再保留多个过时版本。
+- 项目文档只保留当前仍然成立的事实。
+- 与当前代码、`docs/current-memory.md` 或 `codex_use/current-memory.md` 冲突的旧口径应更新或删除。
+- 不要恢复 React 主入口、MLZero/AutoGluon/AIDE 主执行链路、模型/数据/工作流广场、业务/技术双报告等已废弃内容。
+- 修改代码前应先明确需求、列出计划并确认范围。

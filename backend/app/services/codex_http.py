@@ -141,6 +141,7 @@ class CodexBackendClient:
 
 def task_description(task: TaskRecord) -> str:
     parts = [task.description.strip()]
+    structured = task.structured_requirements if isinstance(task.structured_requirements, dict) else {}
     target_columns = target_columns_from_task(task)
     if target_columns:
         parts.append(f"目标列：{target_columns_display(target_columns)}")
@@ -148,6 +149,35 @@ def task_description(task: TaskRecord) -> str:
             parts.append("目标模式：multi-target / multi-output")
     if task.problem_type:
         parts.append(f"任务类型：{task.problem_type}")
+    metric_name = structured.get("metric_name")
+    if isinstance(metric_name, str) and metric_name.strip():
+        parts.append(f"主指标候选：{metric_name.strip()}")
+    acceptance = structured.get("acceptance")
+    if isinstance(acceptance, dict):
+        acceptance_parts: list[str] = []
+        primary_metric = acceptance.get("primary_metric")
+        threshold = acceptance.get("threshold")
+        direction = acceptance.get("higher_is_better")
+        if isinstance(primary_metric, str) and primary_metric.strip():
+            acceptance_parts.append(f"主指标 {primary_metric.strip()}")
+        if threshold is not None:
+            acceptance_parts.append(f"成功阈值 {threshold}")
+        if isinstance(direction, bool):
+            acceptance_parts.append("越高越好" if direction else "越低越好")
+        if acceptance_parts:
+            parts.append("用户成功标准：" + "，".join(acceptance_parts))
+    improvement_policy = structured.get("improvement_policy")
+    if isinstance(improvement_policy, dict):
+        max_rounds = improvement_policy.get("max_auto_improvement_rounds")
+        if max_rounds is not None:
+            parts.append(f"最大自动改进轮数：{max_rounds}")
+    model_selection = structured.get("initial_model_selection")
+    if isinstance(model_selection, dict):
+        models = model_selection.get("planned_models_or_methods")
+        if isinstance(models, list):
+            model_names = [str(model).strip() for model in models if str(model).strip()]
+            if model_names:
+                parts.append(f"第一轮候选模型：{', '.join(model_names)}")
     return "\n".join(part for part in parts if part)
 
 

@@ -76,11 +76,42 @@ def list_tasks(
             limit=20 if runtime_only else 100,
             allow_stale_cache=True,
         )
+        items = _repair_failed_codex_list_items(items, task_store, team_access)
     except (RuntimeError, PermissionError, ConnectionError) as exc:
         raise_store_http_error(exc)
     if compact:
         return TaskListResponse(items=[_compact_task_summary(item) for item in items])
     return TaskListResponse(items=[_task_summary(item) for item in items])
+
+
+def _repair_failed_codex_list_items(
+    items: list[TaskRecord],
+    task_store: object,
+    team_access: TeamAccessContext,
+) -> list[TaskRecord]:
+    if not any(_needs_failed_codex_list_repair(item) for item in items):
+        return items
+    settings = get_settings()
+    repaired_items: list[TaskRecord] = []
+    for item in items:
+        if not _needs_failed_codex_list_repair(item):
+            repaired_items.append(item)
+            continue
+        repaired, _artifacts = sync_codex_task_state(
+            item,
+            settings,
+            task_store=task_store,
+            access_token=team_access.access_token,
+            fail_on_error=False,
+        )
+        repaired_items.append(repaired)
+    return repaired_items
+
+
+def _needs_failed_codex_list_repair(task: TaskRecord) -> bool:
+    if task.status != TaskStatus.failed:
+        return False
+    return bool(task.codex_workspace_path or task.codex_status)
 
 
 def _task_summary(task: TaskRecord) -> TaskSummaryRecord:

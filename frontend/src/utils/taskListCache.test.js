@@ -4,6 +4,7 @@ import {
   readTaskListCache,
   clearTaskListCache,
   taskListCacheKey,
+  taskListNeedsFailureRefresh,
   writeTaskListCache,
 } from './taskListCache'
 
@@ -60,6 +61,18 @@ describe('task list cache', () => {
     writeTaskListCache(context, [{ task_id: 'task-1' }], 0)
 
     expect(readTaskListCache(context, 25 * 60 * 60 * 1000)).toBeNull()
+  })
+
+  it('marks failed rows as requiring authoritative refresh', () => {
+    expect(taskListNeedsFailureRefresh([
+      { task_id: 'task-1', status: 'failed', codex_status: 'waiting_improvement_review' },
+    ])).toBe(true)
+    expect(taskListNeedsFailureRefresh([
+      { task_id: 'task-1', status: 'failed' },
+    ])).toBe(true)
+    expect(taskListNeedsFailureRefresh([
+      { task_id: 'task-2', status: 'completed', codex_status: 'completed' },
+    ])).toBe(false)
   })
 
   it('clears the current task list cache entry', () => {

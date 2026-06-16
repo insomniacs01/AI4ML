@@ -251,10 +251,16 @@ async function load(options = {}) {
   loading.value = true
   error.value = ''
   try {
-    const detail = await getTaskRuntimeSnapshot(props.taskId, {
+    let detail = await getTaskRuntimeSnapshot(props.taskId, {
       sync: options.sync === true,
       taskDetail: 'summary',
     })
+    if (!options.sync && shouldRepairFailedCodexTask(detail.task || detail)) {
+      detail = await getTaskRuntimeSnapshot(props.taskId, {
+        sync: true,
+        taskDetail: 'summary',
+      })
+    }
     task.value = detail.task || detail
     taskRun.value = detail.task_run || null
     reconcileActiveTaskAfterSnapshot()
@@ -282,7 +288,17 @@ async function load(options = {}) {
 }
 
 function refreshTaskDetail() {
-  load({ sync: !isFinished.value })
+  load({ sync: !isFinished.value || shouldRepairFailedCodexTask(task.value) })
+}
+
+function shouldRepairFailedCodexTask(record) {
+  if (!record || record.status !== 'failed') return false
+  return Boolean(
+    record.executor_type === 'codex'
+    || record.codex_workspace_path
+    || record.codex_status
+    || record.structured_requirements?.executor_type === 'codex'
+  )
 }
 
 async function refreshRuntimeSnapshot(options = {}) {

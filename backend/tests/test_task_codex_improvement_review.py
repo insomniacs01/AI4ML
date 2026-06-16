@@ -75,3 +75,16 @@ def test_has_codex_improvement_review_detects_status_text_and_file_payload() -> 
     assert has_codex_improvement_review({"improvement_plan_file": {"exists": True}}) is True
     assert has_codex_improvement_review({"progress": {"status": "running"}}) is False
     assert has_codex_improvement_review(None) is False
+
+
+def test_has_codex_improvement_review_ignores_stop_and_report_result() -> None:
+    assert has_codex_improvement_review(
+        {
+            "progress": {"status": "partial", "current_step": "stop_and_report_completed"},
+            "improvement_plan": "Historical improvement options.",
+            "improvement_plan_file": {"exists": True},
+            "report": {"exists": True},
+            "predict": {"exists": True},
+            "metrics": {"acceptance": {"passed": False}},
+        }
+    ) is False

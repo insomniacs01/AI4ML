@@ -717,6 +717,11 @@ describe('api client compatibility helpers', () => {
     formData.append('requirement', 'Train a compact multi-output regressor')
     formData.append('target_column', 'Y1,Y2')
     formData.append('task_type', 'regression')
+    formData.append('metric', 'mean_rmse')
+    formData.append('success_threshold', '6')
+    formData.append('success_direction', 'lower')
+    formData.append('max_improvement_rounds', '5')
+    formData.append('first_round_models', 'Ridge, RandomForestRegressor')
     formData.append('time_budget_s', '20')
     formData.append('file', file)
 
@@ -733,6 +738,21 @@ describe('api client compatibility helpers', () => {
         expect(body.structured_requirements.target_definition).toEqual({
           target_mode: 'multi_target',
           target_columns: ['Y1', 'Y2'],
+          source: 'user_input',
+        })
+        expect(body.structured_requirements.metric_name).toBe('mean_rmse')
+        expect(body.structured_requirements.acceptance).toEqual({
+          source: 'user_input',
+          primary_metric: 'mean_rmse',
+          threshold: 6,
+          higher_is_better: false,
+        })
+        expect(body.structured_requirements.improvement_policy).toEqual({
+          max_auto_improvement_rounds: 5,
+          source: 'user_input',
+        })
+        expect(body.structured_requirements.initial_model_selection).toEqual({
+          planned_models_or_methods: ['Ridge', 'RandomForestRegressor'],
           source: 'user_input',
         })
         return jsonResponse(baseTask({ id: 'task-upload', status: 'draft', name: body.name }), 201)
@@ -812,11 +832,67 @@ describe('api client compatibility helpers', () => {
     })
   })
 
+  it('keeps Codex plan approval steps visible while the request is being synced', async () => {
+    localStorage.setItem('ai4ml-active-team-id', 'team-1')
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const text = String(url)
+      if (text.includes('/tasks/task-1/runtime-snapshot')) {
+        return jsonResponse({
+          task: baseTask({ status: 'paused_for_review' }),
+          task_run: {
+            open_request_count: 0,
+            codex: {
+              status: 'waiting_plan_approval',
+              progress: { status: 'waiting_plan_approval', current_step: 'waiting_plan_approval' },
+              steps: [{ id: 'waiting_plan_approval', status: 'waiting_human' }],
+            },
+          },
+        })
+      }
+      throw new Error(`unexpected fetch: ${text}`)
+    })
+
+    const snapshot = await getTaskRuntimeSnapshot('task-1')
+
+    expect(snapshot.task_run.steps[0]).toMatchObject({
+      id: 'waiting_plan_approval',
+      status: 'waiting_human',
+    })
+  })
+
+  it('keeps Codex improvement review steps visible while the request is being synced', async () => {
+    localStorage.setItem('ai4ml-active-team-id', 'team-1')
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const text = String(url)
+      if (text.includes('/tasks/task-1/runtime-snapshot')) {
+        return jsonResponse({
+          task: baseTask({ status: 'paused_for_review' }),
+          task_run: {
+            open_request_count: 0,
+            codex: {
+              status: 'waiting_improvement_review',
+              progress: { status: 'waiting_improvement_review', current_step: 'waiting_improvement_review' },
+              steps: [{ id: 'waiting_improvement_review', status: 'waiting_human' }],
+            },
+          },
+        })
+      }
+      throw new Error(`unexpected fetch: ${text}`)
+    })
+
+    const snapshot = await getTaskRuntimeSnapshot('task-1')
+
+    expect(snapshot.task_run.steps[0]).toMatchObject({
+      id: 'waiting_improvement_review',
+      status: 'waiting_human',
+    })
+  })
+
   it('continues a human-gated task after the final approval', async () => {
     localStorage.setItem('ai4ml-active-team-id', 'team-1')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       const text = String(url)
-      if (text.endsWith('/api/teams/team-1/tasks/task-1/human-collaboration')) {
+      if (text.endsWith('/api/teams/team-1/tasks/task-1/human-collaboration?sync=true')) {
         return jsonResponse({
           task: baseTask({ status: 'waiting_human' }),
           open_request_count: 1,
@@ -853,7 +929,7 @@ describe('api client compatibility helpers', () => {
     localStorage.setItem('ai4ml-active-team-id', 'team-1')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       const text = String(url)
-      if (text.endsWith('/api/teams/team-1/tasks/task-1/human-collaboration')) {
+      if (text.endsWith('/api/teams/team-1/tasks/task-1/human-collaboration?sync=true')) {
         return jsonResponse({
           task: baseTask({ status: 'paused_for_review' }),
           open_request_count: 1,

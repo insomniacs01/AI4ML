@@ -9,6 +9,7 @@ from backend.app.models.task import (
     WorkflowStageStatus,
 )
 from backend.app.services.codex_backend import codex_workspace_plan_path
+from backend.app.services.codex_artifact_state import has_stop_and_report_codex_artifacts
 from backend.app.services.task_run_artifacts import (
     collect_stage_artifacts_by_stage,
     read_run_log_excerpt,
@@ -24,6 +25,7 @@ from backend.app.services.task_runtime_codex_stage_projection import (
     codex_improvement_gate_stage_projection,
     codex_plan_gate_stage_projection,
     codex_running_stage_projection,
+    stop_and_report_codex_stage_projection,
     codex_user_paused_stage_projection,
     completed_codex_stage_projection,
 )
@@ -58,8 +60,20 @@ def record_codex_status_stages(task: TaskRecord, team_access: TeamAccessContext,
     if is_human_waiting_task(task):
         record_codex_plan_gate_stages(task, team_access, workspace_path=workspace_path, plan_path=plan_path)
         return
+    if task.status == TaskStatus.completed and has_stop_and_report_codex_artifacts(artifacts):
+        _record_codex_stage_projection(
+            task,
+            team_access,
+            stop_and_report_codex_stage_projection(
+                workspace_path=workspace_path,
+                artifact_refs_by_stage=collect_stage_artifacts_by_stage(workspace_path),
+                log_excerpt=read_run_log_excerpt(workspace_path),
+            ),
+        )
+        return
     if task.status == TaskStatus.completed and task.last_run:
         record_completed_codex_stages(task, team_access, workspace_path=workspace_path)
+        return
 
 
 def is_human_waiting_task(task: TaskRecord) -> bool:

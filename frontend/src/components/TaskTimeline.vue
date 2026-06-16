@@ -27,6 +27,22 @@ function statusLabel(status) {
   }[status] || status || '等待'
 }
 
+function stepTitle(step) {
+  return step?.title || step?.name || step?.node || step?.agent_role || '运行步骤'
+}
+
+function stepDescription(step) {
+  if (step?.message || step?.summary) return step.message || step.summary
+  return {
+    completed: '该阶段已完成，相关状态已写入运行记录。',
+    failed: '该阶段执行失败，请查看运行记录或任务详情。',
+    cancelled: '该阶段已取消，后续执行已停止。',
+    running: '正在执行该阶段，等待产物和状态写入。',
+    waiting_human: '需要处理人工确认后才能继续执行。',
+    pending: '等待前置阶段完成。',
+  }[step?.status] || '等待前置阶段完成。'
+}
+
 function shortUrl(url) {
   const text = String(url || '')
   return text.length > 42 ? `${text.slice(0, 39)}...` : text
@@ -64,11 +80,13 @@ function activityKey(item, index) {
         </div>
         <div class="agent-body">
           <div class="agent-head">
-            <strong>{{ step.agent_role || step.title || step.name || step.node || '运行步骤' }}</strong>
+            <div class="agent-title-block">
+              <strong>{{ stepTitle(step) }}</strong>
+              <small v-if="step.agent_role">{{ step.agent_role }}</small>
+            </div>
             <span>{{ statusLabel(step.status) }}</span>
           </div>
-          <h4>{{ step.title || step.name || '运行步骤' }}</h4>
-          <p>{{ step.message || step.summary || '等待执行' }}</p>
+          <p>{{ stepDescription(step) }}</p>
           <div v-if="!compact && step.activity_items?.length" class="agent-activity-grid">
             <div
               v-for="(item, activityIndex) in step.activity_items.slice(0, 6)"

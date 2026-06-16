@@ -11,10 +11,22 @@ import { optionalRequest, request } from '@/api/request'
 import { getActiveTeamHint, getCachedUser, requireSession } from '@/api/session'
 import { getModelDisplayName } from '@/utils/modelProfile'
 import { pickActiveTask, pickBlockingRuntimeTask, taskIdOf } from '@/utils/taskRecords'
-import { clearTaskListCache, isTaskListCacheFresh, readTaskListCache, writeTaskListCache } from '@/utils/taskListCache'
+import {
+  clearTaskListCache,
+  isTaskListCacheFresh,
+  readTaskListCache,
+  taskListNeedsFailureRefresh,
+  writeTaskListCache,
+} from '@/utils/taskListCache'
 
 let pendingDatasetFile = null
 let pendingDatasetMeta = null
+const CODEX_PLAN_APPROVAL_STATUSES = new Set(['waiting_plan_approval', 'plan_ready', 'awaiting_plan_approval'])
+const CODEX_IMPROVEMENT_REVIEW_STATUSES = new Set([
+  'waiting_improvement_review',
+  'improvement_review',
+  'waiting_improvement_approval',
+])
 const RUNTIME_TASK_CACHE_PREFIX = 'ai4ml-runtime-task-list-cache-v1'
 const RUNTIME_TASK_CACHE_TTL_MS = 3000
 const pendingTaskListRequests = new Map()
@@ -86,6 +98,16 @@ function targetColumnsFromText(value) {
     .filter((item, index, list) => list.indexOf(item) === index)
 }
 
+function positiveNumberFromText(value) {
+  const parsed = Number(String(value || '').trim())
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function positiveIntegerFromText(value) {
+  const parsed = Number.parseInt(String(value || '').trim(), 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
 function isFileValue(value) {
   return typeof File !== 'undefined' && value instanceof File
 }
@@ -118,6 +140,10 @@ function createTaskPayloadFromForm(formData) {
   const targetColumns = targetColumnsFromText(targetColumn)
   const taskType = readForm(formData, 'task_type')
   const metricName = readForm(formData, 'metric')
+  const successThreshold = positiveNumberFromText(readForm(formData, 'success_threshold'))
+  const successDirection = readForm(formData, 'success_direction')
+  const maxImprovementRounds = positiveIntegerFromText(readForm(formData, 'max_improvement_rounds'))
+  const firstRoundModels = targetColumnsFromText(readForm(formData, 'first_round_models'))
   const name = requirement.length > 36 ? `${requirement.slice(0, 36)}...` : requirement
   const selectedPlanText = readForm(formData, 'selected_plan_text')
   const selectedPlanId = readForm(formData, 'selected_plan_id')
@@ -141,6 +167,26 @@ function createTaskPayloadFromForm(formData) {
     }
   }
   if (metricName) structuredRequirements.metric_name = metricName
+  if (successThreshold !== null || successDirection || metricName) {
+    const acceptance = { source: successThreshold !== null || successDirection ? 'user_input' : 'metric_hint' }
+    if (metricName) acceptance.primary_metric = metricName
+    if (successThreshold !== null) acceptance.threshold = successThreshold
+    if (successDirection === 'lower') acceptance.higher_is_better = false
+    if (successDirection === 'higher') acceptance.higher_is_better = true
+    structuredRequirements.acceptance = acceptance
+  }
+  if (maxImprovementRounds !== null) {
+    structuredRequirements.improvement_policy = {
+      max_auto_improvement_rounds: maxImprovementRounds,
+      source: 'user_input',
+    }
+  }
+  if (firstRoundModels.length) {
+    structuredRequirements.initial_model_selection = {
+      planned_models_or_methods: firstRoundModels,
+      source: 'user_input',
+    }
+  }
   return {
     name: name || '智能建模实验',
     description: requirement,
@@ -164,7 +210,11 @@ export async function getTasks(options = {}) {
   }
   if (!options.runtimeOnly && !options.forceRefresh) {
     const cached = readTaskListCache(context)
-    if (cached && isTaskListCacheFresh(cached.cachedAt)) return { items: cached.tasks || [] }
+    if (
+      cached
+      && isTaskListCacheFresh(cached.cachedAt)
+      && !taskListNeedsFailureRefresh(cached.tasks)
+    ) return { items: cached.tasks || [] }
   }
   const params = new URLSearchParams()
   if (options.runtimeOnly) params.set('runtime_only', 'true')
@@ -277,10 +327,72 @@ export async function getTaskRuntimeSnapshot(taskId, options = {}) {
 
 function suppressClosedHumanSteps(taskRun, steps) {
   const hasExplicitOpenCount = Object.prototype.hasOwnProperty.call(taskRun || {}, 'open_request_count')
-  if (!hasExplicitOpenCount || Number(taskRun.open_request_count || 0) > 0) return steps
+  if (
+    !hasExplicitOpenCount
+    || Number(taskRun.open_request_count || 0) > 0
+    || taskRunHasPlanApprovalState(taskRun)
+    || taskRunHasImprovementReviewState(taskRun)
+  ) return steps
   return steps.map((step) => (
     step?.status === 'waiting_human' ? { ...step, status: 'pending' } : step
   ))
+}
+
+function taskRunHasPlanApprovalState(taskRun) {
+  const values = [
+    taskRun?.progress_status,
+    taskRun?.progress?.status,
+    taskRun?.progress?.current_step,
+    taskRun?.codex?.status,
+    taskRun?.codex?.progress?.status,
+    taskRun?.codex?.progress?.current_step,
+  ]
+  if (values.some(isPlanApprovalStatus)) return true
+  return taskRunSteps(taskRun).some(stepIsPlanApprovalGate)
+}
+
+function taskRunSteps(taskRun) {
+  return [
+    ...(Array.isArray(taskRun?.steps) ? taskRun.steps : []),
+    ...(Array.isArray(taskRun?.codex?.steps) ? taskRun.codex.steps : []),
+    ...(Array.isArray(taskRun?.progress?.steps) ? taskRun.progress.steps : []),
+    ...(Array.isArray(taskRun?.codex?.progress?.steps) ? taskRun.codex.progress.steps : []),
+  ]
+}
+
+function taskRunHasImprovementReviewState(taskRun) {
+  const values = [
+    taskRun?.progress_status,
+    taskRun?.progress?.status,
+    taskRun?.progress?.current_step,
+    taskRun?.codex?.status,
+    taskRun?.codex?.progress?.status,
+    taskRun?.codex?.progress?.current_step,
+  ]
+  if (values.some(isImprovementReviewStatus)) return true
+  return taskRunSteps(taskRun).some(stepIsImprovementReviewGate)
+}
+
+function stepIsPlanApprovalGate(step) {
+  if (!step || typeof step !== 'object') return false
+  if (isPlanApprovalStatus(step.status)) return true
+  if (String(step.status || '').trim().toLowerCase() !== 'waiting_human') return false
+  return [step.id, step.name, step.node].some(isPlanApprovalStatus)
+}
+
+function stepIsImprovementReviewGate(step) {
+  if (!step || typeof step !== 'object') return false
+  if (isImprovementReviewStatus(step.status)) return true
+  if (String(step.status || '').trim().toLowerCase() !== 'waiting_human') return false
+  return [step.id, step.name, step.node].some(isImprovementReviewStatus)
+}
+
+function isPlanApprovalStatus(value) {
+  return CODEX_PLAN_APPROVAL_STATUSES.has(String(value || '').trim().toLowerCase())
+}
+
+function isImprovementReviewStatus(value) {
+  return CODEX_IMPROVEMENT_REVIEW_STATUSES.has(String(value || '').trim().toLowerCase())
 }
 
 export async function getCodexPlan(taskId) {

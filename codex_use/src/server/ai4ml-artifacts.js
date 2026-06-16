@@ -89,7 +89,8 @@ export async function initializeAi4mlWorkspace(options) {
     input_interpretation_rules: [
       'selected data_path 和 user_task_description 是本任务的权威输入。',
       '必须先判断路径类型和内容结构，再选择读取方式。',
-      '如果目标、任务类型、指标或预测范围未完整指定，必须基于数据和任务描述提出可执行默认方案，在 output/plan.md 标为“默认假设”，并等待用户确认。'
+      '如果目标、任务类型、指标、成功阈值、最大改进轮数、第一轮候选模型或预测范围未完整指定，必须基于数据和任务描述提出可执行默认方案，在 output/plan.md 标为“默认假设”，并等待用户确认。',
+      '成功标准必须来自用户输入或 AI 推荐并经人工确认的阈值/规则；baseline 只能作为诊断参考。'
     ],
     created_at: now
   });
@@ -342,11 +343,40 @@ export function isCompletedAi4mlArtifacts(artifacts) {
     return false;
   }
 
+  if (hasFailedAi4mlAcceptance(artifacts)) {
+    return false;
+  }
+
   const progress = artifacts.progress && typeof artifacts.progress === 'object'
     ? artifacts.progress
     : {};
 
   return progress.status === 'completed' || Boolean(artifacts.report?.exists && artifacts.predict?.exists);
+}
+
+export function hasFailedAi4mlAcceptance(artifacts) {
+  const metrics = artifacts?.metrics && typeof artifacts.metrics === 'object'
+    ? artifacts.metrics
+    : null;
+  if (!metrics) {
+    return false;
+  }
+
+  const acceptance = metrics.acceptance && typeof metrics.acceptance === 'object'
+    ? metrics.acceptance
+    : null;
+  if (acceptance && Object.prototype.hasOwnProperty.call(acceptance, 'passed')) {
+    if (acceptance.passed === false) {
+      return true;
+    }
+  }
+
+  const resultChecks = Array.isArray(metrics.result_checks) ? metrics.result_checks : [];
+  return resultChecks.some((check) => (
+    check
+    && typeof check === 'object'
+    && String(check.status || '').toLowerCase() === 'failed'
+  ));
 }
 
 async function collectDataPathEntries(root, currentPath, entries, depth) {
@@ -630,6 +660,9 @@ function buildProjectRules() {
 - 如果路径是文件，必须基于扩展名、文件签名、内容采样和可用 library 选择读取方式。
 - 任务目标可能是单列、多列、多指标、派生目标、非列目标、排序目标、聚类组、缺失值补全、预测区间、报告分析目标或混合流程。
 - 计划必须是完整可执行方案，不是问题清单。
-- 如果用户没有完整指定目标定义、任务类型、metric、预测范围或业务目标，Codex 必须从数据和任务描述中推断合理默认值，明确标为“默认假设”，并围绕这些默认值制定计划。
+- 如果用户没有完整指定目标定义、任务类型、metric、成功阈值、最大改进轮数、第一轮候选模型、预测范围或业务目标，Codex 必须从数据和任务描述中推断合理默认值，明确标为“默认假设”，并围绕这些默认值制定计划。
+- 建模任务执行前必须有确认后的成功标准。成功标准来自用户输入，或来自 Codex 在计划中推荐并由用户确认的阈值/规则。
+- Baseline 只能作为诊断参考，不能替代成功阈值或作为任务成功标准。
+- \`output/run_strategy.json.execution_limits.planned_models_or_methods\` 表示第一轮人工确认的候选模型或方法集合。未确认的新模型、调低成功阈值、扩大调参或改变验证策略，都必须通过 \`output/improvement_plan.md\` 再次请求人工确认。
 `;
 }

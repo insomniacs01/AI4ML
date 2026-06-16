@@ -17,6 +17,7 @@ export class AppServerRunner extends AppServerRpcClient {
     this.threadId = undefined;
     this.currentTurnId = undefined;
     this.startingTurn = false;
+    this.promptStarting = false;
     this.initialized = false;
     this.initializing = false;
     this.nextRequestId = 1;
@@ -46,6 +47,7 @@ export class AppServerRunner extends AppServerRpcClient {
     this.threadId = undefined;
     this.currentTurnId = undefined;
     this.startingTurn = false;
+    this.promptStarting = false;
     this.initialized = false;
     this.initializing = false;
     this.nextRequestId = 1;
@@ -97,6 +99,7 @@ export class AppServerRunner extends AppServerRpcClient {
       this.currentProcess = undefined;
       this.currentTurnId = undefined;
       this.startingTurn = false;
+      this.promptStarting = false;
       this.currentTurnStartedAt = undefined;
     });
 
@@ -122,6 +125,7 @@ export class AppServerRunner extends AppServerRpcClient {
       this.currentProcess = undefined;
       this.currentTurnId = undefined;
       this.startingTurn = false;
+      this.promptStarting = false;
       this.currentTurnStartedAt = undefined;
       this.initialized = false;
       this.initializing = false;
@@ -177,37 +181,42 @@ export class AppServerRunner extends AppServerRpcClient {
       this.start();
     }
 
-    if (!this.initialized) {
-      this.send({
-        type: 'activity',
-        label: 'Starting',
-        status: 'pending'
-      });
-      await this.initializationPromise;
-    }
-
-    if (this.currentTurnId || this.startingTurn) {
-      if (options.queueIfBusy) {
-        this.queuePrompt(promptText);
+    this.promptStarting = true;
+    try {
+      if (!this.initialized) {
         this.send({
           type: 'activity',
-          label: 'Queued',
+          label: 'Starting',
           status: 'pending'
         });
-        return {
-          threadId: this.threadId,
-          turnId: this.currentTurnId,
-          queued: true
-        };
+        await this.initializationPromise;
       }
-      this.send({
-        type: 'error',
-        message: 'Codex is already running.'
-      });
-      return { threadId: this.threadId, turnId: this.currentTurnId, busy: true };
-    }
 
-    return this.startTurn(promptText);
+      if (this.currentTurnId || this.startingTurn) {
+        if (options.queueIfBusy) {
+          this.queuePrompt(promptText);
+          this.send({
+            type: 'activity',
+            label: 'Queued',
+            status: 'pending'
+          });
+          return {
+            threadId: this.threadId,
+            turnId: this.currentTurnId,
+            queued: true
+          };
+        }
+        this.send({
+          type: 'error',
+          message: 'Codex is already running.'
+        });
+        return { threadId: this.threadId, turnId: this.currentTurnId, busy: true };
+      }
+
+      return this.startTurn(promptText);
+    } finally {
+      this.promptStarting = false;
+    }
   }
 
   queuePrompt(promptText) {
@@ -222,7 +231,7 @@ export class AppServerRunner extends AppServerRpcClient {
   }
 
   hasActiveOrQueuedTurn() {
-    return Boolean(this.currentTurnId || this.startingTurn || this.hasQueuedPrompts());
+    return Boolean(this.currentTurnId || this.startingTurn || this.promptStarting || this.hasQueuedPrompts());
   }
 
   async startNextQueuedPrompt() {

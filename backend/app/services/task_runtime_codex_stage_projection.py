@@ -98,7 +98,7 @@ def codex_improvement_gate_stage_projection(
             WorkflowStage.data_analysis: "Codex 已完成数据理解和计划确认。",
             WorkflowStage.feature_engineering: "Codex 已完成当前策略内的数据处理或核心分析。",
             WorkflowStage.model_selection: "Codex 已完成当前策略内的候选模型或方法比较。",
-            WorkflowStage.training_validation: "当前结果未满足验收规则，等待用户选择继续改进或停止并生成报告。",
+            WorkflowStage.training_validation: "当前结果未满足验收规则，等待用户选择继续改进或按当前结果生成报告。",
             WorkflowStage.report_generation: "等待用户确认后生成最终报告。",
         },
         artifact_refs=_artifact_refs(workspace_path, improvement_plan_path),
@@ -124,6 +124,31 @@ def completed_codex_stage_projection(
             WorkflowStage.model_selection: f"Codex 已选择最终模型：{last_run.best_model}。",
             WorkflowStage.training_validation: f"Codex 验证完成：{last_run.metric_name} = {last_run.metric_value:.6g}。",
             WorkflowStage.report_generation: "Codex 已生成最终报告。",
+        },
+        artifact_refs=_artifact_refs(workspace_path),
+        artifact_refs_by_stage=artifact_refs_by_stage,
+        log_excerpt_by_stage={stage: log_excerpt or "" for stage in PRIMARY_WORKFLOW_STAGES},
+    )
+
+
+def stop_and_report_codex_stage_projection(
+    *,
+    workspace_path: str | None,
+    artifact_refs_by_stage: dict[WorkflowStage, list[str] | dict] | None,
+    log_excerpt: str | None,
+) -> CodexStageProjection:
+    return CodexStageProjection(
+        status_by_stage={
+            WorkflowStage.feature_engineering: WorkflowStageStatus.completed,
+            WorkflowStage.model_selection: WorkflowStageStatus.completed,
+            WorkflowStage.training_validation: WorkflowStageStatus.completed,
+            WorkflowStage.report_generation: WorkflowStageStatus.completed,
+        },
+        summary_by_stage={
+            WorkflowStage.feature_engineering: "Codex 已完成当前策略内的数据处理或核心分析。",
+            WorkflowStage.model_selection: "Codex 已完成当前策略内的候选模型或方法比较。",
+            WorkflowStage.training_validation: "Codex 已按用户选择停止继续改进，并生成当前结果报告。",
+            WorkflowStage.report_generation: "Codex 已生成当前结果报告。",
         },
         artifact_refs=_artifact_refs(workspace_path),
         artifact_refs_by_stage=artifact_refs_by_stage,

@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 from backend.app.models.task import TaskRecord, TaskStatus
-from backend.app.services.codex_artifact_state import has_completed_codex_artifacts
+from backend.app.services.codex_artifact_state import (
+    has_completed_codex_artifacts,
+    has_failed_codex_acceptance,
+    has_stop_and_report_codex_artifacts,
+)
 from backend.app.services.codex_common import CODEX_FAILED_STATUSES
 
 
@@ -19,6 +23,17 @@ def codex_progress_percent(
     codex_status_value: str,
     artifacts: dict[str, Any],
 ) -> ProgressPercentResult:
+    if has_stop_and_report_codex_artifacts(artifacts):
+        return ProgressPercentResult(100, "completed", None)
+    if has_failed_codex_acceptance(artifacts):
+        percent = _explicit_progress_percent(progress)
+        if percent is not None:
+            source = str(
+                progress.get("percent_source")
+                or ("progress_json_percent" if "percent" in progress else "progress_json_progress_percent")
+            )
+            return ProgressPercentResult(min(99, max(0, percent)), source, None)
+        return ProgressPercentResult(None, None, _progress_unavailable_reason(task, progress, artifacts))
     if codex_status_value == "completed" or task.status == TaskStatus.completed or has_completed_codex_artifacts(artifacts):
         return ProgressPercentResult(100, "completed", None)
     if task.status in {TaskStatus.draft, TaskStatus.uploaded, TaskStatus.planning}:

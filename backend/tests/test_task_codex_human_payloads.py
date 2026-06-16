@@ -34,7 +34,7 @@ def test_build_codex_plan_approval_payload_includes_plan_and_artifacts() -> None
     assert payload == {
         "request_type": "codex_plan_approval",
         "title": "确认 Codex 建模计划",
-        "summary": "Codex 已写入 output/plan.md。确认后将按该计划继续执行训练、验证和交付。",
+        "summary": "Codex 已写入 output/plan.md。请确认预测目标、成功阈值、最大改进轮数和第一轮候选模型；确认后将按该计划继续执行训练、验证和交付。",
         "suggested_action": "确认并继续 Codex 执行。",
         "plan_text": "Train and report.",
         "artifact_paths": ["workspace/output/plan.md", "workspace"],
@@ -52,6 +52,22 @@ def test_build_codex_plan_approval_payload_filters_empty_artifacts() -> None:
     assert payload["artifact_paths"] == []
 
 
+def test_build_codex_plan_approval_payload_includes_run_strategy_when_available() -> None:
+    run_strategy = {
+        "execution_limits": {"planned_models_or_methods": ["Ridge"]},
+        "acceptance": {"primary_metric": "rmse", "threshold": 1.0, "higher_is_better": False},
+    }
+
+    payload = build_codex_plan_approval_payload(
+        _task(),
+        plan_path="workspace/output/plan.md",
+        plan_text="Plan.",
+        run_strategy=run_strategy,
+    )
+
+    assert payload["run_strategy"] == run_strategy
+
+
 def test_build_codex_improvement_review_payload_includes_options_and_advisor_diagnosis() -> None:
     payload = build_codex_improvement_review_payload(
         _task(),
@@ -67,7 +83,7 @@ def test_build_codex_improvement_review_payload_includes_options_and_advisor_dia
     assert payload["checkpoint_mode"] == "codex_improvement_gate"
     assert payload["options"] == [
         {"id": "continue_improvement", "label": "继续改进"},
-        {"id": "stop_and_report", "label": "停止并生成报告"},
+        {"id": "stop_and_report", "label": "按当前结果生成报告"},
     ]
     assert payload["advisor_diagnosis"] == {"status": "needs_improvement"}
 

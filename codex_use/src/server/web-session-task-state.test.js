@@ -35,12 +35,14 @@ test('buildTaskStatePollTransition emits workspace readiness before requirements
   ]);
 });
 
-test('buildTaskStatePollTransition emits completion before plan events when report exists', () => {
+test('buildTaskStatePollTransition emits completion before plan events when accepted artifacts exist', () => {
   const transition = buildTaskStatePollTransition({
     workspace: { path: 'D:\\workspace\\ai4ml-2' },
     plan: '# plan',
     progress: { status: 'waiting_plan_approval' },
-    report: { exists: true, path: 'D:\\workspace\\ai4ml-2\\output\\report.md' }
+    metrics: { acceptance: { passed: true } },
+    report: { exists: true, path: 'D:\\workspace\\ai4ml-2\\output\\report.md' },
+    predict: { exists: true, path: 'D:\\workspace\\ai4ml-2\\output\\predict.py' }
   }, new Set(), {
     now: timestampSequence(2000)
   });
@@ -67,6 +69,27 @@ test('buildTaskStatePollTransition emits completion before plan events when repo
     label: 'Ready',
     status: 'online'
   });
+});
+
+test('buildTaskStatePollTransition does not complete artifacts that failed acceptance', () => {
+  const transition = buildTaskStatePollTransition({
+    workspace: { path: 'D:\\workspace\\ai4ml-failed' },
+    plan: '# plan',
+    progress: { status: 'completed' },
+    metrics: { acceptance: { passed: false } },
+    report: { exists: true, path: 'D:\\workspace\\ai4ml-failed\\output\\report.md' },
+    predict: { exists: true, path: 'D:\\workspace\\ai4ml-failed\\output\\predict.py' }
+  }, new Set(['workspace_ready']), {
+    now: timestampSequence(2500)
+  });
+
+  assert.equal(transition.taskCompleted, false);
+  assert.equal(transition.stopPolling, false);
+  assert.equal(transition.stopCompletedTaskTurn, false);
+  assert.deepEqual(transition.events.map((event) => event.type), [
+    'requirements_analysis_completed',
+    'plan_generation_started'
+  ]);
 });
 
 test('buildTaskStatePollTransition emits plan and approval events in one waiting poll', () => {

@@ -11,6 +11,7 @@ from backend.app.services.task_codex_human_requests import ensure_codex_improvem
 from backend.app.services.task_codex_improvement_review import has_codex_improvement_review
 from backend.app.services.task_codex_sync import sync_codex_task_state
 from backend.app.services.task_codex_token_ledger import sync_codex_token_ledger
+from backend.app.services.task_runtime_resume import codex_waiting_plan_approval
 
 
 logger = logging.getLogger(__name__)
@@ -41,21 +42,26 @@ def sync_codex_runtime_snapshot(
             task = pause_codex_task_for_quota(task_store, task, team_access)
             progress_response = build_codex_run_progress(task, settings)
         if progress_response.status == "blocked" and task.codex_status != "interrupted":
-            _ensure_codex_review_request(task, team_access, artifacts)
+            ensure_codex_review_request(task, team_access, artifacts, suppress_errors=True)
         return task, progress_response, codex_overview, artifacts
     except Exception as exc:  # noqa: BLE001
         raise TaskRuntimeSnapshotSyncError(f"Codex runtime snapshot sync failed: {exc}") from exc
 
 
-def _ensure_codex_review_request(
+def ensure_codex_review_request(
     task: TaskRecord,
     team_access: TeamAccessContext,
     artifacts: dict[str, Any],
+    *,
+    suppress_errors: bool = False,
 ) -> None:
     try:
+        progress = artifacts.get("progress") if isinstance(artifacts.get("progress"), dict) else {}
         if has_codex_improvement_review(artifacts):
             ensure_codex_improvement_request(task, team_access, artifacts=artifacts)
-        else:
+        elif codex_waiting_plan_approval(task, progress):
             ensure_codex_plan_request(task, team_access)
     except Exception as exc:  # noqa: BLE001
+        if not suppress_errors:
+            raise
         logger.warning("Could not sync Codex review request for task %s: %s", task.id, exc)

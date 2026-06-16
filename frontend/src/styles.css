@@ -2303,7 +2303,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   gap: 12px;
-  min-height: 108px;
+  min-height: 92px;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2366,11 +2366,6 @@ textarea:focus {
   align-items: center;
 }
 
-.agent-workbench.compact .agent-body h4 {
-  margin: 3px 0;
-  font-size: 15px;
-}
-
 .agent-workbench.compact .agent-body p {
   margin: 0;
   display: -webkit-box;
@@ -2401,11 +2396,27 @@ textarea:focus {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
 }
 
-.agent-head strong {
+.agent-title-block {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-title-block strong {
+  overflow: hidden;
   color: var(--ink);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-title-block small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .agent-head span,
@@ -2418,13 +2429,8 @@ textarea:focus {
   font-weight: 800;
 }
 
-.agent-body h4 {
-  margin: 8px 0 4px;
-  font-size: 15px;
-}
-
 .agent-body p {
-  margin: 0;
+  margin: 8px 0 0;
   color: var(--muted);
   line-height: 1.5;
 }
@@ -3968,6 +3974,114 @@ textarea:focus {
   margin: 4px 0 8px;
 }
 
+.workspace-run-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.workspace-run-summary-item {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 78%, transparent);
+  padding: 10px 12px;
+}
+
+.workspace-run-summary-item span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.workspace-run-summary-item strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-run-summary-item.urgent {
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--line));
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+}
+
+.workspace-run-summary-item.ok strong {
+  color: var(--success);
+}
+
+.workspace-activity-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.workspace-activity-step {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: color-mix(in srgb, var(--surface-soft) 60%, transparent);
+}
+
+.workspace-activity-step > span {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border: 2px solid #9ab0c2;
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.workspace-activity-step.completed > span {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.workspace-activity-step.running {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.workspace-activity-step.running > span,
+.workspace-activity-step.waiting_human > span {
+  border-color: var(--accent-strong);
+  background: var(--surface);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.workspace-activity-step.failed > span,
+.workspace-activity-step.cancelled > span {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.workspace-activity-step strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-activity-step small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .simple-progress {
   height: 12px;
   margin-top: 22px;
@@ -4061,17 +4175,16 @@ textarea:focus {
 }
 
 .task-side-nav > button,
-.task-side-nav > a,
-.side-step-list button {
+.task-side-nav > a {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   width: 100%;
   min-height: 40px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--surface-soft);
+  background: transparent;
   color: var(--text);
   padding: 0 12px;
   text-align: left;
@@ -4080,9 +4193,9 @@ textarea:focus {
 }
 
 .task-side-nav > button:hover,
-.task-side-nav > a:hover,
-.side-step-list button:hover {
+.task-side-nav > a:hover {
   border-color: var(--accent);
+  background: var(--surface-soft);
   color: var(--accent-strong);
 }
 
@@ -4106,10 +4219,25 @@ textarea:focus {
 }
 
 .side-step-list button {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
   min-height: 38px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+  color: var(--text);
   padding: 8px 10px;
   font-size: 13px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.side-step-list button:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .side-step-list button span {
@@ -4388,6 +4516,10 @@ button .spinning {
     position: static;
   }
 
+  .workspace-run-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
 }
 
 @media (max-width: 720px) {
@@ -4468,6 +4600,11 @@ button .spinning {
   }
 
   .agent-activity-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-run-summary,
+  .workspace-activity-strip {
     grid-template-columns: 1fr;
   }
 

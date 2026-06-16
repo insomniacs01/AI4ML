@@ -61,6 +61,11 @@ export function isTaskListCacheFresh(cachedAt, now = Date.now()) {
   return Number.isFinite(cachedAt) && now - cachedAt <= FRESH_CACHE_MS
 }
 
+export function taskListNeedsFailureRefresh(tasks) {
+  if (!Array.isArray(tasks)) return false
+  return tasks.some((task) => task?.status === 'failed')
+}
+
 function compactTaskRecord(task) {
   if (!task || typeof task !== 'object') return null
   const compact = { ...task }

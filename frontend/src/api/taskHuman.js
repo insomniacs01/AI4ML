@@ -29,7 +29,7 @@ function mapHumanRequest(requestRecord, task) {
 }
 
 export async function getHitl(taskId) {
-  const snapshot = await request(`/tasks/${taskId}/human-collaboration`)
+  const snapshot = await request(`/tasks/${taskId}/human-collaboration?sync=true`)
   const requestRecord = (snapshot.my_requests || snapshot.requests || []).find((item) => ['pending', 'open'].includes(item.status))
     || snapshot.requests?.find((item) => ['pending', 'open'].includes(item.status))
   const task = mapTask(snapshot.task)
@@ -49,7 +49,7 @@ export async function getHitl(taskId) {
 }
 
 export async function submitHitl(taskId, payload) {
-  const snapshot = await request(`/tasks/${taskId}/human-collaboration`)
+  const snapshot = await request(`/tasks/${taskId}/human-collaboration?sync=true`)
   const requestRecord = (snapshot.my_requests || snapshot.requests || []).find((item) => ['pending', 'open'].includes(item.status))
     || snapshot.requests?.find((item) => ['pending', 'open'].includes(item.status))
   if (!requestRecord?.id) throw new Error('There is no open human confirmation request.')

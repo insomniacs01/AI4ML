@@ -1,3 +1,5 @@
+import { isCompletedAi4mlArtifacts } from './ai4ml-artifacts.js';
+
 export function buildTaskStatePollTransition(artifacts, reportedTaskStates, options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const reportedStates = reportedTaskStates instanceof Set ? reportedTaskStates : new Set();
@@ -8,7 +10,6 @@ export function buildTaskStatePollTransition(artifacts, reportedTaskStates, opti
     ? artifacts.progress
     : null;
   const hasPlan = typeof artifacts?.plan === 'string' && artifacts.plan.trim().length > 0;
-  const reportExists = Boolean(artifacts?.report?.exists);
 
   const hasReported = (state) => reportedStates.has(state) || newlyReportedStates.includes(state);
   const markReported = (state) => {
@@ -40,7 +41,7 @@ export function buildTaskStatePollTransition(artifacts, reportedTaskStates, opti
     });
   }
 
-  if (reportExists || progress?.status === 'completed') {
+  if (isCompletedAi4mlArtifacts(artifacts)) {
     transition.taskCompleted = true;
     transition.stopPolling = true;
     transition.stopCompletedTaskTurn = true;

@@ -3,6 +3,36 @@ import test from 'node:test';
 
 import { AppServerRunner } from './app-server-runner.js';
 
+test('sendPrompt is active while waiting for app-server initialization', async () => {
+  const runner = new AppServerRunner(() => {});
+  const startedPrompts = [];
+  let resolveInitialization;
+
+  runner.currentProcess = {};
+  runner.initialized = false;
+  runner.initializationPromise = new Promise((resolve) => {
+    resolveInitialization = resolve;
+  });
+  runner.startTurn = async (promptText) => {
+    startedPrompts.push(promptText);
+    runner.currentTurnId = 'turn-1';
+    return { threadId: 'thread-1', turnId: 'turn-1' };
+  };
+
+  const promptResult = runner.sendPrompt('new task prompt');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(runner.hasActiveOrQueuedTurn(), true);
+
+  runner.initialized = true;
+  runner.threadId = 'thread-1';
+  resolveInitialization({ threadId: 'thread-1' });
+
+  assert.deepEqual(await promptResult, { threadId: 'thread-1', turnId: 'turn-1' });
+  assert.deepEqual(startedPrompts, ['new task prompt']);
+  assert.equal(runner.promptStarting, false);
+});
+
 test('sendPrompt queues an approval prompt while a turn is still running', async () => {
   const events = [];
   const startedPrompts = [];

@@ -143,6 +143,7 @@ def _run_codex_task(
         quota = _assert_quota_allows_action(team_access, action_name="Codex 继续运行")
         token_budget = quota_token_budget(quota)
         if async_start and background_tasks is not None:
+            task = _assert_improvement_decision_if_needed(task, payload, settings)
             return _queue_codex_continue_and_save(
                 task,
                 payload,
@@ -230,6 +231,23 @@ def _regenerate_codex_plan_and_save(
     saved_task = task_store.save_task(task, access_token=team_access.access_token)
     record_codex_running_stages(saved_task, team_access)
     return saved_task
+
+
+def _assert_improvement_decision_if_needed(
+    task: TaskRecord,
+    payload: TaskRunRequest,
+    settings: Settings,
+) -> TaskRecord:
+    if payload.improvement_decision:
+        return task
+    synced_task, artifacts = sync_codex_task_state(task, settings, fail_on_error=False)
+    progress = artifacts.get("progress") if isinstance(artifacts.get("progress"), dict) else {}
+    if codex_waiting_improvement_review(synced_task, progress):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前任务正在等待改进确认，请先选择继续改进或按当前结果生成报告。",
+        )
+    return synced_task
 
 
 def _save_codex_sync_result(
@@ -393,12 +411,17 @@ def _resume_interrupted_codex_task(
             token_budget=token_budget,
         )
     if codex_waiting_improvement_review(task, progress):
+        if not payload.improvement_decision:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="当前任务正在等待改进确认，请先选择继续改进或按当前结果生成报告。",
+            )
         return _resume_codex_task_and_save(
             task,
             team_access,
             settings,
             token_budget=token_budget,
-            improvement_decision=payload.improvement_decision or "continue_improvement",
+            improvement_decision=payload.improvement_decision,
         )
     if not codex_interrupted(task, progress):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前任务不是已暂停状态，不能按中断恢复。")

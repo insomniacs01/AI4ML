@@ -200,3 +200,51 @@ def test_run_task_async_continue_returns_before_codex_continue(
     assert queued_call.args[0] == action
     assert queued_call.args[1].status == TaskStatus.paused_for_review
     assert queued_call.args[2] == payload
+
+
+def test_run_task_async_resume_requires_improvement_decision_for_waiting_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _task()
+    task.status = TaskStatus.paused_for_review
+    task.codex_workspace_path = "D:/runs/task"
+
+    class Store:
+        def get_task(self, team_id: str, task_id: str, *, access_token: str) -> TaskRecord | None:
+            return task
+
+    class HumanService:
+        def assert_task_can_run(self, task: TaskRecord, *, access_token: str) -> None:
+            return None
+
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_task_store", lambda: Store())
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_settings", lambda: object())
+    monkeypatch.setattr("backend.app.api.routes.task_run.assert_task_run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run._assert_codex_task_can_control_current_activity", lambda task, team_access: task)
+    monkeypatch.setattr("backend.app.api.routes.task_run._assert_quota_allows_action", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.api.routes.task_run.get_task_human_collaboration_service", lambda: HumanService())
+    monkeypatch.setattr(
+        "backend.app.api.routes.task_run.sync_codex_task_state",
+        lambda task_arg, settings, **kwargs: (
+            task_arg.model_copy(update={"codex_status": "waiting_improvement_review"}),
+            {"progress": {"status": "waiting_improvement_review"}},
+        ),
+    )
+
+    team_access = SimpleNamespace(
+        team_id="team-1",
+        access_token="token",
+        user=SimpleNamespace(id="user-1"),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        run_task(
+            task.id,
+            TaskRunRequest(resume_interrupted=True),
+            team_access,
+            background_tasks=BackgroundTasks(),
+            async_start=True,
+        )
+
+    assert raised.value.status_code == status.HTTP_409_CONFLICT
+    assert raised.value.detail == "当前任务正在等待改进确认，请先选择继续改进或按当前结果生成报告。"

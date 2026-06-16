@@ -107,3 +107,95 @@ def test_sync_codex_runtime_snapshot_creates_improvement_request_for_improvement
 
     assert plan_requests == []
     assert improvement_requests == ["Improve validation."]
+
+
+def test_sync_codex_runtime_snapshot_does_not_create_plan_request_for_unmet_acceptance_without_gate(monkeypatch) -> None:
+    task = _task()
+    task.codex_status = "waiting_improvement_review"
+    progress = SimpleNamespace(status="blocked")
+    plan_requests = []
+    improvement_requests = []
+
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.sync_codex_task_state",
+        lambda task_arg, settings, **kwargs: (
+            task_arg,
+            {
+                "progress": {"status": "completed"},
+                "metrics": {"acceptance": {"passed": False}},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.build_codex_run_progress",
+        lambda task_arg, settings: progress,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.build_codex_overview",
+        lambda task_arg, settings: {},
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.sync_codex_token_ledger",
+        lambda task_store, task_arg, team_access: False,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.ensure_codex_plan_request",
+        lambda task_arg, team_access: plan_requests.append(task_arg.id),
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.ensure_codex_improvement_request",
+        lambda task_arg, team_access, artifacts: improvement_requests.append(task_arg.id),
+    )
+
+    sync_codex_runtime_snapshot(object(), task, _team_access(), object())
+
+    assert plan_requests == []
+    assert improvement_requests == []
+
+
+def test_sync_codex_runtime_snapshot_does_not_create_request_for_stop_and_report_result(monkeypatch) -> None:
+    task = _task()
+    task.codex_status = "completed"
+    progress = SimpleNamespace(status="completed")
+    plan_requests = []
+    improvement_requests = []
+
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.sync_codex_task_state",
+        lambda task_arg, settings, **kwargs: (
+            task_arg,
+            {
+                "progress": {"status": "partial", "current_step": "stop_and_report_completed"},
+                "improvement_plan": "Historical improvement options.",
+                "improvement_plan_file": {"exists": True},
+                "report": {"exists": True},
+                "predict": {"exists": True},
+                "metrics": {"acceptance": {"passed": False}},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.build_codex_run_progress",
+        lambda task_arg, settings: progress,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.build_codex_overview",
+        lambda task_arg, settings: {},
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.sync_codex_token_ledger",
+        lambda task_store, task_arg, team_access: False,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.ensure_codex_plan_request",
+        lambda task_arg, team_access: plan_requests.append(task_arg.id),
+    )
+    monkeypatch.setattr(
+        "backend.app.services.task_codex_runtime_snapshot_sync.ensure_codex_improvement_request",
+        lambda task_arg, team_access, artifacts: improvement_requests.append(task_arg.id),
+    )
+
+    sync_codex_runtime_snapshot(object(), task, _team_access(), object())
+
+    assert plan_requests == []
+    assert improvement_requests == []

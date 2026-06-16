@@ -20,6 +20,7 @@ from backend.app.models.task import (
 from backend.app.services.task_agent_collaboration import build_task_agent_collaboration_response
 from backend.app.services.service_registry import get_task_human_collaboration_service, get_task_store
 from backend.app.services.task_codex_sync import sync_codex_task_state
+from backend.app.services.task_codex_runtime_snapshot_sync import ensure_codex_review_request
 from backend.app.services.task_human_policy import (
     apply_interaction_policies,
     get_current_policy_cycle,
@@ -43,13 +44,23 @@ def _refresh_codex_task_for_human_snapshot(task: TaskRecord, team_access: TeamAc
     if task.executor_type != "codex" or not task.codex_workspace_path:
         return task
     task_store = get_task_store()
-    refreshed_task, _artifacts = sync_codex_task_state(
+    refreshed_task, artifacts = sync_codex_task_state(
         task,
         get_settings(),
         task_store=task_store,
         access_token=team_access.access_token,
         fail_on_error=False,
     )
+    try:
+        ensure_codex_review_request(refreshed_task, team_access, artifacts)
+    except (RuntimeError, PermissionError, ConnectionError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Codex is waiting for human confirmation, but the confirmation "
+                f"request could not be synchronized: {exc}"
+            ),
+        ) from exc
     if task.status in {TaskStatus.paused_for_review, TaskStatus.waiting_human} and refreshed_task.status == TaskStatus.running:
         for request in task_store.list_human_requests(
             refreshed_task.team_id,
@@ -175,7 +186,10 @@ def decide_task_human_request(
             access_token=team_access.access_token,
         )
         original_request_payload = original_request.payload if original_request and isinstance(original_request.payload, dict) else {}
-        is_codex_plan_approval = original_request_payload.get("request_type") == "codex_plan_approval"
+        is_codex_gate_request = original_request_payload.get("request_type") in {
+            "codex_plan_approval",
+            "codex_improvement_review",
+        }
         team_members = load_team_members_for_human(team_access)
         snapshot = get_task_human_collaboration_service().submit_decision(
             task,
@@ -190,7 +204,7 @@ def decide_task_human_request(
             payload.resume_task
             and payload.action in {HumanInteractionDecisionAction.approve, HumanInteractionDecisionAction.skip}
             and snapshot.open_request_count == 0
-            and not is_codex_plan_approval
+            and not is_codex_gate_request
         )
         if should_advance_checkpoint:
             runtime_context = _build_runtime_context(team_access)
